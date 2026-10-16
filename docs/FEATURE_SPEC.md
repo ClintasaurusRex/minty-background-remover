@@ -42,6 +42,44 @@ Ctrl + V
 
 when image data exists in the clipboard.
 
+If several files are dropped at once, the first supported image is opened and the user is told that the others were ignored.
+
+Opening a new image replaces the current one without confirmation during Phase 1.
+
+### Format Detection
+
+The file format is identified from the file's content (its signature), not from its name or MIME type. A file whose content is not PNG, JPEG, WebP or SVG is rejected even if its name or type claims otherwise.
+
+### Import Limits
+
+Approved Phase 1 limits:
+
+```text
+Maximum file size:   50 MB (52,428,800 bytes)
+Maximum dimension:   16,384 px per side
+Maximum image area:  50 megapixels (50,000,000 px)
+```
+
+Dimensions are checked before the application allocates its full-resolution pixel buffer. PNG and WebP dimensions, and usually JPEG dimensions, are read from the file header before decoding, which prevents most oversized decodes. This does not fully bound memory: browser decoding itself allocates image memory, and when a JPEG's header cannot be inspected the file is decoded first and its size checked afterwards, so an oversized JPEG of that kind is fully decoded before it is rejected.
+
+### SVG Sizing
+
+SVGs are rasterised at their intrinsic size:
+
+1. Absolute `width` and `height` (px, unitless, or physical units at 96 px per inch).
+2. If only one side is absolute, the other follows the `viewBox` aspect ratio.
+3. If neither is absolute (missing or relative, such as `100%`), the `viewBox` size is used.
+
+An SVG with no usable size is rejected with a clear message. No default size is assumed.
+
+A sizing dialog is deferred.
+
+### Import Errors
+
+Import failures are shown in a dismissible message in the workspace. A failed import keeps the current image.
+
+A PNG that does not end with an `IEND` chunk is treated as truncated and rejected; some browsers would otherwise show the missing part as transparent. An image that is read successfully but cannot be prepared for display (for example, when memory runs out) is reported as a failed import, so a blank image is never shown as opened.
+
 ---
 
 ## 2. Image Workspace
@@ -51,6 +89,7 @@ The workspace should:
 - Display the current image.
 - Display transparency using a checkerboard pattern.
 - Centre images initially.
+- Initially fit images larger than the viewport; show smaller images at 100%.
 - Support zooming.
 - Support panning.
 - Handle images larger than the viewport.
@@ -70,6 +109,16 @@ Required controls:
 
 The current zoom percentage should be visible.
 
+Zoom range: 1% to 3200%.
+
+Fit to Screen does not upscale images beyond 100%.
+
+Ctrl + mouse wheel zooms around the pointer. Keyboard zoom shortcuts are deferred to avoid conflicts with browser zoom.
+
+Ctrl + mouse wheel (and trackpad pinch) zooms the image only while the pointer is over the workspace and an image is open; elsewhere, browser zoom is unaffected. Zoom In and Zoom Out step through fixed zoom levels about the workspace centre, and 100% also zooms about the workspace centre.
+
+Images are rendered with nearest-neighbour sampling at 100% and above, and smooth downscaling below 100%.
+
 Zoom should affect only viewport presentation.
 
 It must not alter the underlying image dimensions.
@@ -83,6 +132,8 @@ Pan behaviour:
 ```text
 Hold Space + drag
 ```
+
+The mouse wheel without Ctrl pans vertically; Shift + mouse wheel pans horizontally.
 
 Panning must not alter image pixels.
 

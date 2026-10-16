@@ -27,6 +27,10 @@
   --color-accent-border: rgba(110, 231, 183, 0.35);
   --color-on-accent: #052e1f;
 
+  /* Errors */
+  --color-danger: #f8a5a5; /* ~9.3:1 */
+  --color-danger-border: rgba(248, 165, 165, 0.45);
+
   /* Focus */
   --focus-ring-color: var(--color-accent);
   --focus-ring-width: 2px;

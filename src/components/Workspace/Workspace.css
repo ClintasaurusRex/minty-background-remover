@@ -68,3 +68,84 @@
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
 }
+
+/* The canvas covers the whole workspace; outside the image it is transparent, so
+   the dot grid above shows through. */
+.workspace__canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.empty-state {
+  position: relative;
+}
+
+.workspace__messages {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  width: max-content;
+  max-width: calc(100% - 2 * var(--space-4));
+  transform: translateX(-50%);
+}
+
+.workspace-message {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-sm);
+  font-size: var(--font-size-sm);
+}
+
+/* Only shown for imports that take a noticeable time. */
+.workspace-message--progress {
+  color: var(--color-text-muted);
+  animation: workspace-message-appear 120ms ease-out 250ms both;
+}
+
+.workspace-message--error {
+  max-width: 560px;
+  padding-right: var(--space-1);
+  border-color: var(--color-danger-border);
+}
+
+.workspace-message__icon {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  color: var(--color-danger);
+}
+
+.workspace-message__text {
+  min-width: 0;
+}
+
+.workspace-message .workspace-message__dismiss {
+  width: 28px;
+  height: 28px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+}
+
+.workspace-message .workspace-message__dismiss svg {
+  width: 16px;
+  height: 16px;
+}
+
+@keyframes workspace-message-appear {
+  from {
+    opacity: 0;
+  }
+}

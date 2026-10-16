@@ -18,6 +18,19 @@
   white-space: nowrap;
 }
 
+.status-bar__info > span {
+  flex-shrink: 0;
+}
+
+.status-bar__info > .status-bar__name {
+  flex-shrink: 1;
+  min-width: 4em;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text);
+}
+
 .status-bar__divider {
   width: 1px;
   height: 14px;
