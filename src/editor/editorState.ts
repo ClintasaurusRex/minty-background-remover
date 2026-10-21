@@ -1,5 +1,6 @@
 import { snapToDevicePixels } from '../canvas/devicePixels'
-import { clampZoom, fitViewport, nextZoomStep, resizeViewport, zoomAt } from '../canvas/viewport'
+import { keepImageReachable, limitPan } from '../canvas/pan'
+import { clampZoom, fitViewport, nextZoomStep, panBy, resizeViewport, zoomAt } from '../canvas/viewport'
 import type { ImportError } from '../image/import/errors'
 import type { ImageDocument, Point, Size, ViewportState } from './types'
 
@@ -38,12 +39,32 @@ export interface EditorState {
   readonly pendingImportId: number | null
   /** The last import failure, shown until dismissed or the next import starts. */
   readonly importError: ImportError | null
+  /** The Space + drag pan in progress, or null. */
+  readonly pan: PanDrag | null
+  /**
+   * How many other dropped files were ignored by the latest import (only one image
+   * can be open). Shown as a notice until dismissed or the next import starts.
+   */
+  readonly ignoredFileCount: number
+}
+
+/**
+ * A drag pan: the viewport when the drag started and the pointer movement since.
+ * Each move is applied to the starting viewport rather than added to the previous
+ * one, so the image tracks the pointer exactly with no accumulated rounding.
+ */
+export interface PanDrag {
+  readonly origin: ViewportState
+  readonly delta: Point
 }
 
 export type EditorAction =
-  | { readonly type: 'import-started'; readonly importId: number }
+  | { readonly type: 'import-started'; readonly importId: number; readonly ignoredFileCount?: number }
+  /** An import that could not start, e.g. a drop containing only folders. Keeps the current image. */
+  | { readonly type: 'import-rejected'; readonly error: ImportError }
   | { readonly type: 'import-finished'; readonly importId: number; readonly result: EditorImportResult }
   | { readonly type: 'import-error-dismissed' }
+  | { readonly type: 'import-notice-dismissed' }
   | { readonly type: 'workspace-resized'; readonly workspace: WorkspaceMetrics }
   /** Multiplies the zoom, keeping the image point under `anchor` (workspace CSS px) fixed. */
   | { readonly type: 'zoom-scaled'; readonly anchor: Point; readonly factor: number }
@@ -53,6 +74,12 @@ export type EditorAction =
   | { readonly type: 'zoom-fitted' }
   /** 100%, about the workspace centre. */
   | { readonly type: 'zoom-actual-size' }
+  | { readonly type: 'pan-drag-started' }
+  /** `delta` is the total pointer movement since the drag started, in CSS px. */
+  | { readonly type: 'pan-dragged'; readonly delta: Point }
+  | { readonly type: 'pan-drag-ended' }
+  /** Moves the image by `delta` CSS px (wheel and trackpad scrolling). */
+  | { readonly type: 'wheel-panned'; readonly delta: Point }
 
 export const initialEditorState: EditorState = {
   document: null,
@@ -61,12 +88,23 @@ export const initialEditorState: EditorState = {
   workspace: null,
   pendingImportId: null,
   importError: null,
+  pan: null,
+  ignoredFileCount: 0,
 }
 
 export function editorReducer(state: EditorState, action: EditorAction): EditorState {
   switch (action.type) {
     case 'import-started':
-      return { ...state, pendingImportId: action.importId, importError: null }
+      return {
+        ...state,
+        pendingImportId: action.importId,
+        importError: null,
+        ignoredFileCount: action.ignoredFileCount ?? 0,
+      }
+
+    case 'import-rejected':
+      // The newest action failed, so any import still running is no longer wanted.
+      return { ...state, pendingImportId: null, importError: action.error, ignoredFileCount: 0 }
 
     case 'import-finished': {
       // An older import finishing after a newer one started must not replace anything.
@@ -83,26 +121,31 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         viewport: initialViewport(result.document, state.workspace),
         pendingImportId: null,
         importError: null,
+        pan: null,
       }
     }
 
     case 'import-error-dismissed':
       return state.importError === null ? state : { ...state, importError: null }
 
+    case 'import-notice-dismissed':
+      return state.ignoredFileCount === 0 ? state : { ...state, ignoredFileCount: 0 }
+
     case 'workspace-resized':
       return resizeWorkspace(state, action.workspace)
 
     case 'zoom-scaled':
-      return withViewport(state, (viewport) =>
+      return withViewport(state, (viewport, workspace, document) =>
         Number.isFinite(action.factor) && action.factor > 0
-          ? zoomTo(viewport, action.anchor, viewport.zoom * action.factor)
+          ? keepImageReachable(zoomTo(viewport, action.anchor, viewport.zoom * action.factor), document, workspace.size)
           : viewport,
       )
 
     case 'zoom-stepped':
-      return withViewport(state, (viewport, workspace) =>
-        settled(zoomTo(viewport, centreOf(workspace.size), nextZoomStep(viewport.zoom, action.direction)), viewport, workspace),
-      )
+      return withViewport(state, (viewport, workspace, document) => {
+        const next = zoomTo(viewport, centreOf(workspace.size), nextZoomStep(viewport.zoom, action.direction))
+        return settled(keepImageReachable(next, document, workspace.size), viewport, workspace)
+      })
 
     case 'zoom-fitted':
       return withViewport(state, (_viewport, workspace, document) =>
@@ -110,8 +153,39 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       )
 
     case 'zoom-actual-size':
-      return withViewport(state, (viewport, workspace) =>
-        settled(zoomTo(viewport, centreOf(workspace.size), 1), viewport, workspace),
+      return withViewport(state, (viewport, workspace, document) => {
+        const next = zoomTo(viewport, centreOf(workspace.size), 1)
+        return settled(keepImageReachable(next, document, workspace.size), viewport, workspace)
+      })
+
+    case 'pan-drag-started':
+      if (!state.viewport || !state.document) return state
+      return { ...state, pan: { origin: state.viewport, delta: { x: 0, y: 0 } } }
+
+    case 'pan-dragged': {
+      const { pan } = state
+      if (!pan) return state
+      const next = withViewport(state, (_viewport, workspace, document) =>
+        // Snapped when stored: the image moves in whole device pixels with the pointer,
+        // and a later wheel zoom starts from exactly what is displayed.
+        snapToDevicePixels(
+          limitPan(panBy(pan.origin, action.delta), pan.origin, document, workspace.size),
+          workspace.devicePixelRatio,
+        ),
+      )
+      return { ...next, pan: { origin: pan.origin, delta: action.delta } }
+    }
+
+    case 'pan-drag-ended':
+      return state.pan ? { ...state, pan: null } : state
+
+    case 'wheel-panned':
+      // Not snapped when stored: small trackpad movements would otherwise be rounded
+      // away. They add up exactly and are snapped only for display.
+      return withViewport(state, (viewport, workspace, document) =>
+        Number.isFinite(action.delta.x) && Number.isFinite(action.delta.y)
+          ? limitPan(panBy(viewport, action.delta), viewport, document, workspace.size)
+          : viewport,
       )
   }
 }
@@ -145,7 +219,16 @@ function withViewport(
   if (next.zoom === viewport.zoom && next.offset.x === viewport.offset.x && next.offset.y === viewport.offset.y) {
     return state
   }
-  return { ...state, viewport: next }
+  return { ...state, viewport: next, pan: rebasePan(state.pan, next) }
+}
+
+/**
+ * Keeps a drag in progress consistent when something else (a zoom or resize) moves
+ * the image: the drag continues from the new position instead of jumping back.
+ */
+function rebasePan(pan: PanDrag | null, viewport: ViewportState | null): PanDrag | null {
+  if (!pan || !viewport) return pan
+  return { origin: panBy(viewport, { x: -pan.delta.x, y: -pan.delta.y }), delta: pan.delta }
 }
 
 function resizeWorkspace(state: EditorState, workspace: WorkspaceMetrics): EditorState {
@@ -160,13 +243,13 @@ function resizeWorkspace(state: EditorState, workspace: WorkspaceMetrics): Edito
   }
 
   let viewport = state.viewport
-  if (viewport && previous) {
-    viewport = resizeViewport(viewport, previous.size, workspace.size)
+  if (viewport && previous && state.document) {
+    viewport = keepImageReachable(resizeViewport(viewport, previous.size, workspace.size), state.document, workspace.size)
   } else if (state.document) {
     // The image arrived before the workspace had a usable size.
     viewport = initialViewport(state.document, workspace)
   }
-  return { ...state, workspace, viewport }
+  return { ...state, workspace, viewport, pan: rebasePan(state.pan, viewport) }
 }
 
 /** Initial placement: fit larger images, show smaller ones at 100%, centred. */

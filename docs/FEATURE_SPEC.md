@@ -44,6 +44,8 @@ when image data exists in the clipboard.
 
 If several files are dropped at once, the first supported image is opened and the user is told that the others were ignored.
 
+Only drags that carry files highlight the workspace; text and links are ignored. Dropping a file elsewhere in the window does nothing, so the browser cannot navigate away from the app to show it. Dropped folders are skipped and counted as ignored.
+
 Opening a new image replaces the current one without confirmation during Phase 1.
 
 ### Format Detection
@@ -134,6 +136,8 @@ Hold Space + drag
 ```
 
 The mouse wheel without Ctrl pans vertically; Shift + mouse wheel pans horizontally.
+
+Trackpad scrolling pans on both axes. Space only starts panning when focus is not on a control such as a button, so Space still presses buttons; clicking the workspace moves focus there. Releasing Space ends a drag even if the mouse button is still held. Panning stops when only 64 CSS pixels of the image (or all of it, if smaller) remain inside the workspace, so the image cannot be lost; if a zoom or window resize would leave none of the image visible, it is brought back to that margin.
 
 Panning must not alter image pixels.
 

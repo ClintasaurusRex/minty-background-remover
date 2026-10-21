@@ -5,6 +5,11 @@ import type { ImageDocument } from './types'
 
 export type RunImport = (request: ImportRequest) => Promise<ImportResult>
 
+export interface ImportOptions {
+  /** Other dropped files that were not opened, reported to the user. */
+  readonly ignoredFileCount?: number
+}
+
 /** Creates the drawable bitmap for a document, e.g. createImageBitmap(document.pixels). */
 export type PrepareDisplay = (document: ImageDocument) => Promise<ImageBitmap>
 
@@ -20,12 +25,12 @@ export function createImportRunner(
   dispatch: (action: EditorAction) => void,
   runImport: RunImport,
   prepareDisplay: PrepareDisplay,
-): (request: ImportRequest) => Promise<void> {
+): (request: ImportRequest, options?: ImportOptions) => Promise<void> {
   let lastImportId = 0
-  return async (request) => {
+  return async (request, options = {}) => {
     const importId = ++lastImportId
     const isStale = () => importId !== lastImportId
-    dispatch({ type: 'import-started', importId })
+    dispatch({ type: 'import-started', importId, ignoredFileCount: options.ignoredFileCount })
 
     let imported: ImportResult
     try {

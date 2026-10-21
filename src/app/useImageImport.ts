@@ -1,7 +1,9 @@
 import { type ChangeEvent, type Dispatch, useCallback, useEffect, useRef, useState } from 'react'
+import { createDropImporter } from '../editor/dropImport'
 import type { EditorAction } from '../editor/editorState'
 import { createImportRunner } from '../editor/importRunner'
 import { createBrowserDecoder } from '../image/import/browserDecoder'
+import { chooseDroppedFile } from '../image/import/droppedFiles'
 import { importImage } from '../image/import/importImage'
 
 /**
@@ -13,7 +15,7 @@ export const IMAGE_FILE_ACCEPT =
 
 const decoder = createBrowserDecoder()
 
-/** The Open Image file picker and its Ctrl+O shortcut. */
+/** The Open Image file picker, its Ctrl+O shortcut, and dropped files. */
 export function useImageImport(dispatch: Dispatch<EditorAction>) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [startImport] = useState(() =>
@@ -23,6 +25,7 @@ export function useImageImport(dispatch: Dispatch<EditorAction>) {
       (document) => createImageBitmap(document.pixels),
     ),
   )
+  const [dropImporter] = useState(() => createDropImporter({ chooseFile: chooseDroppedFile, startImport, dispatch }))
 
   const openFilePicker = useCallback(() => inputRef.current?.click(), [])
 
@@ -31,9 +34,16 @@ export function useImageImport(dispatch: Dispatch<EditorAction>) {
       const file = event.currentTarget.files?.[0]
       // Clear the selection so choosing the same file again still triggers a change.
       event.currentTarget.value = ''
-      if (file) void startImport({ blob: file, name: file.name, source: 'file-picker' })
+      if (!file) return
+      dropImporter.supersede()
+      void startImport({ blob: file, name: file.name, source: 'file-picker' })
     },
-    [startImport],
+    [startImport, dropImporter],
+  )
+
+  const openDroppedFiles = useCallback(
+    (files: readonly File[], skippedCount: number) => void dropImporter.drop(files, skippedCount),
+    [dropImporter],
   )
 
   useEffect(() => {
@@ -47,7 +57,7 @@ export function useImageImport(dispatch: Dispatch<EditorAction>) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [openFilePicker])
 
-  return { inputRef, openFilePicker, handleFileChange }
+  return { inputRef, openFilePicker, handleFileChange, openDroppedFiles }
 }
 
 function isOpenShortcut(event: KeyboardEvent): boolean {

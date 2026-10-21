@@ -10,13 +10,14 @@ import {
   initialEditorState,
   isImporting,
 } from '../editor/editorState'
+import type { PanGestureEffect } from '../editor/panGesture'
 import type { Point } from '../editor/types'
 import { IMAGE_FILE_ACCEPT, useImageImport } from './useImageImport'
 import './App.css'
 
 function App() {
   const [state, dispatch] = useReducer(editorReducer, initialEditorState)
-  const { inputRef, openFilePicker, handleFileChange } = useImageImport(dispatch)
+  const { inputRef, openFilePicker, handleFileChange, openDroppedFiles } = useImageImport(dispatch)
   const viewport = displayViewport(state)
 
   const handleResize = useCallback(
@@ -24,10 +25,22 @@ function App() {
     [],
   )
   const dismissImportError = useCallback(() => dispatch({ type: 'import-error-dismissed' }), [])
+  const dismissImportNotice = useCallback(() => dispatch({ type: 'import-notice-dismissed' }), [])
   const zoomWithWheel = useCallback(
     (anchor: Point, factor: number) => dispatch({ type: 'zoom-scaled', anchor, factor }),
     [],
   )
+  const panWithWheel = useCallback((delta: Point) => dispatch({ type: 'wheel-panned', delta }), [])
+  const panWithDrag = useCallback((effect: PanGestureEffect) => {
+    switch (effect.type) {
+      case 'drag-started':
+        return dispatch({ type: 'pan-drag-started' })
+      case 'dragged':
+        return dispatch({ type: 'pan-dragged', delta: effect.delta })
+      case 'drag-ended':
+        return dispatch({ type: 'pan-drag-ended' })
+    }
+  }, [])
 
   // Developer detail (sizes, causes) is kept out of the UI but logged in development.
   const { importError } = state
@@ -48,10 +61,15 @@ function App() {
         workspace={state.workspace}
         importing={isImporting(state)}
         importError={state.importError}
+        ignoredFileCount={state.ignoredFileCount}
         onResize={handleResize}
         onDismissError={dismissImportError}
+        onDismissNotice={dismissImportNotice}
+        onDropFiles={openDroppedFiles}
         onOpenImage={openFilePicker}
         onWheelZoom={zoomWithWheel}
+        onWheelPan={panWithWheel}
+        onPanGesture={panWithDrag}
       />
       <StatusBar
         document={state.document}
