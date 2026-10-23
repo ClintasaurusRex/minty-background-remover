@@ -384,3 +384,32 @@ describe('importImage: SVG', () => {
     }
   })
 })
+
+describe('importImage: cancellation', () => {
+  it('skips decoding when already cancelled', async () => {
+    const { decoder, calls } = fakeDecoder()
+    const controller = new AbortController()
+    controller.abort()
+    const result = await importImage(request([PNG]), { decoder, signal: controller.signal })
+    expect(result.ok).toBe(false)
+    expect(calls.decodeRaster).toEqual([])
+  })
+
+  it('releases the decoded image without allocating pixels when cancelled during decoding', async () => {
+    const controller = new AbortController()
+    const { decoder, calls } = fakeDecoder()
+    const decodeRaster = decoder.decodeRaster
+    const cancelling = {
+      ...decoder,
+      decodeRaster: async (blob: Blob, format: RasterFormat) => {
+        const source = await decodeRaster(blob, format)
+        controller.abort()
+        return source
+      },
+    }
+    const result = await importImage(request([PNG]), { decoder: cancelling, signal: controller.signal })
+    expect(result.ok).toBe(false)
+    expect(calls.toImageData).toBe(0)
+    expect(calls.release).toBe(1)
+  })
+})

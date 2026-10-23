@@ -17,6 +17,7 @@ import {
 } from '../../editor/panGesture'
 import type { Point } from '../../editor/types'
 import { isFileDrag } from '../../image/import/droppedFiles'
+import { isEditableTarget, isInteractiveTarget } from '../../utils/domTargets'
 
 /*
  * Pointer, wheel and keyboard input for the workspace. The decisions live in pure
@@ -129,7 +130,7 @@ export function useSpacePan(
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!isSpace(event) || event.ctrlKey || event.altKey || event.metaKey || isInteractive(event.target)) return
+      if (!isSpace(event) || event.ctrlKey || event.altKey || event.metaKey || isInteractiveTarget(event.target)) return
       // Stops the page scrolling; repeats while held are absorbed the same way.
       event.preventDefault()
       apply({ type: 'space-down' })
@@ -140,7 +141,7 @@ export function useSpacePan(
       apply({ type: 'space-up' })
     }
     const onPointerDown = (event: PointerEvent) => {
-      if (isInteractive(event.target)) return
+      if (isInteractiveTarget(event.target)) return
       const effect = apply({
         type: 'pointer-down',
         pointerId: event.pointerId,
@@ -191,10 +192,11 @@ export function useSpacePan(
 }
 
 /**
- * Dropping files on the workspace. Only drags that carry files are handled; text and
- * links are left to the browser. Returns whether a file is being dragged over the
- * workspace, for the drop highlight. Dropping a file anywhere else in the window
- * is cancelled, so the browser cannot navigate away from the app to show it.
+ * Dropping files on the workspace. Only drags that carry files open an image.
+ * Returns whether a file is being dragged over the workspace, for the drop
+ * highlight. Any other drop in the window (a file outside the workspace, or text
+ * and links anywhere) is refused unless it is over a text field, so the browser
+ * cannot navigate away from the app to show it.
  */
 export function useFileDrop(
   workspaceRef: RefObject<HTMLElement | null>,
@@ -240,16 +242,19 @@ export function useFileDrop(
       const { files, skippedCount } = droppedFiles(event.dataTransfer)
       onDropFiles(files, skippedCount)
     }
-    // Outside the workspace: refuse the drop instead of letting the browser open the file.
+    // Everything the workspace does not accept: refuse it instead of letting the
+    // browser open the file or follow the link.
+    const handledElsewhere = (event: DragEvent) =>
+      (carriesFiles(event) && inside(event.target)) || isEditableTarget(event.target)
     const onWindowDragOver = (event: DragEvent) => {
-      if (!carriesFiles(event) || inside(event.target)) return
+      if (handledElsewhere(event)) return
       event.preventDefault()
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'none'
     }
     const onWindowDrop = (event: DragEvent) => {
-      if (!carriesFiles(event) || inside(event.target)) return
+      if (handledElsewhere(event)) return
       event.preventDefault()
-      update({ type: 'reset' })
+      if (carriesFiles(event)) update({ type: 'reset' })
     }
 
     workspace.addEventListener('dragenter', onDragEnter)
@@ -297,29 +302,4 @@ function droppedFiles(transfer: DataTransfer | null): { files: File[]; skippedCo
 
 function isSpace(event: KeyboardEvent): boolean {
   return event.code === 'Space' || event.key === ' '
-}
-
-/** Elements where Space has its own meaning (pressing, typing, toggling). */
-const INTERACTIVE_SELECTOR = [
-  'button',
-  'input',
-  'select',
-  'textarea',
-  'summary',
-  'a[href]',
-  '[contenteditable]:not([contenteditable="false"])',
-  '[role="button"]',
-  '[role="checkbox"]',
-  '[role="link"]',
-  '[role="menuitem"]',
-  '[role="option"]',
-  '[role="radio"]',
-  '[role="slider"]',
-  '[role="switch"]',
-  '[role="tab"]',
-  '[role="textbox"]',
-].join(',')
-
-function isInteractive(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest(INTERACTIVE_SELECTOR) !== null
 }

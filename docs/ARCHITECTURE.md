@@ -113,6 +113,27 @@ Do not create directories merely because they appear here.
 
 Create structure when functionality requires it.
 
+### Phase 1 Modules
+
+```text
+src/
+├── app/            App, useImageImport (picker, drop, paste wiring), clipboardPaste
+├── components/     AppHeader, Toolbar, StatusBar, Workspace (canvas, messages, input hooks)
+├── editor/         editorState (reducer), importRunner, importSources, panGesture, dropTarget
+├── canvas/         coordinates, viewport, devicePixels, rendering (frame plans),
+│                   workspaceRenderer (the only Canvas 2D drawing), wheelZoom, pan
+├── image/import/   formats, limits, headerDimensions, svgSize, svgSafety, pngEnding,
+│                   importImage (orchestration), browserDecoder (the only decoding DOM code)
+└── utils/          domTargets
+```
+
+Key rules:
+
+- Viewport maths is in CSS pixels; the device pixel ratio is applied only at the rendering boundary.
+- Rendering and pointer hit-testing both use `displayViewport()` (the stored viewport snapped to device pixels), so they always agree.
+- Every import goes through `importImage` and the import runner. The newest action that has image data wins, and a failed import never replaces the open image.
+- Interaction logic (pan gesture, drop target, import ordering) is written as pure functions with Node tests; React hooks only connect them to DOM events.
+
 ---
 
 ## React Responsibilities

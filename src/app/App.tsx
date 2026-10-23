@@ -61,7 +61,7 @@ function App() {
         workspace={state.workspace}
         importing={isImporting(state)}
         importError={state.importError}
-        ignoredFileCount={state.ignoredFileCount}
+        importNotice={state.importNotice}
         onResize={handleResize}
         onDismissError={dismissImportError}
         onDismissNotice={dismissImportNotice}

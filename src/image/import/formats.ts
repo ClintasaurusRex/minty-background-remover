@@ -30,6 +30,19 @@ export function detectImageFormat(head: Uint8Array): ImageFormat | null {
   return null
 }
 
+/**
+ * Identifies a Blob's format from its first bytes, or null if it is unsupported,
+ * empty or unreadable. Used to choose among several candidates (dropped files,
+ * clipboard items) before importing one; the import itself repeats the full checks.
+ */
+export async function sniffImageFormat(blob: Blob): Promise<ImageFormat | null> {
+  try {
+    return detectImageFormat(new Uint8Array(await blob.slice(0, FORMAT_SNIFF_BYTES).arrayBuffer()))
+  } catch {
+    return null
+  }
+}
+
 export type ImageFileCheck =
   | { readonly ok: true; readonly format: ImageFormat }
   | { readonly ok: false; readonly error: ImportError }

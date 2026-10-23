@@ -41,12 +41,16 @@ export interface EditorState {
   readonly importError: ImportError | null
   /** The Space + drag pan in progress, or null. */
   readonly pan: PanDrag | null
-  /**
-   * How many other dropped files were ignored by the latest import (only one image
-   * can be open). Shown as a notice until dismissed or the next import starts.
-   */
-  readonly ignoredFileCount: number
+  /** An informational message about the latest import, shown until dismissed or the next import starts. */
+  readonly importNotice: ImportNotice | null
 }
+
+/** Informational import messages, less serious than an ImportError. */
+export type ImportNotice =
+  /** Only one image can be open, so other dropped files were not opened. */
+  | { readonly kind: 'ignored-files'; readonly count: number }
+  /** Ctrl+V was pressed with no supported image on the clipboard. */
+  | { readonly kind: 'no-clipboard-image' }
 
 /**
  * A drag pan: the viewport when the drag started and the pointer movement since.
@@ -60,8 +64,12 @@ export interface PanDrag {
 
 export type EditorAction =
   | { readonly type: 'import-started'; readonly importId: number; readonly ignoredFileCount?: number }
-  /** An import that could not start, e.g. a drop containing only folders. Keeps the current image. */
+  /**
+   * An import that could not start, e.g. a drop containing only folders. Keeps the
+   * current image and does not cancel an import already in progress.
+   */
   | { readonly type: 'import-rejected'; readonly error: ImportError }
+  | { readonly type: 'import-notice-shown'; readonly notice: ImportNotice }
   | { readonly type: 'import-finished'; readonly importId: number; readonly result: EditorImportResult }
   | { readonly type: 'import-error-dismissed' }
   | { readonly type: 'import-notice-dismissed' }
@@ -89,7 +97,7 @@ export const initialEditorState: EditorState = {
   pendingImportId: null,
   importError: null,
   pan: null,
-  ignoredFileCount: 0,
+  importNotice: null,
 }
 
 export function editorReducer(state: EditorState, action: EditorAction): EditorState {
@@ -99,12 +107,14 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         ...state,
         pendingImportId: action.importId,
         importError: null,
-        ignoredFileCount: action.ignoredFileCount ?? 0,
+        importNotice: action.ignoredFileCount ? { kind: 'ignored-files', count: action.ignoredFileCount } : null,
       }
 
     case 'import-rejected':
-      // The newest action failed, so any import still running is no longer wanted.
-      return { ...state, pendingImportId: null, importError: action.error, ignoredFileCount: 0 }
+      return { ...state, importError: action.error, importNotice: null }
+
+    case 'import-notice-shown':
+      return { ...state, importNotice: action.notice }
 
     case 'import-finished': {
       // An older import finishing after a newer one started must not replace anything.
@@ -129,7 +139,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return state.importError === null ? state : { ...state, importError: null }
 
     case 'import-notice-dismissed':
-      return state.ignoredFileCount === 0 ? state : { ...state, ignoredFileCount: 0 }
+      return state.importNotice === null ? state : { ...state, importNotice: null }
 
     case 'workspace-resized':
       return resizeWorkspace(state, action.workspace)

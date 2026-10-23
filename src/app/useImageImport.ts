@@ -1,10 +1,12 @@
 import { type ChangeEvent, type Dispatch, useCallback, useEffect, useRef, useState } from 'react'
-import { createDropImporter } from '../editor/dropImport'
 import type { EditorAction } from '../editor/editorState'
 import { createImportRunner } from '../editor/importRunner'
+import { createImportSources } from '../editor/importSources'
 import { createBrowserDecoder } from '../image/import/browserDecoder'
+import { choosePastedImage, pastedImageName } from '../image/import/clipboardImage'
 import { chooseDroppedFile } from '../image/import/droppedFiles'
 import { importImage } from '../image/import/importImage'
+import { installPasteHandler } from './clipboardPaste'
 
 /**
  * Hints for the file picker only. The format is always identified from the file's
@@ -15,17 +17,25 @@ export const IMAGE_FILE_ACCEPT =
 
 const decoder = createBrowserDecoder()
 
-/** The Open Image file picker, its Ctrl+O shortcut, and dropped files. */
+/** The Open Image file picker and its Ctrl+O shortcut, dropped files, and Ctrl+V paste. */
 export function useImageImport(dispatch: Dispatch<EditorAction>) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [startImport] = useState(() =>
     createImportRunner(
       dispatch,
-      (request) => importImage(request, { decoder }),
+      (request, signal) => importImage(request, { decoder, signal }),
       (document) => createImageBitmap(document.pixels),
     ),
   )
-  const [dropImporter] = useState(() => createDropImporter({ chooseFile: chooseDroppedFile, startImport, dispatch }))
+  const [sources] = useState(() =>
+    createImportSources({
+      startImport,
+      dispatch,
+      chooseDroppedFile,
+      choosePastedImage,
+      namePastedImage: ({ format }) => pastedImageName(format, new Date()),
+    }),
+  )
 
   const openFilePicker = useCallback(() => inputRef.current?.click(), [])
 
@@ -34,16 +44,23 @@ export function useImageImport(dispatch: Dispatch<EditorAction>) {
       const file = event.currentTarget.files?.[0]
       // Clear the selection so choosing the same file again still triggers a change.
       event.currentTarget.value = ''
-      if (!file) return
-      dropImporter.supersede()
-      void startImport({ blob: file, name: file.name, source: 'file-picker' })
+      if (file) void sources.openPickedFile(file)
     },
-    [startImport, dropImporter],
+    [sources],
   )
 
   const openDroppedFiles = useCallback(
-    (files: readonly File[], skippedCount: number) => void dropImporter.drop(files, skippedCount),
-    [dropImporter],
+    (files: readonly File[], skippedCount: number) => void sources.openDroppedFiles(files, skippedCount),
+    [sources],
+  )
+
+  useEffect(
+    () =>
+      installPasteHandler(document, {
+        onFiles: (files) => void sources.openPastedImages(files),
+        onNoImage: () => void sources.openPastedImages([]),
+      }),
+    [sources],
   )
 
   useEffect(() => {

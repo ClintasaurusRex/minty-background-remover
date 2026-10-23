@@ -18,6 +18,11 @@ export interface ImportRequest {
 export interface ImportDependencies<TElement extends SvgElementLike> {
   readonly decoder: ImportDecoder<TElement>
   readonly limits?: ImportLimits
+  /**
+   * Aborted when the import is no longer wanted. Checked between stages, so a
+   * superseded import skips decoding and never allocates its full pixel buffer.
+   */
+  readonly signal?: AbortSignal
 }
 
 export type ImportResult =
@@ -44,19 +49,30 @@ export async function importImage<TElement extends SvgElementLike>(
 ): Promise<ImportResult> {
   const limits = dependencies.limits ?? DEFAULT_IMPORT_LIMITS
   try {
+    const { signal } = dependencies
     const check = await inspectImageFile(request.blob, limits)
     if (!check.ok) return check
+    if (signal?.aborted) return cancelled()
 
     const decoded =
       check.format === 'svg'
         ? await decodeSvg(request.blob, dependencies.decoder, limits)
         : await decodeRaster(request.blob, check.format, dependencies.decoder, limits)
     if (!decoded.ok) return decoded
+    if (signal?.aborted) {
+      decoded.source.release()
+      return cancelled()
+    }
 
     return buildDocument(request, check.format, decoded.source, limits)
   } catch (cause) {
     return failure(toImportError(cause, 'decode-failed'))
   }
+}
+
+/** A superseded import. Never shown: the runner discards results of superseded imports. */
+function cancelled(): ImportResult {
+  return failure(createImportError('decode-failed', 'Cancelled because a newer import started'))
 }
 
 type DecodeResult =

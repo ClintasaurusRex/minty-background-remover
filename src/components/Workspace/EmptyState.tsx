@@ -16,7 +16,7 @@ export function EmptyState({ onOpenImage }: EmptyStateProps) {
         No image open
       </h2>
       <p className="empty-state__text">
-        Open or drop an image to remove its background and tidy it up.
+        Open, drop or paste an image to remove its background and tidy it up.
       </p>
       <button type="button" className="button" onClick={onOpenImage} aria-keyshortcuts="Control+O">
         <OpenIcon />

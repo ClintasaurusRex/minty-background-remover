@@ -1,4 +1,4 @@
-import { FORMAT_SNIFF_BYTES, detectImageFormat } from './formats'
+import { sniffImageFormat } from './formats'
 
 /*
  * Choosing which of several dropped files to open. Only one image can be open, so
@@ -43,10 +43,5 @@ export async function chooseDroppedFile(
 
 /** Whether the start of a file is a supported image signature. Unreadable files are not. */
 export async function hasSupportedContent(file: Blob): Promise<boolean> {
-  try {
-    const head = new Uint8Array(await file.slice(0, FORMAT_SNIFF_BYTES).arrayBuffer())
-    return detectImageFormat(head) !== null
-  } catch {
-    return false
-  }
+  return (await sniffImageFormat(file)) !== null
 }

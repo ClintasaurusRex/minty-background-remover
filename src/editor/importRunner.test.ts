@@ -229,3 +229,26 @@ describe('createImportRunner: bitmap creation', () => {
     expect(getState().pendingImportId).toBe(2)
   })
 })
+
+describe('createImportRunner: superseded imports', () => {
+  it('aborts the signal of an import when a newer one starts', async () => {
+    const signals: AbortSignal[] = []
+    const finishes: ((result: ImportResult) => void)[] = []
+    const start = createImportRunner(
+      () => {},
+      (_request, signal) => {
+        signals.push(signal)
+        return new Promise((resolve) => finishes.push(resolve))
+      },
+      async (document) => ({ width: document.width, height: document.height, close: () => {} }),
+    )
+    const first = start(request('a.png'))
+    expect(signals[0].aborted).toBe(false)
+    const second = start(request('b.png'))
+    expect(signals[0].aborted).toBe(true)
+    expect(signals[1].aborted).toBe(false)
+    finishes[0]({ ok: false, error: createImportError('decode-failed') })
+    finishes[1]({ ok: false, error: createImportError('decode-failed') })
+    await Promise.all([first, second])
+  })
+})

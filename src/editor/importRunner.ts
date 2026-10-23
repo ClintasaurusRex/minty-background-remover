@@ -3,7 +3,8 @@ import type { ImportRequest, ImportResult } from '../image/import/importImage'
 import type { EditorAction, EditorImportResult } from './editorState'
 import type { ImageDocument } from './types'
 
-export type RunImport = (request: ImportRequest) => Promise<ImportResult>
+/** Runs one import. `signal` is aborted when a newer import starts, so remaining work can be skipped. */
+export type RunImport = (request: ImportRequest, signal: AbortSignal) => Promise<ImportResult>
 
 export interface ImportOptions {
   /** Other dropped files that were not opened, reported to the user. */
@@ -27,14 +28,18 @@ export function createImportRunner(
   prepareDisplay: PrepareDisplay,
 ): (request: ImportRequest, options?: ImportOptions) => Promise<void> {
   let lastImportId = 0
+  let running: AbortController | null = null
   return async (request, options = {}) => {
     const importId = ++lastImportId
     const isStale = () => importId !== lastImportId
+    running?.abort()
+    const controller = new AbortController()
+    running = controller
     dispatch({ type: 'import-started', importId, ignoredFileCount: options.ignoredFileCount })
 
     let imported: ImportResult
     try {
-      imported = await runImport(request)
+      imported = await runImport(request, controller.signal)
     } catch (cause) {
       // importImage never throws; this guards other implementations.
       imported = { ok: false, error: toImportError(cause, 'decode-failed') }

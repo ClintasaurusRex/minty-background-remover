@@ -42,9 +42,13 @@ Ctrl + V
 
 when image data exists in the clipboard.
 
+Only image data on the clipboard is used; HTML and links that come with an image copied from a web page are ignored, so pasting never fetches anything. A paste into a text field is left to that field. Pressing Ctrl + V elsewhere with no supported image on the clipboard shows a short informational notice, and does not cancel an import already in progress. Pasted images are named from the time of pasting and their detected format, for example `pasted-image-2026-10-22-143005.png`.
+
 If several files are dropped at once, the first supported image is opened and the user is told that the others were ignored.
 
-Only drags that carry files highlight the workspace; text and links are ignored. Dropping a file elsewhere in the window does nothing, so the browser cannot navigate away from the app to show it. Dropped folders are skipped and counted as ignored.
+Only drags that carry files highlight the workspace and open an image. Dropping text, links, or a file anywhere outside the workspace is refused (except into a text field), so the browser cannot navigate away from the app. Dropped folders are skipped and counted as ignored; a drop of only folders shows an error but does not cancel an import already in progress.
+
+When imports overlap (file picker, drop and paste in any combination), the most recent action that has image data wins.
 
 Opening a new image replaces the current one without confirmation during Phase 1.
 

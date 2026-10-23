@@ -1,13 +1,13 @@
 import { useRef } from 'react'
-import type { WorkspaceMetrics } from '../../editor/editorState'
+import type { ImportNotice, WorkspaceMetrics } from '../../editor/editorState'
 import type { PanGestureEffect } from '../../editor/panGesture'
 import type { ImageDocument, Point, ViewportState } from '../../editor/types'
 import type { ImportError } from '../../image/import/errors'
 import { OpenIcon } from '../icons/icons'
 import { EmptyState } from './EmptyState'
-import { IgnoredFilesNotice } from './IgnoredFilesNotice'
 import { ImageCanvas } from './ImageCanvas'
 import { ImportErrorMessage } from './ImportErrorMessage'
+import { ImportNoticeMessage } from './ImportNoticeMessage'
 import { useFileDrop, useSpacePan, useWheelInput } from './workspaceInput'
 import './Workspace.css'
 
@@ -18,8 +18,7 @@ interface WorkspaceProps {
   workspace: WorkspaceMetrics | null
   importing: boolean
   importError: ImportError | null
-  /** Other dropped files that were not opened. */
-  ignoredFileCount: number
+  importNotice: ImportNotice | null
   onResize: (workspace: WorkspaceMetrics) => void
   onDismissError: () => void
   onDismissNotice: () => void
@@ -40,7 +39,7 @@ export function Workspace({
   workspace,
   importing,
   importError,
-  ignoredFileCount,
+  importNotice,
   onResize,
   onDismissError,
   onDismissNotice,
@@ -100,8 +99,9 @@ export function Workspace({
         <div role="status">
           {dropActive && <span className="visually-hidden">Drop to open the image.</span>}
           {importing && <p className="workspace-message workspace-message--progress">Opening image…</p>}
-          {!importing && ignoredFileCount > 0 && (
-            <IgnoredFilesNotice count={ignoredFileCount} onDismiss={onDismissNotice} />
+          {importNotice && !(importing && importNotice.kind === 'ignored-files') && (
+            // The ignored-files notice waits until the import it belongs to has finished.
+            <ImportNoticeMessage notice={importNotice} onDismiss={onDismissNotice} />
           )}
         </div>
         {importError && <ImportErrorMessage error={importError} onDismiss={onDismissError} />}

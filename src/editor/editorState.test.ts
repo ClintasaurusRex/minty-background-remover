@@ -50,7 +50,7 @@ describe('editorReducer: imports', () => {
       pendingImportId: null,
       importError: null,
       pan: null,
-      ignoredFileCount: 0,
+      importNotice: null,
     })
     expect(isImporting(initialEditorState)).toBe(false)
   })
@@ -649,13 +649,24 @@ describe('editorReducer: dropped files', () => {
 
   it('records ignored dropped files for the notice, and clears them on the next import', () => {
     const state = reduce(opened(), { type: 'import-started', importId: 2, ignoredFileCount: 3 })
-    expect(state.ignoredFileCount).toBe(3)
+    expect(state.importNotice).toEqual({ kind: 'ignored-files', count: 3 })
     const finished = reduce(state, { type: 'import-finished', importId: 2, result: succeeded(10, 10) })
-    expect(finished.ignoredFileCount).toBe(3)
-    expect(reduce(finished, { type: 'import-started', importId: 3 }).ignoredFileCount).toBe(0)
-    expect(reduce(finished, { type: 'import-notice-dismissed' }).ignoredFileCount).toBe(0)
+    expect(finished.importNotice).toEqual({ kind: 'ignored-files', count: 3 })
+    expect(reduce(finished, { type: 'import-started', importId: 3 }).importNotice).toBeNull()
+    expect(reduce(finished, { type: 'import-notice-dismissed' }).importNotice).toBeNull()
     const none = opened()
     expect(reduce(none, { type: 'import-notice-dismissed' })).toBe(none)
+  })
+
+  it('shows a clipboard notice without affecting the image or an import in progress', () => {
+    const start = reduce(opened(), { type: 'import-started', importId: 2 })
+    const state = reduce(start, { type: 'import-notice-shown', notice: { kind: 'no-clipboard-image' } })
+    expect(state.importNotice).toEqual({ kind: 'no-clipboard-image' })
+    expect(state.importError).toBeNull()
+    expect(state.document).toBe(start.document)
+    expect(state.pendingImportId).toBe(2)
+    const finished = reduce(state, { type: 'import-finished', importId: 2, result: succeeded(10, 10, 'second.png') })
+    expect(finished.document?.name).toBe('second.png')
   })
 
   it('keeps the current image when a dropped file fails to import', () => {
@@ -670,15 +681,16 @@ describe('editorReducer: dropped files', () => {
     expect(state.importError).not.toBeNull()
   })
 
-  it('rejects a drop with nothing to open, keeps the image and discards any import in progress', () => {
+  it('rejects a drop with nothing to open, keeping the image and any import in progress', () => {
     const start = reduce(opened(), { type: 'import-started', importId: 2 })
     const error = createImportError('unsupported-format')
     const rejected = reduce(start, { type: 'import-rejected', error })
     expect(rejected.importError).toBe(error)
     expect(rejected.document).toBe(start.document)
-    expect(rejected.pendingImportId).toBeNull()
-    // The import that was running finishes later and is ignored.
-    expect(reduce(rejected, { type: 'import-finished', importId: 2, result: succeeded(10, 10) })).toBe(rejected)
+    expect(rejected.pendingImportId).toBe(2)
+    // The import that was running still completes.
+    const finished = reduce(rejected, { type: 'import-finished', importId: 2, result: succeeded(10, 10, 'valid.png') })
+    expect(finished.document?.name).toBe('valid.png')
   })
 
   it('opens a dropped image fitted and centred, replacing any zoom, pan or drag in progress', () => {
