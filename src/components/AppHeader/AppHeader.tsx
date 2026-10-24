@@ -1,8 +1,12 @@
 import { ExportIcon, LogoIcon, OpenIcon, RedoIcon, UndoIcon } from '../icons/icons'
 import './AppHeader.css'
 
-// File and history actions are placeholders until their phases; all stay disabled.
-export function AppHeader() {
+interface AppHeaderProps {
+  onOpenImage: () => void
+}
+
+// History and export actions are placeholders until their phases and stay disabled.
+export function AppHeader({ onOpenImage }: AppHeaderProps) {
   return (
     <header className="app-header">
       <div className="app-header__brand">
@@ -13,7 +17,13 @@ export function AppHeader() {
       </div>
 
       <div className="app-header__actions" role="group" aria-label="File and history">
-        <button type="button" className="button" disabled title="Open Image (Ctrl+O)">
+        <button
+          type="button"
+          className="button"
+          title="Open Image (Ctrl+O)"
+          aria-keyshortcuts="Control+O"
+          onClick={onOpenImage}
+        >
           <OpenIcon />
           Open Image
         </button>

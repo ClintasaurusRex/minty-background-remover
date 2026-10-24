@@ -89,6 +89,22 @@ Test:
 
 User must be able to reliably open and navigate images.
 
+### Phase 1 Status and Known Limitations
+
+Phase 1 was implemented in nine reviewed steps. Behaviour is specified in `FEATURE_SPEC.md` §1–4 and `IMAGE_PROCESSING_SPEC.md` (SVG Input); module layout is in `ARCHITECTURE.md` (Phase 1 Modules).
+
+Known limitations accepted for Phase 1:
+
+- Device-pixel snapping: near a pixel edge at fractional device pixel ratios, the pixel under the pointer can flip by one during wheel zoom or drag panning. Rendering and pointer hit-testing always agree.
+- Wheel sensitivity: Chrome's emulated device scale factor divides wheel deltas by the ratio; behaviour on real high-DPI hardware is unverified.
+- A JPEG whose header cannot be inspected is fully decoded before its size is checked; the canvas read-back briefly needs about twice the image's memory.
+- An image is held twice while open (pixel buffer and drawable bitmap).
+- The browser decoder cannot be interrupted: a superseded import finishes its current decode step, then skips the rest.
+- Canvas 2D reduces 16-bit PNGs to 8 bits per channel and converts colour profiles to sRGB.
+- SVGs with a DOCTYPE (including default Adobe Illustrator exports) are rejected.
+- Firefox decodes some truncated JPEGs partially; truncated PNGs are rejected.
+- Not yet verified on physical hardware: real file-manager drag and drop, the Linux desktop clipboard (Flameshot, copy image from browsers), trackpads, browser zoom changes and moving between monitors with different scaling.
+
 ---
 
 ## Phase 2 — Selection System and Magic Wand

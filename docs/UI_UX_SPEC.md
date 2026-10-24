@@ -117,6 +117,8 @@ Requirements:
 
 Transparent regions should use a standard checkerboard appearance.
 
+The checkerboard uses neutral dark greys to suit the dark theme. It is drawn only inside the image boundaries.
+
 The checkerboard is a UI representation only.
 
 It must not become part of exported image pixels.

@@ -64,6 +64,8 @@ Loading an image must not unnecessarily change:
 - Aspect ratio
 - Pixel dimensions
 
+The browser's EXIF orientation handling is applied on import, so a rotated photo opens upright with its displayed dimensions.
+
 PNG export should not intentionally degrade the image.
 
 ---
@@ -550,6 +552,18 @@ Visual testing should supplement automated tests.
 ## SVG Input
 
 SVG import should render the SVG into the raster workspace at an appropriate resolution.
+
+The raster size is the SVG's intrinsic size, falling back to its `viewBox`. See "SVG Sizing" in `FEATURE_SPEC.md`. SVGs without a usable size are rejected rather than given an assumed size.
+
+Imported SVGs are untrusted. They are rendered only through an image element from a local object URL, never inserted into the application DOM, and never allowed to load remote resources. Validation is conservative: unsupported content is rejected, not sanitised. SVGs are rejected if they contain:
+
+- Scripts, event handlers, `foreignObject`, HTML content or embedded web content.
+- A DOCTYPE declaration or entity definition. This is checked in the raw markup before parsing, so entity expansion never reaches the XML parser.
+- External stylesheets, links or resource references, including hyperlinks, in `href`/`xlink:href` attributes, CSS `url()` (in attributes and stylesheets), `@import` and `image-set()`.
+- Nested SVG data (`data:image/svg+xml`), which would bypass these checks.
+- CSS escape sequences in style and presentation attributes or stylesheets, which could disguise a reference.
+
+Only same-document references (`#id`) and embedded PNG, JPEG, WebP and GIF data URLs are allowed.
 
 The application does not initially preserve SVG objects as editable vectors.
 

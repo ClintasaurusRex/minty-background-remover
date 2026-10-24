@@ -15,7 +15,21 @@
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
+  overflow: hidden;
   white-space: nowrap;
+}
+
+.status-bar__info > span {
+  flex-shrink: 0;
+}
+
+.status-bar__info > .status-bar__name {
+  flex-shrink: 1;
+  min-width: 4em;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text);
 }
 
 .status-bar__divider {

@@ -142,6 +142,25 @@ export function ImageIcon(props: IconProps) {
   )
 }
 
+export function AlertIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7.5v5.5" />
+      <path d="M12 16.5h.01" />
+    </Icon>
+  )
+}
+
+export function CloseIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="m6 6 12 12" />
+      <path d="M18 6 6 18" />
+    </Icon>
+  )
+}
+
 export function ToolIcon({ toolId, ...props }: IconProps & { toolId: ToolId }) {
   switch (toolId) {
     case 'magic-wand':

@@ -11,6 +11,25 @@
   background-size: 20px 20px;
 }
 
+/* Focused by clicking (so Space pans); it is never reached with Tab. */
+.workspace:focus {
+  outline: none;
+}
+
+/* Space held: the image can be dragged. */
+.workspace--pan-ready,
+.workspace--panning {
+  user-select: none;
+}
+
+.workspace--pan-ready {
+  cursor: grab;
+}
+
+.workspace--panning {
+  cursor: grabbing;
+}
+
 .empty-state {
   display: flex;
   flex-direction: column;
@@ -67,4 +86,108 @@
   font-family: var(--font-mono);
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
+}
+
+/* The canvas covers the whole workspace; outside the image it is transparent, so
+   the dot grid above shows through. */
+.workspace__canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.empty-state {
+  position: relative;
+}
+
+.workspace__messages {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  width: max-content;
+  max-width: calc(100% - 2 * var(--space-4));
+  transform: translateX(-50%);
+}
+
+.workspace-message {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-sm);
+  font-size: var(--font-size-sm);
+}
+
+/* Only shown for imports that take a noticeable time. */
+.workspace-message--progress {
+  color: var(--color-text-muted);
+  animation: workspace-message-appear 120ms ease-out 250ms both;
+}
+
+.workspace-message:has(.workspace-message__dismiss) {
+  padding-right: var(--space-1);
+}
+
+.workspace-message--error {
+  max-width: 560px;
+  border-color: var(--color-danger-border);
+}
+
+.workspace-message__icon {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  color: var(--color-danger);
+}
+
+.workspace-message__text {
+  min-width: 0;
+}
+
+.workspace-message .workspace-message__dismiss {
+  width: 28px;
+  height: 28px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+}
+
+.workspace-message .workspace-message__dismiss svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* A file is being dragged over the workspace. No animation; the label sits at the
+   bottom, clear of the empty state and the messages at the top, and pointer
+   events pass through so crossing it does not end the drag. */
+.workspace__drop-target {
+  position: absolute;
+  inset: var(--space-2);
+  z-index: 2;
+  display: grid;
+  place-items: end center;
+  padding-bottom: var(--space-5);
+  border: 2px dashed var(--color-accent-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-accent-subtle);
+  pointer-events: none;
+}
+
+.workspace-message__icon--accent {
+  color: var(--color-accent);
+}
+
+@keyframes workspace-message-appear {
+  from {
+    opacity: 0;
+  }
 }

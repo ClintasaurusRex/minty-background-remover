@@ -1,8 +1,12 @@
-import { ImageIcon } from '../icons/icons'
+import { ImageIcon, OpenIcon } from '../icons/icons'
 
-const PLANNED_FORMATS = ['PNG', 'JPEG', 'WebP', 'SVG']
+const SUPPORTED_FORMATS = ['PNG', 'JPEG', 'WebP', 'SVG']
 
-export function EmptyState() {
+interface EmptyStateProps {
+  onOpenImage: () => void
+}
+
+export function EmptyState({ onOpenImage }: EmptyStateProps) {
   return (
     <section className="empty-state" aria-labelledby="empty-state-title">
       <div className="empty-state__icon">
@@ -12,11 +16,14 @@ export function EmptyState() {
         No image open
       </h2>
       <p className="empty-state__text">
-        Opening images isn’t available yet. Soon you’ll be able to open, drag in,
-        or paste an image here to remove its background and tidy it up.
+        Open, drop or paste an image to remove its background and tidy it up.
       </p>
-      <ul className="empty-state__formats" aria-label="Planned file formats">
-        {PLANNED_FORMATS.map((format) => (
+      <button type="button" className="button" onClick={onOpenImage} aria-keyshortcuts="Control+O">
+        <OpenIcon />
+        Open Image
+      </button>
+      <ul className="empty-state__formats" aria-label="Supported file formats">
+        {SUPPORTED_FORMATS.map((format) => (
           <li key={format}>{format}</li>
         ))}
       </ul>
