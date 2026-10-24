@@ -151,18 +151,22 @@ Panning must not alter image pixels.
 
 The Magic Wand is a primary tool.
 
+It becomes the active tool automatically when an image is successfully opened.
+
 ### Default Mode
 
 Contiguous selection.
 
 When the user clicks a pixel:
 
-1. Read the pixel colour.
-2. Compare neighbouring pixels.
-3. Include neighbouring pixels within tolerance.
-4. Continue through connected matching pixels.
+1. Read the clicked pixel's colour.
+2. Compare each candidate pixel with the clicked pixel's colour (not with its neighbour, which would let the selection creep along gradients).
+3. Include pixels within tolerance.
+4. Continue only through pixels connected to the clicked pixel by their four edge neighbours (up, down, left, right). Diagonal contact alone does not connect.
 
 This should behave similarly to traditional flood-fill Magic Wand tools.
+
+Clicks outside the image do nothing.
 
 ### Tolerance
 
@@ -172,31 +176,33 @@ Tolerance should use an intuitive user-facing range:
 0 - 100
 ```
 
-The internal colour-distance algorithm may use a different representation.
-
-Initial recommended default:
+Initial default:
 
 ```text
 20
 ```
 
-The final default may be adjusted based on testing.
+The colour-distance formula is defined in `IMAGE_PROCESSING_SPEC.md` (Colour Distance). The default and the formula are initial choices, to be confirmed with automated tests and real images.
+
+Changing the tolerance re-applies the most recent Magic Wand operation with the new value, including its New / Add / Subtract mode, against the selection as it was before that operation. The recalculation happens when the slider interaction finishes or a typed value is committed, not on every slider movement.
+
+The tolerance is not remembered between application sessions.
 
 ### Global Mode
 
-The user may switch from:
+A visible **Contiguous / Global** toggle switches between:
 
 ```text
 Contiguous
 ```
 
-to:
+and:
 
 ```text
 Global
 ```
 
-Global mode searches the entire image for sufficiently similar colours.
+Global mode searches the entire image for sufficiently similar colours, whether or not they are connected to the clicked pixel.
 
 ---
 
@@ -204,11 +210,13 @@ Global mode searches the entire image for sufficiently similar colours.
 
 Selections should be clearly visible.
 
-Preferred direction:
+Approved direction:
 
-- Semi-transparent selection overlay
-- Selection boundary
-- Marching-ants-style edge if practical
+- Mint-coloured selection tint, initially about 35% opacity (adjusted after visual testing if necessary).
+- High-contrast two-tone selection boundary that stays visible over light and dark images.
+- Marching ants are optional and must respect reduced-motion preferences.
+
+The overlay is drawn on a separate canvas layer aligned exactly with the image.
 
 Visual selection effects must not modify the image pixels themselves.
 
@@ -227,17 +235,25 @@ Required operations:
 - Grow Selection
 - Shrink Selection
 
-Suggested interaction model:
+Approved interaction model:
 
 ```text
-Click = new selection
-Shift + Click = add
-Alt + Click = subtract
-Ctrl + A = select all
-Esc = clear selection
+Click         = new selection
+Shift + Click = add to selection
+Ctrl + Click  = subtract from selection
+Ctrl + A      = select all
+Esc           = clear selection
 ```
 
-Exact modifiers may be adjusted for platform compatibility.
+Visible **New / Add / Subtract** controls provide the same modes, so modifier keys are never required. Alt is not used as a selection modifier (several Linux desktops reserve Alt + drag for moving windows). Global mode comes from its own toggle, not from a modifier.
+
+Grow and Shrink move the selection edge by one pixel per action, including diagonal neighbours. When shrinking, the area outside the image counts as selected, so a selection touching the image border is not pulled away from it.
+
+Selections persist when changing tools and are cleared when a different image is successfully opened. A failed import keeps the current selection.
+
+Further selection shortcuts (for example Invert or Deselect key combinations) are deferred to the planned keyboard shortcut work.
+
+Selection changes are not undoable in Phase 2. They should eventually support Undo / Redo; the selection representation must not prevent an efficient history later.
 
 ---
 

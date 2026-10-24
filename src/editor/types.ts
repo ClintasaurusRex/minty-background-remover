@@ -59,6 +59,31 @@ export interface PixelCoordinate {
   readonly y: number
 }
 
+/** Magic Wand flood mode: matching pixels connected to the clicked pixel, or every match in the image. */
+export type FloodMode = 'contiguous' | 'global'
+
+/** How a new selection combines with the current one. */
+export type SelectionMode = 'new' | 'add' | 'subtract'
+
+/**
+ * The selected pixels of the open image. An empty selection is never a mask: it is `null`.
+ *
+ * Masks are never mutated. Every selection operation returns a new mask, so a mask can be
+ * shared freely (renderer caches, a future undo history). `Readonly` blocks indexed writes;
+ * mutating methods such as `fill` remain callable and must not be used.
+ */
+export interface SelectionMask {
+  /** Always equal to the image's width and height. */
+  readonly width: number
+  readonly height: number
+  /** Row-major, one byte per pixel: 1 = selected, 0 = not selected. Length is width × height. */
+  readonly data: Readonly<Uint8Array>
+  /** Number of selected pixels. Always at least 1. */
+  readonly count: number
+  /** Smallest rectangle containing every selected pixel, in image pixels. */
+  readonly bounds: Readonly<Rectangle>
+}
+
 /**
  * How the image is presented in the workspace. Purely presentational: changing it never
  * touches image pixels or dimensions.

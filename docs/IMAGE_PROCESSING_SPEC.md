@@ -76,62 +76,78 @@ PNG export should not intentionally degrade the image.
 
 Select pixels sufficiently similar to the clicked source pixel.
 
+Every candidate is compared with the clicked pixel's colour, never with its neighbour.
+
 ### Contiguous Mode
 
-Recommended algorithm family:
+A four-connected (edge neighbours only) flood fill from the clicked pixel, implemented in `src/image/selection/magicWand.ts` as a scanline fill:
 
-```text
-Flood Fill
-```
+- An explicit stack of row-segment scan requests replaces recursion, so no image is too large for the call stack.
+- Each run of matching pixels is selected whole. The row beyond it is queued in full; the row it came from only where the run reaches past the request.
+- Pixels are compared only when the fill reaches them, and at most once: a rejected pixel is remembered until the fill ends. The work follows the selected region and its outline, not the image, so a small region in a 50-megapixel image takes under a millisecond.
+- Pixels with exactly the clicked pixel's RGBA skip the distance calculation.
+- The selection's count and bounds are tracked during the fill, so no further pass over the mask is needed.
 
-Potential implementation approaches include:
-
-- Queue-based breadth-first traversal
-- Stack-based traversal
-- Scanline flood fill
-
-Avoid deeply recursive implementations because large images may overflow the JavaScript call stack.
+The clicked pixel always matches itself, so a result is never empty. A seed outside the image is rejected with a `RangeError`; the editor ignores clicks outside the image before calling the wand.
 
 ### Selection Mask
 
-Selections should be represented independently from pixel colour data.
-
-A practical representation may be:
+Selections are represented independently from pixel colour data, as a `SelectionMask` (`src/editor/types.ts`, built by `src/image/selection/selectionMask.ts`):
 
 ```text
-Uint8Array
+width, height   always the image's dimensions
+data            Uint8Array, row-major, one entry per pixel: 0 = not selected, 1 = selected
+count           number of selected pixels, always at least 1
+bounds          smallest rectangle containing every selected pixel
 ```
 
-where each entry represents whether the corresponding pixel is selected.
+Rules:
 
-Example:
+- An empty selection is `null`, never a mask with no selected pixels.
+- Masks are immutable. Every operation produces a new mask and never writes to its inputs, so masks can be shared (renderer caches, a future undo history).
+- The builder takes ownership of the buffer it is given, without copying it. It rejects invalid dimensions, a length other than width × height, and values other than 0 or 1 with a `RangeError`.
+- The selection model keeps no persistent full-image buffers other than masks: the current selection and, for tolerance re-apply, the selection as it was before the last Magic Wand operation.
+- At the 50-megapixel import limit a mask uses 50 MB.
 
-```text
-0 = not selected
-1 = selected
-```
-
-Alternative efficient representations may be considered if justified.
+Alternative efficient representations (bit packing, run-length encoding for history) may be considered if justified.
 
 ---
 
 ## Colour Distance
 
-The user-facing tolerance should be intuitive.
+The user-facing tolerance is a whole number from 0 to 100, default 20.
 
-An initial implementation may compare channels using RGB/RGBA distance.
-
-Example concept:
+The initial formula is an alpha-aware RGB distance between the clicked colour A and a candidate colour B, with channels 0–255:
 
 ```text
-distance = difference between clicked colour and candidate colour
+w   = min(alphaA, alphaB) / 255
+D²  = ( w × (ΔR² + ΔG² + ΔB²) / 3  +  ΔA² ) / 255²
+select when D ≤ tolerance / 100
 ```
 
-The exact formula should be documented in code and covered by tests.
+- D lies between 0 and 1. Opaque black against opaque white is 1; fully transparent against any opaque colour is also 1.
+- Colour differences count in proportion to the less opaque pixel's alpha, so the hidden RGB values of fully transparent pixels never matter: all fully transparent pixels are the same colour and match each other even at tolerance 0.
+- Alpha differences always count in full. Transparent never matches opaque below tolerance 100; at 100 every colour matches.
+- Raising the tolerance never removes a match.
 
-A later implementation may use a perceptual colour space if testing demonstrates significant benefit.
+`src/image/selection/colourDistance.ts` computes this with exact whole numbers and no square roots, so boundary cases are deterministic:
 
-Do not prematurely complicate the first implementation.
+```text
+distance  = min(alphaA, alphaB) × (ΔR² + ΔG² + ΔB²) + 765 × ΔA²     (= D² × 3 × 255³, from 0 to 49,744,125)
+threshold = floor(49,744,125 × tolerance² / 100²)
+select when distance ≤ threshold
+```
+
+Tolerance must be a whole number from 0 to 100; any other value is rejected with a `RangeError`. The editor clamps and rounds user input before it reaches the algorithm.
+
+Boundaries at the default tolerance of 20 (D = 0.2):
+
+- Opaque white selects `#CCCCCC` (51 levels on every channel) but not `#CBCBCB`.
+- Opaque red selects rgb(255, 88, 0) but not rgb(255, 89, 0).
+- Opaque white selects white at alpha 204 but not at alpha 203.
+- Fully transparent selects any colour at alpha 51 but not at alpha 52.
+
+This is an initial choice, subject to automated and real-image testing. A perceptual colour space may be considered later if testing demonstrates significant benefit.
 
 ---
 
@@ -139,19 +155,18 @@ Do not prematurely complicate the first implementation.
 
 Alpha differences should be considered carefully.
 
-Transparent pixels should not unexpectedly match opaque colours simply because RGB channels happen to contain similar values.
+Transparent pixels must not match opaque colours simply because RGB channels happen to contain similar values, and fully transparent pixels must not be distinguished by their hidden RGB values (see Colour Distance).
 
 ---
 
 ## Global Colour Selection
 
-Global mode evaluates all pixels rather than only connected neighbours.
-
-For each pixel:
+Global mode evaluates all pixels rather than only connected neighbours, in one pass that also tracks the selection's count and bounds:
 
 ```text
-if colourDistance(pixel, target) <= tolerance
-    select pixel
+for each pixel:
+    if colourDistanceSquared(pixel, clicked) <= toleranceThreshold(tolerance)
+        select pixel
 ```
 
 Performance must be considered for large images.
@@ -174,6 +189,15 @@ existing AND NOT newSelection
 
 These operations should not modify image pixels until an edit action is applied.
 
+Implemented in `src/image/selection/selectionOperations.ts` (`combineSelections` with mode New, Add or Subtract; `selectAll`; `invertSelection`):
+
+- New returns the incoming selection; an empty incoming selection (`null`) clears the selection.
+- Add with nothing selected returns the other selection; Subtract from nothing is nothing; a result with no pixels is `null`.
+- Masks of different dimensions are rejected with a `RangeError`.
+- Inputs are never written. When nothing changes, the existing mask itself is returned (for example adding a region already inside the selection), so no-op operations allocate nothing. Otherwise the result is a new mask: one copy of the existing data, then work only inside the incoming mask's bounds.
+- Count and bounds are derived from the inputs where possible and otherwise found by scanning inwards from the edges of the old bounds.
+- Masks are processed a byte at a time, so they need no particular buffer alignment.
+
 ---
 
 ## Invert Selection
@@ -185,36 +209,40 @@ For each selection mask value:
 1 → 0
 ```
 
+Inverting no selection selects the whole image; inverting a full selection gives `null`. Pixels outside the old bounds all become selected, so only the old bounds need flipping one by one.
+
 ---
 
 ## Grow Selection
 
-Grow expands selection outward by a specified radius.
-
-Possible implementation:
-
-- Morphological dilation
-- Neighbour-based expansion
-
-Initial radius may be:
-
-```text
-1 px
-```
-
-with repeated application or adjustable control.
+Grow expands the selection by one pixel per action, including diagonal neighbours (a 3 × 3 neighbourhood dilation). Repeated actions grow further.
 
 ---
 
 ## Shrink Selection
 
-Shrink removes boundary pixels.
+Shrink removes, per action, every selected pixel that has an unselected pixel among its eight neighbours (a 3 × 3 erosion).
 
-Possible implementation:
+Pixels outside the image bounds count as selected, so a selection touching the image edge stays attached to it. A shrink that leaves nothing selected produces `null`.
 
-- Morphological erosion
+Grow and Shrink are implemented in `src/image/selection/growShrink.ts` as a separable 3 × 3 operation: each row is first combined with its left and right neighbours, then each output row combines three such rows. Only three rows of scratch space are used, and only the old bounds (plus one pixel for Grow) are visited. Growing or shrinking nothing gives `null`; a full selection is returned unchanged by both. Any other selection always changes, so the result is a new mask with its count and bounds tracked as it is built.
 
-Care must be taken around image edges.
+---
+
+## Selection Performance
+
+- Begin with synchronous pure algorithms on the main thread.
+- Algorithms stay independent of React, the DOM and Canvas, so they can move to a Web Worker unchanged.
+- Measure early with production browser builds (`npm run build` and `npm run preview`), not only Node benchmarks. Benchmarks may be manually run scripts without additional dependencies.
+- Significant UI freezes are not acceptable. Web Workers are introduced only when profiling shows the need and the project owner approves.
+
+Magic Wand measurements at Step 3 (whole calls including the mask, production builds in headless Chrome 156 and Firefox 158 on an i7-14700HX):
+
+- Screenshots up to 4K: about 5–40 ms per click. The first few clicks of a session are up to twice as slow while the browser optimises the code.
+- 4K, whole-image selection on a noisy, photo-like background: about 45–90 ms.
+- 50 megapixels: about 100–300 ms on flat backgrounds; 250–520 ms for whole-image selections on noisy backgrounds; up to about 0.9 s on synthetic worst cases (random noise, one-pixel mazes).
+
+Near the 50-megapixel limit the main thread can block noticeably. How to respond (time-slicing on the main thread or a Web Worker) is an open owner decision, to be made with real images at the Step 7 checkpoint.
 
 ---
 

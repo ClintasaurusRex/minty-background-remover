@@ -155,6 +155,27 @@ Test using:
 
 Do not proceed until Magic Wand behaviour is predictable.
 
+### Phase 2 Approved Decisions and Steps
+
+Approved decisions (D1–D9 and smaller defaults) are recorded in `FEATURE_SPEC.md` §5–7, `IMAGE_PROCESSING_SPEC.md` (Magic Wand through Selection Performance), `UI_UX_SPEC.md` (Magic Wand UX, Selection UX, Status Bar) and `ARCHITECTURE.md` (Phase 2 Modules, Web Workers).
+
+Phase 2 is implemented in twelve reviewed steps, each stopping for review:
+
+1. Record decisions; selection mask model. Done.
+2. Colour distance and tolerance. Done.
+3. Magic Wand: Contiguous and Global. Done.
+4. Combine (New / Add / Subtract), Select All and Invert. Done.
+5. Grow and Shrink. (Implemented; awaiting review.)
+6. Editor state for the active tool, Magic Wand options and selection.
+7. Magic Wand click, Ctrl + A / Esc and status bar (first manual checkpoint).
+8. Selection overlay.
+9. Magic Wand options row.
+10. Re-apply on tolerance change.
+11. Marching ants (optional).
+12. Browser performance measurement, hardening and docs.
+
+Out of Phase 2: deleting selected pixels, edge cleanup, Auto Trim (Phase 3) and selection Undo / Redo.
+
 ---
 
 ## Phase 3 — Background Removal and Cleanup

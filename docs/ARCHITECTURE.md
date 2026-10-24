@@ -134,6 +134,25 @@ Key rules:
 - Every import goes through `importImage` and the import runner. The newest action that has image data wins, and a failed import never replaces the open image.
 - Interaction logic (pan gesture, drop target, import ordering) is written as pure functions with Node tests; React hooks only connect them to DOM events.
 
+### Phase 2 Modules
+
+```text
+src/
+├── editor/types.ts        SelectionMask (empty selection = null), FloodMode, SelectionMode
+└── image/selection/       selectionMask (builder: validates, counts, bounds),
+                           colourDistance (alpha-aware distance, tolerance threshold),
+                           magicWand (Contiguous scanline fill, Global pass),
+                           selectionOperations (New / Add / Subtract, Select All, Invert),
+                           growShrink (one-pixel 3 × 3 Grow and Shrink),
+                           testFixtures (character-map masks and images for tests)
+```
+
+Later Phase 2 steps add colour distance, the Magic Wand, combine / invert / grow / shrink, reducer state and the selection overlay. Key rules:
+
+- Selection algorithms are pure functions over plain width / height / data inputs, independent of React, the DOM and Canvas.
+- Masks are immutable; the editor state holds one reference to the current mask.
+- The selection overlay is a separate canvas layer aligned with the image renderer, using the same transform. `workspaceRenderer` remains the only image drawing code; the overlay gets its own renderer.
+
 ---
 
 ## React Responsibilities
@@ -323,7 +342,7 @@ Initial web application should avoid unnecessary persistent storage.
 
 Potential local preferences may eventually include:
 
-- Last Magic Wand tolerance
+- Last Magic Wand tolerance (not persisted yet; Phase 2 keeps it for the current session only)
 - Last Auto Trim padding
 - UI preferences
 
@@ -354,6 +373,8 @@ Do not start with Web Workers unless needed.
 When large image operations begin causing noticeable UI stalls, evaluate moving pure processing functions into workers.
 
 The architecture should make that migration possible by keeping image algorithms independent of React.
+
+Phase 2 selection algorithms start synchronous on the main thread. Performance is measured early in production browser builds; significant UI freezes are not acceptable. Workers are introduced only when profiling demonstrates the need and the project owner approves.
 
 ---
 

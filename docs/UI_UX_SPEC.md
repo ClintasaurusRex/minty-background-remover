@@ -33,7 +33,7 @@ Preferred general layout:
 ├──────────────────────────────────────────────────────┤
 │                                                      │
 │                    TOOLBAR                           │
-│                                                      │
+│        contextual tool options (second row)          │
 ├──────────────────────────────────────────────────────┤
 │                                                      │
 │                                                      │
@@ -42,11 +42,13 @@ Preferred general layout:
 │                                                      │
 │                                                      │
 ├──────────────────────────────────────────────────────┤
-│ Tool options / image info / zoom                     │
+│ Status: image info / pointer / selection / zoom      │
 └──────────────────────────────────────────────────────┘
 ```
 
 The exact final composition may evolve during implementation.
+
+Tool options appear in a compact contextual second row of the toolbar while the tool is active. The bottom bar is a compact status bar.
 
 ---
 
@@ -143,17 +145,23 @@ Keyboard focus
 
 ## Magic Wand UX
 
-When active, users should have access to settings such as:
+The Magic Wand becomes the active tool when an image is successfully opened.
+
+While it is active, a compact second toolbar row shows its options:
 
 ```text
-Tolerance
+New / Add / Subtract
 Contiguous / Global
-Add
-Subtract
+Tolerance (slider and number, 0–100, default 20)
 Grow
 Shrink
 Invert
 ```
+
+- The row preserves the approved dark layout, sizing, styling and responsive behaviour, and wraps on narrow windows.
+- New / Add / Subtract are visible controls, so modifier keys are optional: Shift + Click adds, Ctrl + Click subtracts. Alt is not used.
+- Contiguous / Global is its own visible toggle.
+- Changing the tolerance re-applies the most recent Magic Wand operation when the slider is released or a typed value is committed.
 
 The interface should not expose unnecessary technical terminology.
 
@@ -163,15 +171,29 @@ The interface should not expose unnecessary technical terminology.
 
 Selected pixels should be clearly visible.
 
-Preferred combination:
+Approved combination:
 
-- Transparent overlay
-- Clear perimeter
-- Optional marching-ants animation
+- Mint-coloured tint, initially about 35% opacity, adjusted after visual testing if necessary
+- High-contrast two-tone perimeter, visible over light and dark images
+- Optional marching-ants animation, static when reduced motion is requested
+
+The overlay is a separate canvas layer aligned exactly with the image renderer. Avoid unnecessary full-resolution RGBA overlay allocations; evaluate viewport-sized or tiled rendering before implementing it.
 
 Selection visuals should remain understandable when zoomed in.
 
 Reduced-motion users must still have a clear non-animated selection indicator.
+
+---
+
+## Status Bar
+
+The status bar stays compact and responsive. It shows:
+
+- Image information and zoom
+- The image pixel under the pointer
+- Selection information, including its bounding dimensions
+
+Selection state is therefore never communicated by colour or motion alone.
 
 ---
 
@@ -334,6 +356,8 @@ Ctrl + Wheel   Zoom
 ```
 
 Shortcuts must not interfere with text entry controls.
+
+Selection shortcuts in Phase 2 are limited to Ctrl + A and Escape, plus Shift + Click and Ctrl + Click with the Magic Wand. Additional selection hotkeys are deferred to the planned shortcut work.
 
 ---
 
