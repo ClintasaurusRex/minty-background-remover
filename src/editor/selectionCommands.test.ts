@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { imageToViewport } from '../canvas/coordinates'
 import { planFrame } from '../canvas/rendering'
+import { createSelectionMask } from '../image/selection/selectionMask'
 import { imageFromRows, maskRows } from '../image/selection/testFixtures'
 import {
   type EditorAction,
@@ -18,7 +19,9 @@ import {
   clearSelectionCommand,
   availableSelectionActions,
   clickSelectionMode,
+  commitToleranceCommand,
   magicWandClick,
+  reapplyMagicWandCommand,
   selectAllCommand,
   selectionActionCommand,
   selectionShortcut,
@@ -179,7 +182,11 @@ describe('magicWandClick', () => {
   it('subtracting from no selection changes nothing', () => {
     const state = open(WALLED())
     const action = magicWandClick(state, centreOf(state, 0, 0), 'subtract')!
-    expect(editorReducer(state, action)).toBe(state)
+    const next = editorReducer(state, action)
+    expect(next.selection).toBeNull()
+    // Only the click is recorded, as the operation a tolerance change re-applies.
+    expect({ ...next, lastMagicWandOperation: null }).toEqual(state)
+    expect(next.lastMagicWandOperation).toMatchObject({ selectionMode: 'subtract', base: null })
   })
 
   it('ignores clicks outside the image, including exactly on its right and bottom edges', () => {
@@ -296,7 +303,7 @@ describe('magicWandClick', () => {
   it('tags the result with the version it was computed from, so a late result is discarded', () => {
     const first = open(WALLED())
     const action = magicWandClick(first, centreOf(first, 0, 0), 'new')!
-    expect(action).toMatchObject({ version: documentVersion(first) })
+    expect(action).toMatchObject({ operation: { version: documentVersion(first) } })
 
     // Another image of the same size opens before the result is applied.
     const replaced = open(WALLED(), first)
@@ -700,5 +707,179 @@ describe('Magic Wand options and the selection', () => {
     expect(replaced.selection).toBeNull()
     expect(replaced.magicWand).toEqual({ selectionMode: 'add', floodMode: 'global', tolerance: 42 })
     expect(availableSelectionActions(replaced)).toMatchObject({ clear: false, grow: false, shrink: false })
+  })
+})
+
+/**
+ * Ten grey levels, 26 apart, so each step of about 10 in tolerance reaches one more level
+ * from white. Rows 0 and 1 run light to dark; row 2 runs dark to light, so it only joins a
+ * Contiguous selection from (0, 0) once the selection is wide enough to meet it.
+ */
+const STAIRS = () => {
+  const palette: Record<string, readonly [number, number, number, number]> = {}
+  for (let k = 0; k < 10; k++) palette[String(k)] = [255 - 26 * k, 255 - 26 * k, 255 - 26 * k, 255]
+  return imageFromRows(palette, '0123456789', '0123456789', '9876543210')
+}
+
+/** Commits a tolerance the way the App does: the tolerance, then the re-applied click if needed. */
+function commit(state: EditorState, tolerance: number): EditorState {
+  return reduce(state, ...commitToleranceCommand(state, tolerance))
+}
+
+/** The same click made once, at `tolerance`, on the state from before the original click. */
+function freshClick(before: EditorState, x: number, y: number, mode: SelectionMode, tolerance: number): EditorState {
+  return click(reduce(before, { type: 'magic-wand-tolerance-changed', tolerance }), x, y, mode)
+}
+
+function expectSameSelection(actual: EditorState, expected: EditorState) {
+  if (!expected.selection) return expect(actual.selection).toBeNull()
+  expect(maskRows(actual.selection!)).toEqual(maskRows(expected.selection))
+  // Count and bounds agree with a recount of the bytes.
+  const recount = createSelectionMask(actual.selection!.width, actual.selection!.height, Uint8Array.from(actual.selection!.data))
+  expect(actual.selection).toMatchObject({ count: recount!.count, bounds: recount!.bounds })
+  expect(actual.selection).toMatchObject({ count: expected.selection.count, bounds: expected.selection.bounds })
+}
+
+describe('re-applying the last Magic Wand click on a committed tolerance', () => {
+  const SEQUENCE = [40, 60, 10, 100, 0, 35, 20]
+
+  it('does nothing without a previous click, and never creates a selection', () => {
+    const state = open(STAIRS())
+    expect(reapplyMagicWandCommand(state, 60)).toBeNull()
+    const committed = commit(state, 60)
+    expect(committed.selection).toBeNull()
+    expect(committed.magicWand.tolerance).toBe(60)
+    // Select All is not a Magic Wand click either.
+    const all = run(state, 'select-all')
+    expect(commit(all, 5).selection).toBe(all.selection)
+  })
+
+  for (const floodMode of ['contiguous', 'global'] as const) {
+    it(`New re-selects the clicked region at each tolerance (${floodMode})`, () => {
+      const before = reduce(open(STAIRS()), { type: 'magic-wand-flood-mode-changed', floodMode })
+      let state = click(before, 0, 0, 'new')
+      expect(state.lastMagicWandOperation).toMatchObject({ seed: { x: 0, y: 0 }, floodMode, selectionMode: 'new', base: null, tolerance: 20 })
+      for (const tolerance of SEQUENCE) {
+        state = commit(state, tolerance)
+        expectSameSelection(state, freshClick(before, 0, 0, 'new', tolerance))
+      }
+    })
+
+    it(`Add recalculates against the selection before the click, never growing cumulatively (${floodMode})`, () => {
+      const opened = reduce(open(STAIRS()), { type: 'magic-wand-flood-mode-changed', floodMode })
+      const before = click(opened, 9, 0, 'new')
+      const base = before.selection
+      let state = click(before, 0, 0, 'add')
+      expect(state.lastMagicWandOperation!.base).toBe(base)
+      for (const tolerance of SEQUENCE) {
+        state = commit(state, tolerance)
+        expectSameSelection(state, freshClick(before, 0, 0, 'add', tolerance))
+      }
+      // Back at the click's tolerance: exactly the original result.
+      expectSameSelection(state, click(before, 0, 0, 'add'))
+    })
+
+    it(`Subtract recalculates from the selection before the click, never removing cumulatively (${floodMode})`, () => {
+      const opened = reduce(open(STAIRS()), { type: 'magic-wand-flood-mode-changed', floodMode })
+      const before = run(opened, 'select-all')
+      let state = click(before, 0, 0, 'subtract')
+      for (const tolerance of SEQUENCE) {
+        state = commit(state, tolerance)
+        expectSameSelection(state, freshClick(before, 0, 0, 'subtract', tolerance))
+      }
+      // Raising the tolerance to remove everything, then lowering it, gives the pixels back.
+      expect(commit(state, 100).selection).toBeNull()
+      expectSameSelection(commit(commit(state, 100), 0), freshClick(before, 0, 0, 'subtract', 0))
+    })
+  }
+
+  it('re-applies the modes captured at the click: Shift / Ctrl overrides, not later option changes', () => {
+    const before = click(open(STAIRS()), 9, 0, 'new')
+    const shift = clickSelectionMode({ ...plain, shiftKey: true }, before.magicWand.selectionMode)!
+    let state = click(before, 0, 0, shift)
+    expect(state.lastMagicWandOperation!.selectionMode).toBe('add')
+    state = reduce(
+      state,
+      { type: 'magic-wand-selection-mode-changed', selectionMode: 'subtract' },
+      { type: 'magic-wand-flood-mode-changed', floodMode: 'global' },
+    )
+    state = commit(state, 60)
+    const expected = freshClick(before, 0, 0, 'add', 60)
+    expectSameSelection(state, expected)
+    expect(state.lastMagicWandOperation).toMatchObject({ selectionMode: 'add', floodMode: 'contiguous', tolerance: 60 })
+
+    const ctrl = clickSelectionMode({ ...plain, ctrlKey: true, shiftKey: true }, 'new')!
+    const subtracted = click(state, 9, 0, ctrl)
+    expect(subtracted.lastMagicWandOperation).toMatchObject({ selectionMode: 'subtract', base: state.selection })
+  })
+
+  it('computes nothing when the effective tolerance has not changed, so a repeated commit is free', () => {
+    let state = click(open(STAIRS()), 0, 0, 'new')
+    for (const same of [20, 20.4, 19.6, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(reapplyMagicWandCommand(state, same)).toBeNull()
+    }
+    state = commit(state, 40)
+    const selection = state.selection
+    // The same adjustment reported twice (change event, then leaving the slider).
+    expect(commitToleranceCommand(state, 40)).toEqual([{ type: 'magic-wand-tolerance-changed', tolerance: 40 }])
+    expect(commit(state, 40).selection).toBe(selection)
+  })
+
+  it('stops re-applying once Select All, Clear, Invert, Grow or Shrink changes the selection', () => {
+    const clicked = click(open(STAIRS()), 0, 0, 'new')
+    for (const action of ['select-all', 'clear', 'invert', 'grow', 'shrink'] as const) {
+      const changed = run(clicked, action)
+      expect(changed.lastMagicWandOperation).toBeNull()
+      expect(reapplyMagicWandCommand(changed, 90)).toBeNull()
+      expect(commit(changed, 90).selection).toBe(changed.selection)
+    }
+  })
+
+  it('stops re-applying when another image opens, and keeps the click when an import fails', () => {
+    const clicked = click(open(STAIRS()), 0, 0, 'new')
+    const failed = reduce(
+      clicked,
+      { type: 'import-started', importId: 998 },
+      { type: 'import-finished', importId: 998, result: { ok: false, error: { code: 'decode-failed', message: 'x' } } },
+    )
+    expect(failed.selection).toBe(clicked.selection)
+    expect(failed.lastMagicWandOperation).toBe(clicked.lastMagicWandOperation)
+    expectSameSelection(commit(failed, 60), commit(clicked, 60))
+
+    const replaced = open(STAIRS(), clicked)
+    expect(replaced.lastMagicWandOperation).toBeNull()
+    expect(commit(replaced, 60).selection).toBeNull()
+  })
+
+  it('never re-applies to another document version, and discards a late or stale result', () => {
+    const clicked = click(open(STAIRS()), 0, 0, 'new')
+    const revised: EditorState = { ...clicked, document: { ...clicked.document!, revision: 1 } }
+    expect(reapplyMagicWandCommand(revised, 60)).toBeNull()
+
+    const action = reapplyMagicWandCommand(clicked, 60)!
+    // Another image opened before the result arrived.
+    const replaced = open(STAIRS(), clicked)
+    expect(editorReducer(replaced, action)).toBe(replaced)
+    // A newer click (or re-apply) replaced the operation it was computed from.
+    const newer = click(clicked, 9, 0, 'new')
+    expect(editorReducer(newer, action)).toBe(newer)
+    expect(editorReducer(commit(clicked, 30), action).lastMagicWandOperation!.tolerance).toBe(30)
+  })
+
+  it('never modifies the selection from before the click, earlier results or the image', () => {
+    const before = click(open(STAIRS()), 9, 0, 'new')
+    const baseBytes = Uint8Array.from(before.selection!.data)
+    const pixels = Uint8ClampedArray.from(before.document!.pixels.data)
+    let state = click(before, 0, 0, 'add')
+    const results = [state.selection!]
+    const snapshots = [Uint8Array.from(state.selection!.data)]
+    for (const tolerance of SEQUENCE) {
+      state = commit(state, tolerance)
+      results.push(state.selection!)
+      snapshots.push(Uint8Array.from(state.selection!.data))
+    }
+    expect(before.selection!.data).toEqual(baseBytes)
+    results.forEach((mask, i) => expect(mask.data).toEqual(snapshots[i]))
+    expect(before.document!.pixels.data).toEqual(pixels)
   })
 })

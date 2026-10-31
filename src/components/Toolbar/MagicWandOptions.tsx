@@ -1,7 +1,14 @@
-import { type KeyboardEvent, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { MagicWandSettings } from '../../editor/editorState'
 import type { SelectionAction } from '../../editor/selectionCommands'
-import { committedToleranceInput, exactToleranceInput, steppedTolerance } from '../../editor/toleranceInput'
+import {
+  type ToleranceFieldEvent,
+  type ToleranceSliderEvent,
+  NO_KEYS_HELD,
+  initialToleranceFieldState,
+  toleranceFieldEvent,
+  toleranceSliderEvent,
+} from '../../editor/toleranceInput'
 import type { FloodMode, SelectionMode } from '../../editor/types'
 import { MAX_TOLERANCE } from '../../image/selection/colourDistance'
 import './ToolOptions.css'
@@ -12,8 +19,17 @@ export interface MagicWandOptionsProps {
   availableActions: Readonly<Record<SelectionAction, boolean>>
   onSelectionModeChange: (mode: SelectionMode) => void
   onFloodModeChange: (mode: FloodMode) => void
-  /** Any finite number; the editor rounds and clamps it to 0–100. */
+  /**
+   * The tolerance while it is being adjusted (every slider movement, typed whole numbers).
+   * Any finite number; the editor rounds and clamps it to 0–100.
+   */
   onToleranceChange: (tolerance: number) => void
+  /**
+   * A finished tolerance adjustment (slider released, key released, typed value entered):
+   * the editor sets it and re-applies the last Magic Wand click if the tolerance differs
+   * from the one that click's selection was made with.
+   */
+  onToleranceCommit: (tolerance: number) => void
   onSelectionAction: (action: SelectionAction) => void
 }
 
@@ -44,8 +60,8 @@ const ACTIONS: readonly { action: SelectionAction; label: string; name: string; 
 
 /**
  * The Magic Wand's contextual options, shown as a second toolbar row while it is the
- * active tool. Options apply to the next Magic Wand click and never change the current
- * selection; the selection actions change it at once.
+ * active tool. Options apply to the next Magic Wand click; a finished tolerance adjustment
+ * also re-applies the last click. The selection actions change the selection at once.
  */
 export function MagicWandOptions({
   settings,
@@ -53,6 +69,7 @@ export function MagicWandOptions({
   onSelectionModeChange,
   onFloodModeChange,
   onToleranceChange,
+  onToleranceCommit,
   onSelectionAction,
 }: MagicWandOptionsProps) {
   return (
@@ -64,7 +81,7 @@ export function MagicWandOptions({
         onChange={onSelectionModeChange}
       />
       <Segmented label="Flood mode" choices={FLOOD_MODES} value={settings.floodMode} onChange={onFloodModeChange} />
-      <ToleranceControl tolerance={settings.tolerance} onChange={onToleranceChange} />
+      <ToleranceControl tolerance={settings.tolerance} onChange={onToleranceChange} onCommit={onToleranceCommit} />
       <div className="tool-options__group" role="group" aria-label="Selection actions">
         {ACTIONS.map(({ action, label, name, title }) => {
           const available = availableActions[action]
@@ -121,44 +138,56 @@ function Segmented<T extends string>({
   )
 }
 
+interface ToleranceControlProps {
+  tolerance: number
+  onChange: (tolerance: number) => void
+  onCommit: (tolerance: number) => void
+}
+
 /**
  * A slider and a text field for the same tolerance. The slider applies every movement.
  * The text field applies a whole number from 0 to 100 as it is typed, so the slider
  * follows; anything else waits until Enter or leaving the field, when a number is
- * rounded and clamped and other text restores the current tolerance. Escape restores
- * the tolerance from before editing started.
+ * rounded and clamped and other text restores the current tolerance. Escape cancels an
+ * unfinished entry.
+ *
+ * Finished adjustments are committed (see toleranceInput.ts): releasing the slider,
+ * releasing the last arrow or Page key on either control, Enter or leaving either control.
  */
-function ToleranceControl({ tolerance, onChange }: { tolerance: number; onChange: (tolerance: number) => void }) {
+function ToleranceControl({ tolerance, onChange, onCommit }: ToleranceControlProps) {
   const labelId = useId()
-  // The text being typed, or null to show the current tolerance.
-  const [draft, setDraft] = useState<string | null>(null)
-  const toleranceBeforeEditing = useRef(tolerance)
+  const sliderRef = useRef<HTMLInputElement>(null)
+  // Adjustment keys held on the slider; read by the native change listener, so not render state.
+  const sliderKeys = useRef(NO_KEYS_HELD)
+  const [field, setField] = useState(() => initialToleranceFieldState(tolerance))
 
-  const commit = () => {
-    if (draft === null) return
-    const value = committedToleranceInput(draft)
-    if (value !== null) onChange(value)
-    setDraft(null)
+  const handleSlider = (event: ToleranceSliderEvent, value: number) => {
+    const result = toleranceSliderEvent(sliderKeys.current, event)
+    sliderKeys.current = result.held
+    if (result.commit) onCommit(value)
   }
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter') {
-      commit()
-      return
+  // React's onChange reports every movement of the slider (the input event). The native
+  // change event reports a committed value: the thumb released, or a value set by assistive
+  // technology.
+  useEffect(() => {
+    const slider = sliderRef.current
+    if (!slider) return
+    const handleChange = () => {
+      const result = toleranceSliderEvent(sliderKeys.current, { type: 'change' })
+      sliderKeys.current = result.held
+      if (result.commit) onCommit(Number(slider.value))
     }
-    if (event.key === 'Escape') {
-      // Handled here, so Escape does not also clear the selection.
-      event.preventDefault()
-      onChange(toleranceBeforeEditing.current)
-      setDraft(null)
-      return
-    }
-    const stepped = steppedTolerance(committedToleranceInput(draft ?? '') ?? tolerance, event.key)
-    if (stepped !== null) {
-      event.preventDefault()
-      onChange(stepped)
-      setDraft(null)
-    }
+    slider.addEventListener('change', handleChange)
+    return () => slider.removeEventListener('change', handleChange)
+  }, [onCommit])
+
+  const handleField = (event: ToleranceFieldEvent, keyEvent?: { preventDefault(): void }) => {
+    const result = toleranceFieldEvent(field, event, tolerance)
+    if (result.handled) keyEvent?.preventDefault()
+    if (result.state !== field) setField(result.state)
+    if (result.change !== undefined) onChange(result.change)
+    if (result.commit !== undefined) onCommit(result.commit)
   }
 
   return (
@@ -167,6 +196,7 @@ function ToleranceControl({ tolerance, onChange }: { tolerance: number; onChange
         Tolerance
       </span>
       <input
+        ref={sliderRef}
         type="range"
         className="tool-options__slider"
         min={0}
@@ -176,27 +206,24 @@ function ToleranceControl({ tolerance, onChange }: { tolerance: number; onChange
         aria-labelledby={labelId}
         title="How different a colour can be and still be selected (0–100)"
         onChange={(event) => onChange(Number(event.currentTarget.value))}
+        onKeyDown={(event) => handleSlider({ type: 'key-down', key: event.key }, Number(event.currentTarget.value))}
+        onKeyUp={(event) => handleSlider({ type: 'key-up', key: event.key }, Number(event.currentTarget.value))}
+        onBlur={(event) => handleSlider({ type: 'blur' }, Number(event.currentTarget.value))}
       />
       <input
         type="text"
         inputMode="numeric"
         className="tool-options__number"
-        value={draft ?? String(tolerance)}
+        value={field.draft ?? String(tolerance)}
         aria-label="Tolerance value, 0 to 100"
         title="Tolerance (0–100)"
         autoComplete="off"
         spellCheck={false}
-        onFocus={() => {
-          toleranceBeforeEditing.current = tolerance
-        }}
-        onChange={(event) => {
-          const text = event.currentTarget.value
-          setDraft(text)
-          const exact = exactToleranceInput(text)
-          if (exact !== null) onChange(exact)
-        }}
-        onBlur={commit}
-        onKeyDown={handleKeyDown}
+        onFocus={() => handleField({ type: 'focus' })}
+        onChange={(event) => handleField({ type: 'input', text: event.currentTarget.value })}
+        onKeyDown={(event) => handleField({ type: 'key-down', key: event.key }, event)}
+        onKeyUp={(event) => handleField({ type: 'key-up', key: event.key })}
+        onBlur={() => handleField({ type: 'blur' })}
       />
     </div>
   )

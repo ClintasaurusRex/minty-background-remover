@@ -24,6 +24,7 @@ function render(activeTool: ToolId | null, settings: MagicWandSettings = DEFAULT
       onSelectionModeChange: noop,
       onFloodModeChange: noop,
       onToleranceChange: noop,
+      onToleranceCommit: noop,
       onSelectionAction: noop,
     }),
   )

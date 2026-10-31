@@ -3,8 +3,9 @@ import { createMagicWandSelection } from '../image/selection/magicWand'
 import { growSelection, shrinkSelection } from '../image/selection/growShrink'
 import { combineSelections, invertSelection, selectAll } from '../image/selection/selectionOperations'
 import { isEditableTarget } from '../utils/domTargets'
-import { type EditorAction, type EditorState, displayViewport, documentVersion } from './editorState'
-import type { Point, SelectionMode } from './types'
+import { type EditorAction, type EditorState, type MagicWandOperation, displayViewport, documentVersion } from './editorState'
+import { clampTolerance } from './toleranceInput'
+import type { Point, SelectionMask, SelectionMode } from './types'
 
 /*
  * Selection commands: pointer and keyboard input turned into editor actions. The pixel
@@ -13,6 +14,9 @@ import type { Point, SelectionMode } from './types'
  * Every result is tagged with the document version it was computed from, captured before
  * the computation starts, so a result that arrives after the image was replaced or its
  * pixels changed is discarded by the reducer.
+ *
+ * A Magic Wand click is recorded with its result, so that a committed tolerance change can
+ * re-apply it (reapplyMagicWandCommand).
  */
 
 /** The parts of a pointer or mouse event the Magic Wand reads. */
@@ -48,9 +52,12 @@ export function clickSelectionMode(press: PointerPress, chosen: SelectionMode): 
 
 /**
  * A Magic Wand click at `point` (workspace canvas CSS px), combined with the current
- * selection using `mode`. Hit-testing uses the display viewport the image is drawn with,
- * at the centre of the pointer's device pixel, so the clicked pixel is exactly the one
- * shown under the pointer.
+ * selection using `mode` (the mode actually used, after any Shift or Ctrl override).
+ * Hit-testing uses the display viewport the image is drawn with, at the centre of the
+ * pointer's device pixel, so the clicked pixel is exactly the one shown under the pointer.
+ *
+ * The action also records the click (see MagicWandOperation), so a committed tolerance
+ * change can re-apply it.
  *
  * Returns null when there is nothing to do: no image, another active tool, or a click
  * outside the image.
@@ -63,8 +70,62 @@ export function magicWandClick(state: EditorState, point: Point, mode: Selection
   const seed = pixelUnderPointer(viewport, point, document, workspace.devicePixelRatio)
   if (!seed) return null
 
-  const found = createMagicWandSelection(document.pixels, seed, state.magicWand)
-  return { type: 'selection-applied', version, selection: combineSelections(state.selection, found, mode) }
+  const { tolerance, floodMode } = state.magicWand
+  const operation: MagicWandOperation = {
+    version,
+    seed,
+    floodMode,
+    selectionMode: mode,
+    // New replaces the selection whatever it was, so the previous mask is not kept.
+    base: mode === 'new' ? null : state.selection,
+    tolerance,
+  }
+  return { type: 'magic-wand-applied', operation, selection: operationResult(document.pixels, operation, tolerance) }
+}
+
+/**
+ * What `operation` selects with `tolerance`: the Magic Wand result from its seed, combined
+ * with the selection from before the click. The single formula for a click and for every
+ * re-apply, so re-applying always equals clicking once at the latest tolerance.
+ */
+function operationResult(pixels: ImageData, operation: MagicWandOperation, tolerance: number): SelectionMask | null {
+  const found = createMagicWandSelection(pixels, operation.seed, { tolerance, floodMode: operation.floodMode })
+  return combineSelections(operation.base, found, operation.selectionMode)
+}
+
+/**
+ * Re-applies the most recent Magic Wand click with a committed tolerance: the same seed,
+ * flood mode and New / Add / Subtract mode as the click (whatever the options are now),
+ * combined with the selection from before the click, never with an earlier re-applied
+ * result. Add therefore never grows and Subtract never removes cumulatively.
+ *
+ * Returns null, computing nothing, when there is nothing to re-apply: no click recorded
+ * (none yet, the selection was changed another way since, or another image opened), the
+ * click was made on another document version, or `tolerance`, rounded and clamped to
+ * 0–100, is the one the current selection was made with. Values that are not finite are
+ * ignored.
+ */
+export function reapplyMagicWandCommand(state: EditorState, tolerance: number): EditorAction | null {
+  const { document, lastMagicWandOperation: operation } = state
+  if (!document || !operation || !Number.isFinite(tolerance)) return null
+  const { version } = operation
+  if (version.documentId !== document.id || version.revision !== document.revision) return null
+  const value = clampTolerance(tolerance)
+  if (value === operation.tolerance) return null
+  const selection = operationResult(document.pixels, operation, value)
+  return { type: 'magic-wand-reapplied', operation, tolerance: value, selection }
+}
+
+/**
+ * The actions for a finished tolerance adjustment (slider released, typed value committed):
+ * the tolerance itself, then the re-applied last click when it needs recomputing. Computing
+ * the same committed tolerance twice is avoided, because once re-applied the selection is
+ * recorded as made with it.
+ */
+export function commitToleranceCommand(state: EditorState, tolerance: number): readonly EditorAction[] {
+  const reapplied = reapplyMagicWandCommand(state, tolerance)
+  const changed: EditorAction = { type: 'magic-wand-tolerance-changed', tolerance }
+  return reapplied ? [changed, reapplied] : [changed]
 }
 
 /** The selection actions offered as buttons (Select All and Clear also have shortcuts). */

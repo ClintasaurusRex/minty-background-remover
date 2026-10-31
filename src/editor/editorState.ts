@@ -8,6 +8,7 @@ import { TOOLS } from './tools'
 import type {
   FloodMode,
   ImageDocument,
+  PixelCoordinate,
   Point,
   SelectionMask,
   SelectionMode,
@@ -64,6 +65,14 @@ export interface EditorState {
    * document's size. Cleared when another image is opened; kept on tool changes.
    */
   readonly selection: SelectionMask | null
+  /**
+   * The most recent Magic Wand click, for re-applying it when a tolerance change is
+   * committed. Whenever it is set, `selection` is exactly its result at its tolerance.
+   * Null when there is nothing to re-apply: before the first click, after the selection
+   * was changed in any other way (Select All, Clear, Invert, Grow, Shrink) and after
+   * another image opened.
+   */
+  readonly lastMagicWandOperation: MagicWandOperation | null
 }
 
 /** The Magic Wand's options as chosen in the editor. */
@@ -86,6 +95,34 @@ export const DEFAULT_MAGIC_WAND_SETTINGS: MagicWandSettings = {
 export interface DocumentVersion {
   readonly documentId: number
   readonly revision: number
+}
+
+/**
+ * A Magic Wand click as made, kept so it can be re-applied with another tolerance. Its
+ * result is always `combineSelections(base, createMagicWandSelection(pixels, seed,
+ * { tolerance, floodMode }), selectionMode)`, for the click and for every re-apply, so
+ * re-applying never builds on an earlier re-applied result.
+ *
+ * Everything is captured when the click is made: later changes to the chosen options do
+ * not alter the click being re-applied.
+ */
+export interface MagicWandOperation {
+  /** The document version clicked; the click is never re-applied to any other. */
+  readonly version: DocumentVersion
+  /** The clicked image pixel. */
+  readonly seed: PixelCoordinate
+  /** Contiguous or Global, as chosen when clicking. */
+  readonly floodMode: FloodMode
+  /** New, Add or Subtract as actually used, including a Shift or Ctrl override. */
+  readonly selectionMode: SelectionMode
+  /**
+   * The selection immediately before the click, shared rather than copied (masks are
+   * immutable). Null for New: its result does not depend on the previous selection, so
+   * that mask is not kept alive.
+   */
+  readonly base: SelectionMask | null
+  /** The tolerance that produced the current selection. */
+  readonly tolerance: number
 }
 
 /** Informational import messages, less serious than an ImportError. */
@@ -141,10 +178,30 @@ export type EditorAction =
    * Replaces the selection with one computed for `version` of the open document (null
    * selects nothing). Ignored unless `version` is the open document's current version
    * and the mask is the document's size. The state keeps the mask itself, without
-   * copying, and never modifies it.
+   * copying, and never modifies it. Used for every change other than a Magic Wand
+   * click, so a change forgets the last Magic Wand operation.
    */
   | { readonly type: 'selection-applied'; readonly version: DocumentVersion; readonly selection: SelectionMask | null }
+  /** Clears the selection and forgets the last Magic Wand operation. */
   | { readonly type: 'selection-cleared' }
+  /**
+   * A Magic Wand click: replaces the selection with its result and records the click as
+   * the operation a committed tolerance change re-applies, even when the selection does
+   * not change. Ignored for any other document version, a mask of another size, or an
+   * Add or Subtract whose base is no longer the current selection.
+   */
+  | { readonly type: 'magic-wand-applied'; readonly operation: MagicWandOperation; readonly selection: SelectionMask | null }
+  /**
+   * `operation` re-applied with `tolerance`. Ignored unless `operation` is still the last
+   * Magic Wand operation (so nothing has changed the selection since) and the result fits
+   * the open document.
+   */
+  | {
+      readonly type: 'magic-wand-reapplied'
+      readonly operation: MagicWandOperation
+      readonly tolerance: number
+      readonly selection: SelectionMask | null
+    }
 
 export const initialEditorState: EditorState = {
   document: null,
@@ -158,6 +215,7 @@ export const initialEditorState: EditorState = {
   activeTool: null,
   magicWand: DEFAULT_MAGIC_WAND_SETTINGS,
   selection: null,
+  lastMagicWandOperation: null,
 }
 
 const FLOOD_MODES: readonly FloodMode[] = ['contiguous', 'global']
@@ -195,9 +253,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         pendingImportId: null,
         importError: null,
         pan: null,
-        // The selection belonged to the previous image. Magic Wand options are kept.
+        // The selection and the click that made it belonged to the previous image.
+        // Magic Wand options are kept.
         activeTool: 'magic-wand',
         selection: null,
+        lastMagicWandOperation: null,
       }
     }
 
@@ -282,16 +342,41 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         : state
 
     case 'selection-applied': {
-      const { document } = state
       const { version, selection } = action
-      if (!document || version.documentId !== document.id || version.revision !== document.revision) return state
-      if (selection && (selection.width !== document.width || selection.height !== document.height)) return state
-      return selection === state.selection ? state : { ...state, selection }
+      if (!fitsDocument(state, version, selection) || selection === state.selection) return state
+      // The selection is no longer a Magic Wand result, so a tolerance change must not
+      // re-apply a click over it.
+      return { ...state, selection, lastMagicWandOperation: null }
     }
 
     case 'selection-cleared':
-      return state.selection === null ? state : { ...state, selection: null }
+      return state.selection === null ? state : { ...state, selection: null, lastMagicWandOperation: null }
+
+    case 'magic-wand-applied': {
+      const { operation, selection } = action
+      if (!fitsDocument(state, operation.version, selection)) return state
+      // Add and Subtract were combined with `base`; if the selection has changed since,
+      // the result (and the recorded base) would be stale. New does not depend on it.
+      if (operation.selectionMode !== 'new' && operation.base !== state.selection) return state
+      return { ...state, selection, lastMagicWandOperation: operation }
+    }
+
+    case 'magic-wand-reapplied': {
+      const { operation, tolerance, selection } = action
+      if (operation !== state.lastMagicWandOperation || !fitsDocument(state, operation.version, selection)) return state
+      return { ...state, selection, lastMagicWandOperation: { ...operation, tolerance } }
+    }
   }
+}
+
+/**
+ * Whether a selection computed for `version` can be applied: it is the open document's
+ * current version and the mask (if any) is the document's size.
+ */
+function fitsDocument(state: EditorState, version: DocumentVersion, selection: SelectionMask | null): boolean {
+  const { document } = state
+  if (!document || version.documentId !== document.id || version.revision !== document.revision) return false
+  return !selection || (selection.width === document.width && selection.height === document.height)
 }
 
 /** The open document's current version, for tagging a selection computed from it. Null without a document. */

@@ -60,6 +60,7 @@ describe('editorReducer: imports', () => {
       activeTool: null,
       magicWand: { tolerance: 20, floodMode: 'contiguous', selectionMode: 'new' },
       selection: null,
+      lastMagicWandOperation: null,
     })
     expect(isImporting(initialEditorState)).toBe(false)
   })

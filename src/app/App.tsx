@@ -17,6 +17,7 @@ import {
   type SelectionAction,
   availableSelectionActions,
   clickSelectionMode,
+  commitToleranceCommand,
   magicWandClick,
   selectionActionCommand,
 } from '../editor/selectionCommands'
@@ -63,7 +64,8 @@ function App() {
   }, [])
 
   const selectTool = useCallback((tool: ToolId) => dispatch({ type: 'tool-selected', tool }), [])
-  // Magic Wand options apply to the next click; they never change the current selection.
+  // Magic Wand options apply to the next click. Only a committed tolerance (below) changes
+  // the current selection, by re-applying the last click.
   const changeSelectionMode = useCallback(
     (selectionMode: SelectionMode) => dispatch({ type: 'magic-wand-selection-mode-changed', selectionMode }),
     [],
@@ -76,6 +78,12 @@ function App() {
     (tolerance: number) => dispatch({ type: 'magic-wand-tolerance-changed', tolerance }),
     [],
   )
+  const commitTolerance = useCallback((tolerance: number) => {
+    // A re-applied click is computed here, outside the reducer, from the latest committed
+    // state and only when its tolerance differs; the reducer discards it if anything has
+    // changed the selection or the image since.
+    for (const action of commitToleranceCommand(stateRef.current, tolerance)) dispatch(action)
+  }, [])
   const runSelectionAction = useCallback((selectionAction: SelectionAction) => {
     // Computed here, outside the reducer, from the latest committed state and tagged with
     // the document version it used.
@@ -111,6 +119,7 @@ function App() {
           onSelectionModeChange={changeSelectionMode}
           onFloodModeChange={changeFloodMode}
           onToleranceChange={changeTolerance}
+          onToleranceCommit={commitTolerance}
           onSelectionAction={runSelectionAction}
         />
       </div>
