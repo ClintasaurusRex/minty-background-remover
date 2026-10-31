@@ -16,11 +16,14 @@ import {
   type PointerPress,
   type ShortcutKey,
   clearSelectionCommand,
+  availableSelectionActions,
   clickSelectionMode,
   magicWandClick,
   selectAllCommand,
+  selectionActionCommand,
   selectionShortcut,
 } from './selectionCommands'
+import type { SelectionAction } from './selectionCommands'
 import type { PixelCoordinate, Point, SelectionMode } from './types'
 
 const WORKSPACE: WorkspaceMetrics = { size: { width: 1000, height: 600 }, devicePixelRatio: 1 }
@@ -402,6 +405,12 @@ describe('selectionShortcut', () => {
     expect(selectionShortcut(key('a', { ctrlKey: true, target: element(['button']) }))).toBe('select-all')
   })
 
+  it('works with focus on the tolerance slider, which is not a text field', () => {
+    const slider = { closest: (selector: string) => (selector === 'input' ? { type: 'range' } : null) } as unknown as EventTarget
+    expect(selectionShortcut(key('a', { ctrlKey: true, target: slider }))).toBe('select-all')
+    expect(selectionShortcut(key('Escape', { target: slider }))).toBe('clear-selection')
+  })
+
   it('leaves text fields and editable content alone', () => {
     for (const target of [element(['input']), element(['textarea']), element(['select']), element([], true)]) {
       expect(selectionShortcut(key('a', { ctrlKey: true, target }))).toBeNull()
@@ -423,5 +432,273 @@ describe('selectionShortcut', () => {
     expect(selectionShortcut(key('Escape', { shiftKey: true }))).toBeNull()
     expect(selectionShortcut(key('Escape', { ctrlKey: true }))).toBeNull()
     expect(selectionShortcut(key('Esc'))).toBeNull()
+  })
+})
+
+/** Applies a selection action, failing if it is unavailable. */
+function run(state: EditorState, action: SelectionAction): EditorState {
+  const result = selectionActionCommand(state, action)
+  if (!result) throw new Error(`${action} did nothing`)
+  return editorReducer(state, result)
+}
+
+/** A copy of a mask's bytes, to check that later operations never write to it. */
+function snapshot(state: EditorState): Uint8Array | null {
+  return state.selection ? Uint8Array.from(state.selection.data) : null
+}
+
+/**
+ * A 7 × 5 white image with a 3 × 1 black bar in the middle, a black pixel in the corner
+ * and a black pixel on the bottom edge:
+ *
+ *   k w w w w w w
+ *   w w w w w w w
+ *   w w k k k w w
+ *   w w w w w w w
+ *   w w w w k w w
+ */
+const BAR = () => imageFromRows(PALETTE, 'kwwwwww', 'wwwwwww', 'wwkkkww', 'wwwwwww', 'wwwwkww')
+
+describe('availableSelectionActions', () => {
+  const none = { 'select-all': false, clear: false, invert: false, grow: false, shrink: false }
+
+  it('offers nothing without an image', () => {
+    expect(availableSelectionActions(initialEditorState)).toEqual(none)
+  })
+
+  it('offers Select All and Invert with nothing selected', () => {
+    expect(availableSelectionActions(open(BAR()))).toEqual({ ...none, 'select-all': true, invert: true })
+  })
+
+  it('offers everything for a partial selection', () => {
+    const state = click(open(BAR()), 3, 2)
+    expect(availableSelectionActions(state)).toEqual({
+      'select-all': true,
+      clear: true,
+      invert: true,
+      grow: true,
+      shrink: true,
+    })
+  })
+
+  it('offers Clear and Invert only when everything is selected', () => {
+    const state = run(open(BAR()), 'select-all')
+    expect(availableSelectionActions(state)).toEqual({ ...none, clear: true, invert: true })
+  })
+
+  it('agrees with the commands: an available action returns an action, an unavailable one null', () => {
+    const states = [initialEditorState, open(BAR()), click(open(BAR()), 3, 2), run(open(BAR()), 'select-all')]
+    for (const state of states) {
+      const available = availableSelectionActions(state)
+      for (const action of ['select-all', 'clear', 'invert', 'grow', 'shrink'] as const) {
+        expect(selectionActionCommand(state, action) !== null).toBe(available[action])
+      }
+    }
+  })
+})
+
+describe('selectionActionCommand', () => {
+  it('selects all, clears and inverts', () => {
+    const state = click(open(BAR()), 3, 2)
+    expect(run(state, 'select-all').selection).toMatchObject({ count: 35, bounds: { x: 0, y: 0, width: 7, height: 5 } })
+    expect(run(state, 'clear').selection).toBeNull()
+    const inverted = run(state, 'invert')
+    expect(inverted.selection).toMatchObject({ count: 32, bounds: { x: 0, y: 0, width: 7, height: 5 } })
+    expect(maskRows(inverted.selection!)).toEqual(['#######', '#######', '##...##', '#######', '#######'])
+  })
+
+  it('inverts nothing to everything, and everything to nothing', () => {
+    const everything = run(open(BAR()), 'invert')
+    expect(everything.selection).toMatchObject({ count: 35, bounds: { x: 0, y: 0, width: 7, height: 5 } })
+    expect(run(everything, 'invert').selection).toBeNull()
+  })
+
+  it('inverting twice gives back the same pixels', () => {
+    const state = click(open(BAR()), 0, 0, 'new')
+    const twice = run(run(state, 'invert'), 'invert')
+    expect(maskRows(twice.selection!)).toEqual(maskRows(state.selection!))
+    expect(twice.selection).toMatchObject({ count: state.selection!.count, bounds: state.selection!.bounds })
+  })
+
+  it('grows by one pixel including diagonals, with exact count and bounds', () => {
+    const grown = run(click(open(BAR()), 3, 2), 'grow')
+    expect(maskRows(grown.selection!)).toEqual(['.......', '.#####.', '.#####.', '.#####.', '.......'])
+    expect(grown.selection).toMatchObject({ count: 15, bounds: { x: 1, y: 1, width: 5, height: 3 } })
+  })
+
+  it('grows within the image at its edges', () => {
+    const grown = run(click(open(BAR()), 0, 0), 'grow')
+    expect(grown.selection).toMatchObject({ count: 4, bounds: { x: 0, y: 0, width: 2, height: 2 } })
+  })
+
+  it('repeated Grow keeps growing until everything is selected, then is unavailable', () => {
+    let state = click(open(BAR()), 3, 2)
+    const counts: number[] = []
+    while (availableSelectionActions(state).grow) {
+      state = run(state, 'grow')
+      counts.push(state.selection!.count)
+    }
+    expect(counts).toEqual([15, 35])
+    expect(selectionActionCommand(state, 'grow')).toBeNull()
+  })
+
+  it('shrinks by one pixel including diagonals, keeping edges that touch the image border', () => {
+    // Everything but the corner pixel: shrinking pulls away only around that pixel.
+    const state = run(click(open(BAR()), 0, 0), 'invert')
+    const shrunk = run(state, 'shrink')
+    expect(maskRows(shrunk.selection!)).toEqual(['..#####', '..#####', '#######', '#######', '#######'])
+    expect(shrunk.selection).toMatchObject({ count: 31, bounds: { x: 0, y: 0, width: 7, height: 5 } })
+  })
+
+  it('shrinking a selection too thin to survive leaves nothing selected', () => {
+    const state = click(open(BAR()), 3, 2)
+    const shrunk = run(state, 'shrink')
+    expect(shrunk.selection).toBeNull()
+    expect(availableSelectionActions(shrunk)).toMatchObject({ clear: false, grow: false, shrink: false })
+  })
+
+  it('Grow and Shrink do nothing with no selection or a full selection', () => {
+    const empty = open(BAR())
+    const full = run(empty, 'select-all')
+    for (const state of [empty, full]) {
+      expect(selectionActionCommand(state, 'grow')).toBeNull()
+      expect(selectionActionCommand(state, 'shrink')).toBeNull()
+    }
+  })
+
+  it('does nothing without an image', () => {
+    for (const action of ['select-all', 'clear', 'invert', 'grow', 'shrink'] as const) {
+      expect(selectionActionCommand(initialEditorState, action)).toBeNull()
+    }
+  })
+
+  it('never modifies the previous mask or the image pixels', () => {
+    const state = click(open(BAR()), 3, 2)
+    const before = snapshot(state)
+    const pixels = Uint8ClampedArray.from(state.document!.pixels.data)
+    for (const action of ['invert', 'grow', 'shrink', 'select-all', 'clear'] as const) {
+      const next = run(state, action)
+      expect(next.selection).not.toBe(state.selection)
+    }
+    expect(snapshot(state)).toEqual(before)
+    expect(state.document!.pixels.data).toEqual(pixels)
+  })
+
+  it('never changes the viewport, the tool or the Magic Wand options', () => {
+    const state = click(open(BAR()), 3, 2)
+    for (const action of ['invert', 'grow', 'shrink', 'select-all', 'clear'] as const) {
+      const next = run(state, action)
+      expect(next.viewport).toBe(state.viewport)
+      expect(next.activeTool).toBe(state.activeTool)
+      expect(next.magicWand).toBe(state.magicWand)
+      expect(next.document).toBe(state.document)
+    }
+  })
+
+  it('tags each result with its version, so a result for a replaced image is discarded', () => {
+    const first = click(open(BAR()), 3, 2)
+    const actions = (['invert', 'grow', 'shrink', 'select-all'] as const).map((a) => selectionActionCommand(first, a)!)
+    const replaced = open(BAR(), first)
+    expect(replaced.selection).toBeNull()
+    for (const action of actions) expect(editorReducer(replaced, action)).toBe(replaced)
+    // The replacement image still works normally.
+    expect(run(replaced, 'select-all').selection!.count).toBe(35)
+  })
+
+  it('keeps a selection on the open image when another import fails', () => {
+    const state = click(open(BAR()), 3, 2)
+    const failed = reduce(
+      state,
+      { type: 'import-started', importId: 999 },
+      { type: 'import-finished', importId: 999, result: { ok: false, error: { code: 'decode-failed', message: 'x' } } },
+    )
+    expect(failed.selection).toBe(state.selection)
+    expect(run(failed, 'grow').selection!.count).toBe(15)
+  })
+})
+
+describe('Magic Wand options and the selection', () => {
+  it('changing the mode, flood mode or tolerance keeps the selection exactly as it is', () => {
+    const state = click(open(BAR()), 3, 2)
+    const changed = reduce(
+      state,
+      { type: 'magic-wand-selection-mode-changed', selectionMode: 'subtract' },
+      { type: 'magic-wand-flood-mode-changed', floodMode: 'global' },
+      { type: 'magic-wand-tolerance-changed', tolerance: 100 },
+    )
+    expect(changed.selection).toBe(state.selection)
+    expect(changed.viewport).toBe(state.viewport)
+    expect(changed.document).toBe(state.document)
+  })
+
+  it('a new flood mode takes effect on the next click', () => {
+    const contiguous = click(open(BAR()), 3, 2)
+    expect(contiguous.selection!.count).toBe(3)
+    const global = reduce(contiguous, { type: 'magic-wand-flood-mode-changed', floodMode: 'global' })
+    expect(global.selection!.count).toBe(3)
+    expect(click(global, 3, 2).selection!.count).toBe(5)
+    const back = reduce(global, { type: 'magic-wand-flood-mode-changed', floodMode: 'contiguous' })
+    expect(click(back, 3, 2).selection!.count).toBe(3)
+  })
+
+  it('a new tolerance takes effect on the next click', () => {
+    const state = click(open(BAR()), 3, 2)
+    const raised = reduce(state, { type: 'magic-wand-tolerance-changed', tolerance: 100 })
+    expect(raised.selection!.count).toBe(3)
+    expect(click(raised, 3, 2).selection!.count).toBe(35)
+  })
+
+  it('the chosen selection mode decides what a plain click does', () => {
+    let state = click(open(BAR()), 3, 2)
+    state = reduce(state, { type: 'magic-wand-selection-mode-changed', selectionMode: 'add' })
+    state = editorReducer(state, magicWandClick(state, centreOf(state, 0, 0), clickSelectionMode(plain, state.magicWand.selectionMode)!)!)
+    expect(state.selection!.count).toBe(4)
+    state = reduce(state, { type: 'magic-wand-selection-mode-changed', selectionMode: 'subtract' })
+    state = editorReducer(state, magicWandClick(state, centreOf(state, 3, 2), clickSelectionMode(plain, state.magicWand.selectionMode)!)!)
+    expect(state.selection).toMatchObject({ count: 1, bounds: { x: 0, y: 0, width: 1, height: 1 } })
+    state = reduce(state, { type: 'magic-wand-selection-mode-changed', selectionMode: 'new' })
+    state = editorReducer(state, magicWandClick(state, centreOf(state, 3, 2), clickSelectionMode(plain, state.magicWand.selectionMode)!)!)
+    expect(state.selection).toMatchObject({ count: 3, bounds: { x: 2, y: 2, width: 3, height: 1 } })
+  })
+
+  it('Shift and Ctrl override the chosen mode for one click without changing it', () => {
+    let state = click(open(BAR()), 3, 2)
+    const pressClick = (current: EditorState, x: number, y: number, press: PointerPress) =>
+      editorReducer(current, magicWandClick(current, centreOf(current, x, y), clickSelectionMode(press, current.magicWand.selectionMode)!)!)
+
+    state = pressClick(state, 0, 0, { ...plain, shiftKey: true })
+    expect(state.selection!.count).toBe(4)
+    expect(state.magicWand.selectionMode).toBe('new')
+
+    state = pressClick(state, 0, 0, { ...plain, ctrlKey: true })
+    expect(state.selection!.count).toBe(3)
+    expect(state.magicWand.selectionMode).toBe('new')
+
+    // Ctrl wins over Shift.
+    state = pressClick(state, 3, 2, { ...plain, ctrlKey: true, shiftKey: true })
+    expect(state.selection).toBeNull()
+    expect(state.magicWand.selectionMode).toBe('new')
+
+    // With Subtract chosen, Shift still adds for one click.
+    state = reduce(state, { type: 'magic-wand-selection-mode-changed', selectionMode: 'subtract' })
+    state = pressClick(state, 3, 2, { ...plain, shiftKey: true })
+    expect(state.selection!.count).toBe(3)
+    expect(state.magicWand.selectionMode).toBe('subtract')
+    // And the next plain click subtracts again.
+    state = pressClick(state, 3, 2, plain)
+    expect(state.selection).toBeNull()
+  })
+
+  it('options persist when another image opens, which clears the selection', () => {
+    const state = reduce(
+      click(open(BAR()), 3, 2),
+      { type: 'magic-wand-selection-mode-changed', selectionMode: 'add' },
+      { type: 'magic-wand-flood-mode-changed', floodMode: 'global' },
+      { type: 'magic-wand-tolerance-changed', tolerance: 42 },
+    )
+    const replaced = open(WALLED(), state)
+    expect(replaced.selection).toBeNull()
+    expect(replaced.magicWand).toEqual({ selectionMode: 'add', floodMode: 'global', tolerance: 42 })
+    expect(availableSelectionActions(replaced)).toMatchObject({ clear: false, grow: false, shrink: false })
   })
 })

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import { AppHeader } from '../components/AppHeader/AppHeader'
 import { StatusBar } from '../components/StatusBar/StatusBar'
+import { ToolOptions } from '../components/Toolbar/ToolOptions'
 import { Toolbar } from '../components/Toolbar/Toolbar'
 import { Workspace } from '../components/Workspace/Workspace'
 import {
@@ -11,8 +12,15 @@ import {
   isImporting,
 } from '../editor/editorState'
 import type { PanGestureEffect } from '../editor/panGesture'
-import { type PointerPress, clickSelectionMode, magicWandClick } from '../editor/selectionCommands'
-import type { Point, ToolId } from '../editor/types'
+import {
+  type PointerPress,
+  type SelectionAction,
+  availableSelectionActions,
+  clickSelectionMode,
+  magicWandClick,
+  selectionActionCommand,
+} from '../editor/selectionCommands'
+import type { FloodMode, Point, SelectionMode, ToolId } from '../editor/types'
 import { createPointerPositionStore } from './pointerPosition'
 import { IMAGE_FILE_ACCEPT, useImageImport } from './useImageImport'
 import { useSelectionShortcuts } from './useSelectionShortcuts'
@@ -55,6 +63,25 @@ function App() {
   }, [])
 
   const selectTool = useCallback((tool: ToolId) => dispatch({ type: 'tool-selected', tool }), [])
+  // Magic Wand options apply to the next click; they never change the current selection.
+  const changeSelectionMode = useCallback(
+    (selectionMode: SelectionMode) => dispatch({ type: 'magic-wand-selection-mode-changed', selectionMode }),
+    [],
+  )
+  const changeFloodMode = useCallback(
+    (floodMode: FloodMode) => dispatch({ type: 'magic-wand-flood-mode-changed', floodMode }),
+    [],
+  )
+  const changeTolerance = useCallback(
+    (tolerance: number) => dispatch({ type: 'magic-wand-tolerance-changed', tolerance }),
+    [],
+  )
+  const runSelectionAction = useCallback((selectionAction: SelectionAction) => {
+    // Computed here, outside the reducer, from the latest committed state and tagged with
+    // the document version it used.
+    const action = selectionActionCommand(stateRef.current, selectionAction)
+    if (action) dispatch(action)
+  }, [])
   const pressImage = useCallback((point: Point, press: PointerPress) => {
     const current = stateRef.current
     const mode = clickSelectionMode(press, current.magicWand.selectionMode)
@@ -75,7 +102,18 @@ function App() {
   return (
     <div className="app">
       <AppHeader onOpenImage={openFilePicker} />
-      <Toolbar activeTool={state.activeTool} imageOpen={state.document !== null} onSelectTool={selectTool} />
+      <div className="app__toolbars">
+        <Toolbar activeTool={state.activeTool} imageOpen={state.document !== null} onSelectTool={selectTool} />
+        <ToolOptions
+          activeTool={state.activeTool}
+          settings={state.magicWand}
+          availableActions={availableSelectionActions(state)}
+          onSelectionModeChange={changeSelectionMode}
+          onFloodModeChange={changeFloodMode}
+          onToleranceChange={changeTolerance}
+          onSelectionAction={runSelectionAction}
+        />
+      </div>
       <Workspace
         document={state.document}
         documentBitmap={state.documentBitmap}

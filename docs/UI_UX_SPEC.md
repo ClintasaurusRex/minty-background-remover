@@ -165,6 +165,15 @@ Invert
 - Contiguous / Global is its own visible toggle.
 - Changing the tolerance re-applies the most recent Magic Wand operation when the slider is released or a typed value is committed.
 
+As implemented (Step 9):
+
+- The row appears below the primary toolbar whenever the Magic Wand is the active tool (so only with an image open), in this order: New / Add / Subtract, Contiguous / Global, Tolerance (slider and text field), then Select All, Clear, Invert, Grow and Shrink. Groups wrap as whole units on narrow windows; there is no horizontal scrolling.
+- New / Add / Subtract and Contiguous / Global are framed rows of toggle buttons. The chosen one is pressed (`aria-pressed`) with the same tinted background and border as the active tool. Shift + Click and Ctrl + Click override the chosen mode for that click only; the pressed button does not change.
+- Options apply to the next Magic Wand click. Changing them never changes the current selection, the image or the view. (Re-applying on a tolerance change is Step 10 and not implemented yet.)
+- The slider applies every movement. The text field applies a whole number from 0 to 100 as it is typed, so the slider follows; anything else waits until Enter or leaving the field, when a number is rounded and clamped to 0–100 and other text (including an empty field) restores the current value. Up / Down arrows step by 1 and Page Up / Page Down by 10 in the text field, as on the slider. Escape in the text field restores the tolerance from before editing started.
+- Select All, Clear, Invert, Grow and Shrink act at once. An action that would change nothing (Select All with everything selected; Clear, Grow or Shrink with nothing selected; Grow or Shrink with everything selected) is shown disabled with `aria-disabled`, which keeps keyboard focus on a button that becomes unavailable when pressed. Visible labels are short (Clear, Invert…) and accessible names full (Clear Selection, Invert Selection…); tooltips name the Ctrl + A and Esc shortcuts.
+- Ctrl + A and Escape keep working while the tolerance slider has focus; only the text field keeps their text-editing meaning.
+
 The interface should not expose unnecessary technical terminology.
 
 ---

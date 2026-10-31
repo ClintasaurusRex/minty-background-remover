@@ -1,0 +1,101 @@
+/* The contextual tool options row, below the primary toolbar. */
+.tool-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  /* Groups wrap as whole units on narrow windows; the column gap separates them. */
+  gap: var(--space-2) var(--space-5);
+  padding: var(--space-1) var(--space-4);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-sm);
+}
+
+.tool-options__group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.tool-options__label {
+  color: var(--color-text-muted);
+}
+
+/* Mutually exclusive choices: a framed row of toggle buttons. */
+.tool-options__segmented {
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+}
+
+.tool-options__choice {
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.tool-options__choice:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+/* The chosen option: tinted background plus border, as for the active tool, so state is not colour-only. */
+.tool-options__choice[aria-pressed='true'] {
+  background: var(--color-accent-subtle);
+  border-color: var(--color-accent-border);
+  color: var(--color-accent);
+}
+
+.tool-options__tolerance {
+  gap: var(--space-2);
+}
+
+.tool-options__slider {
+  width: 140px;
+  margin: 0;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.tool-options__number {
+  width: 3.5em;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.tool-options__number:hover {
+  border-color: var(--color-border-strong);
+}
+
+.tool-options__action {
+  height: 28px;
+  font-size: var(--font-size-sm);
+}
+
+/* Unavailable actions stay focusable (aria-disabled) but look like disabled buttons. */
+.button.tool-options__action[aria-disabled='true'],
+.button.tool-options__action[aria-disabled='true']:hover {
+  cursor: not-allowed;
+  color: var(--color-text-disabled);
+  background: transparent;
+  border-color: var(--color-border);
+}

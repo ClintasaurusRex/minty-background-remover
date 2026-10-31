@@ -1,6 +1,7 @@
 import { pixelUnderPointer } from '../canvas/coordinates'
 import { createMagicWandSelection } from '../image/selection/magicWand'
-import { combineSelections, selectAll } from '../image/selection/selectionOperations'
+import { growSelection, shrinkSelection } from '../image/selection/growShrink'
+import { combineSelections, invertSelection, selectAll } from '../image/selection/selectionOperations'
 import { isEditableTarget } from '../utils/domTargets'
 import { type EditorAction, type EditorState, displayViewport, documentVersion } from './editorState'
 import type { Point, SelectionMode } from './types'
@@ -66,18 +67,64 @@ export function magicWandClick(state: EditorState, point: Point, mode: Selection
   return { type: 'selection-applied', version, selection: combineSelections(state.selection, found, mode) }
 }
 
-/** Select All, or null without an image or when everything is already selected. */
-export function selectAllCommand(state: EditorState): EditorAction | null {
+/** The selection actions offered as buttons (Select All and Clear also have shortcuts). */
+export type SelectionAction = 'select-all' | 'clear' | 'invert' | 'grow' | 'shrink'
+
+/**
+ * Which selection actions would change anything. Constant time (it reads only the
+ * selection's count, never its pixels), so the toolbar can check it on every render.
+ *
+ * - Select All: an image is open and not everything is selected.
+ * - Clear: something is selected.
+ * - Invert: an image is open (no selection inverts to everything, everything to nothing).
+ * - Grow and Shrink: something, but not everything, is selected. Growing a full selection
+ *   changes nothing, and neither does shrinking it, as the area outside the image counts
+ *   as selected.
+ */
+export function availableSelectionActions(state: EditorState): Readonly<Record<SelectionAction, boolean>> {
+  const { document, selection } = state
+  const full = document !== null && selection !== null && selection.count === document.width * document.height
+  const partial = document !== null && selection !== null && !full
+  return {
+    'select-all': document !== null && !full,
+    clear: document !== null && selection !== null,
+    invert: document !== null,
+    grow: partial,
+    shrink: partial,
+  }
+}
+
+/**
+ * The editor action for a selection action, computed from `state`, or null when the
+ * action is unavailable (see availableSelectionActions). The new mask is computed here,
+ * outside the reducer, by the selection operations, which never modify the current mask.
+ */
+export function selectionActionCommand(state: EditorState, action: SelectionAction): EditorAction | null {
   const { document, selection } = state
   const version = documentVersion(state)
-  if (!document || !version) return null
-  if (selection && selection.count === document.width * document.height) return null
-  return { type: 'selection-applied', version, selection: selectAll(document.width, document.height) }
+  if (!document || !version || !availableSelectionActions(state)[action]) return null
+  switch (action) {
+    case 'clear':
+      return { type: 'selection-cleared' }
+    case 'select-all':
+      return { type: 'selection-applied', version, selection: selectAll(document.width, document.height) }
+    case 'invert':
+      return { type: 'selection-applied', version, selection: invertSelection(selection, document.width, document.height) }
+    case 'grow':
+      return { type: 'selection-applied', version, selection: growSelection(selection) }
+    case 'shrink':
+      return { type: 'selection-applied', version, selection: shrinkSelection(selection) }
+  }
+}
+
+/** Select All, or null without an image or when everything is already selected. */
+export function selectAllCommand(state: EditorState): EditorAction | null {
+  return selectionActionCommand(state, 'select-all')
 }
 
 /** Clear Selection, or null when nothing is selected. */
 export function clearSelectionCommand(state: EditorState): EditorAction | null {
-  return state.selection ? { type: 'selection-cleared' } : null
+  return selectionActionCommand(state, 'clear')
 }
 
 /** The parts of a KeyboardEvent read by selectionShortcut, so tests can provide plain objects. */

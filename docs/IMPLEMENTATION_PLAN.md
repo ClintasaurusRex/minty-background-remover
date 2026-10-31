@@ -168,8 +168,8 @@ Phase 2 is implemented in twelve reviewed steps, each stopping for review:
 5. Grow and Shrink. Done.
 6. Editor state for the active tool, Magic Wand options and selection. Done.
 7. Magic Wand click, Ctrl + A / Esc and status bar (first manual checkpoint). Done.
-8. Selection overlay. (Implemented; awaiting review.)
-9. Magic Wand options row.
+8. Selection overlay. Done.
+9. Magic Wand options row. (Implemented; awaiting review.)
 10. Re-apply on tolerance change.
 11. Marching ants (optional).
 12. Browser performance measurement, hardening and docs.

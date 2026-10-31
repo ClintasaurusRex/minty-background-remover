@@ -2,8 +2,8 @@ import { snapToDevicePixels } from '../canvas/devicePixels'
 import { keepImageReachable, limitPan } from '../canvas/pan'
 import { clampZoom, fitViewport, nextZoomStep, panBy, resizeViewport, zoomAt } from '../canvas/viewport'
 import type { ImportError } from '../image/import/errors'
-import { MAX_TOLERANCE } from '../image/selection/colourDistance'
 import type { MagicWandOptions } from '../image/selection/magicWand'
+import { clampTolerance } from './toleranceInput'
 import { TOOLS } from './tools'
 import type {
   FloodMode,
@@ -270,8 +270,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'magic-wand-tolerance-changed': {
       if (!Number.isFinite(action.tolerance)) return state
-      const tolerance = Math.min(MAX_TOLERANCE, Math.max(0, Math.round(action.tolerance)))
-      return withMagicWand(state, { tolerance })
+      return withMagicWand(state, { tolerance: clampTolerance(action.tolerance) })
     }
 
     case 'magic-wand-flood-mode-changed':

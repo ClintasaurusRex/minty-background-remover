@@ -141,9 +141,13 @@ Key rules:
 src/
 ├── editor/types.ts        SelectionMask (empty selection = null), FloodMode, SelectionMode
 ├── editor/editorState.ts  active tool, Magic Wand settings and the current selection
-├── editor/selectionCommands.ts  click modifier policy, Magic Wand click, Select All / Clear,
+├── editor/selectionCommands.ts  click modifier policy, Magic Wand click, selection actions
+│                          (Select All, Clear, Invert, Grow, Shrink) and their availability,
 │                          Ctrl + A / Esc recognition (pure; pixel work outside the reducer)
 ├── app/useSelectionShortcuts.ts, app/pointerPosition.ts (pointer readout store)
+├── editor/toleranceInput.ts     typed tolerance: exact (applied while typing), committed (rounded,
+│                          clamped), keyboard steps; the clamp the reducer also uses
+├── components/Toolbar/ToolOptions.tsx, MagicWandOptions.tsx  contextual second toolbar row
 ├── canvas/selectionOverlay.ts  overlay tile plans and rasterising (pure; typed arrays only)
 ├── canvas/selectionOverlayRenderer.ts  the only overlay drawing code (tile cache, canvas)
 ├── components/Workspace/SelectionOverlayCanvas.tsx  the overlay canvas over the image canvas
