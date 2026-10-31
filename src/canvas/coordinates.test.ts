@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest'
 import type { Point, Size, ViewportState } from '../editor/types'
 import {
   clientToViewport,
+  imageIndexAtDevicePixel,
   imageRectInViewport,
+  imageSpanAtDevicePixel,
   imageToViewport,
+  pixelUnderPointer,
   viewportToImage,
   viewportToPixel,
 } from './coordinates'
+import { snapToDevicePixels } from './devicePixels'
 
 const ZOOMS = [0.01, 0.1, 0.25, 0.5, 1, 1.5, 3.7, 32]
 const OFFSETS: Point[] = [
@@ -178,6 +182,116 @@ describe('viewportToPixel', () => {
     expect(viewportToPixel(vp, { x: 10, y: 10 }, one)).toEqual({ x: 0, y: 0 })
     expect(viewportToPixel(vp, { x: 10.999, y: 10.999 }, one)).toEqual({ x: 0, y: 0 })
     expect(viewportToPixel(vp, { x: 11, y: 10 }, one)).toBeNull()
+  })
+})
+
+describe('pixelUnderPointer', () => {
+  const size: Size = { width: 10, height: 10 }
+
+  it('hit-tests the centre of the pointer\'s device pixel', () => {
+    // Pixel edge at x = 4.37 lies inside device pixel 4 (ratio 1), which shows pixel 1.
+    const view = viewport(4.37, { x: 0, y: 0 })
+    expect(viewportToPixel(view, { x: 4, y: 0 }, size)).toEqual({ x: 0, y: 0 })
+    expect(pixelUnderPointer(view, { x: 4, y: 0 }, size, 1)).toEqual({ x: 1, y: 0 })
+    expect(pixelUnderPointer(view, { x: 4.9, y: 0 }, size, 1)).toEqual({ x: 1, y: 0 })
+    expect(pixelUnderPointer(view, { x: 3.9, y: 0 }, size, 1)).toEqual({ x: 0, y: 0 })
+    // At ratio 2 the same CSS position is in device pixel 8, centred at CSS 4.25: pixel 0.
+    expect(pixelUnderPointer(view, { x: 4, y: 0 }, size, 2)).toEqual({ x: 0, y: 0 })
+  })
+
+  it('gives an edge through a device pixel centre to the left or upper pixel, as the canvas draws it', () => {
+    // Zoom 1.5, ratio 1: device pixel 1 is centred at 1.5, exactly on the edge between
+    // image pixels 0 and 1. Chrome and Firefox fill it with pixel 0.
+    const view = viewport(1.5, { x: 0, y: 0 })
+    expect(pixelUnderPointer(view, { x: 1.2, y: 1.2 }, size, 1)).toEqual({ x: 0, y: 0 })
+    expect(pixelUnderPointer(view, { x: 2, y: 2 }, size, 1)).toEqual({ x: 1, y: 1 })
+    // Zoom 1, ratio 1.25 (125% display scaling): device pixel 2 is centred at CSS 2.0.
+    expect(pixelUnderPointer(viewport(1, { x: 0, y: 0 }), { x: 1.7, y: 0 }, size, 1.25)).toEqual({ x: 1, y: 0 })
+    // With a snapped fractional offset, where floating-point error lands either side of the edge.
+    const offset = viewport(2.5, { x: 444.8, y: 146.4 })
+    for (let device = 556; device < 600; device++) {
+      const centre = (device + 0.5) / 1.25
+      const exact = (device + 0.5 - 556) / (2.5 * 1.25)
+      const expected = Number.isInteger(exact) ? exact - 1 : Math.floor(exact)
+      expect(pixelUnderPointer(offset, { x: centre, y: 150 }, { width: 100, height: 100 }, 1.25)?.x).toBe(expected)
+    }
+  })
+
+  it('agrees with viewportToPixel wherever no edge passes through a device pixel centre', () => {
+    const view = viewport(3, { x: 6, y: 9 })
+    for (let x = 0; x < 50; x += 0.5) {
+      expect(pixelUnderPointer(view, { x, y: x }, size, 2)).toEqual(viewportToPixel(view, { x, y: x }, size))
+    }
+  })
+
+  it('returns null outside the image', () => {
+    const view = viewport(2, { x: 10, y: 10 })
+    expect(pixelUnderPointer(view, { x: 9.9, y: 15 }, size, 1)).toBeNull()
+    expect(pixelUnderPointer(view, { x: 30, y: 15 }, size, 1)).toBeNull()
+    expect(pixelUnderPointer(view, { x: Number.NaN, y: 15 }, size, 1)).toBeNull()
+    expect(pixelUnderPointer(view, { x: 29.9, y: 29.9 }, size, 1)).toEqual({ x: 9, y: 9 })
+    expect(pixelUnderPointer(view, { x: 10, y: 10 }, size, 1)).toEqual({ x: 0, y: 0 })
+  })
+})
+
+describe('imageIndexAtDevicePixel', () => {
+  it('gives the pixel at the device pixel centre, an edge through the centre going left or up', () => {
+    // 150%: device pixel 1 is centred at image x = 1, exactly on the edge between pixels 0 and 1.
+    expect([0, 1, 2, 3].map((device) => imageIndexAtDevicePixel(device, 1.5))).toEqual([0, 0, 1, 2])
+    expect([0, 1, 2].map((device) => imageIndexAtDevicePixel(device, 1))).toEqual([0, 1, 2])
+    expect(imageIndexAtDevicePixel(-1, 4)).toBe(-1)
+    expect(imageIndexAtDevicePixel(31, 32)).toBe(0)
+    expect(imageIndexAtDevicePixel(32, 32)).toBe(1)
+  })
+
+  it('agrees with pixelUnderPointer for every device pixel, at any snapped zoom, offset and ratio', () => {
+    const size: Size = { width: 40, height: 30 }
+    for (const ratio of [1, 1.25, 1.5, 2, 2.5]) {
+      for (const zoom of [1, 1.5, 2.5, 3, 4.37, 8, 32, 1 / ratio]) {
+        if (zoom * ratio < 1) continue
+        const view = snapToDevicePixels({ zoom, offset: { x: 13.37, y: -7.9 } }, ratio)
+        const origin = Math.round(view.offset.x * ratio)
+        for (let device = 0; device < 400; device++) {
+          const expected = pixelUnderPointer(view, { x: (device + 0.5) / ratio, y: 1 }, { width: 1e6, height: 1e6 }, ratio)
+          const index = imageIndexAtDevicePixel(device - origin, zoom * ratio)
+          expect(index >= 0 ? index : null).toBe(expected ? expected.x : null)
+        }
+        // Rows use the same rule.
+        const top = Math.round(view.offset.y * ratio)
+        for (let device = 0; device < 100; device++) {
+          const expected = pixelUnderPointer(view, { x: view.offset.x + 0.5 * zoom, y: (device + 0.5) / ratio }, size, ratio)
+          const index = imageIndexAtDevicePixel(device - top, zoom * ratio)
+          expect(index >= 0 && index < size.height ? index : null).toBe(expected ? expected.y : null)
+        }
+      }
+    }
+  })
+})
+
+describe('imageSpanAtDevicePixel', () => {
+  it('lists the image pixels a device pixel overlaps when zoomed out', () => {
+    // 50%: each device pixel covers exactly two image pixels.
+    expect(imageSpanAtDevicePixel(0, 0.5)).toEqual({ first: 0, last: 1 })
+    expect(imageSpanAtDevicePixel(3, 0.5)).toEqual({ first: 6, last: 7 })
+    // 40%: device pixel 1 covers image x 2.5 to 5, so pixels 2, 3 and 4.
+    expect(imageSpanAtDevicePixel(1, 0.4)).toEqual({ first: 2, last: 4 })
+    expect(imageSpanAtDevicePixel(-1, 0.5)).toEqual({ first: -2, last: -1 })
+  })
+
+  it('covers every image pixel, sharing only pixels that straddle a device pixel edge', () => {
+    for (const scale of [0.9, 0.5, 0.37, 0.1, 1 / 3, 0.0625]) {
+      let previous = imageSpanAtDevicePixel(0, scale)
+      expect(previous.first).toBe(0)
+      for (let device = 1; device < 200; device++) {
+        const span = imageSpanAtDevicePixel(device, scale)
+        expect(span.first).toBeLessThanOrEqual(span.last)
+        // No gap; an overlap only when the boundary falls inside an image pixel.
+        const edge = device / scale
+        const straddles = Math.abs(edge - Math.round(edge)) > 1e-6
+        expect(span.first).toBe(straddles ? previous.last : previous.last + 1)
+        previous = span
+      }
+    }
   })
 })
 

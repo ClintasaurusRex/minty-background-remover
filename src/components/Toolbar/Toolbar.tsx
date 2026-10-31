@@ -1,8 +1,17 @@
 import { TOOLS } from '../../editor/tools'
+import type { ToolId } from '../../editor/types'
 import { ToolIcon } from '../icons/icons'
 import './Toolbar.css'
 
-export function Toolbar() {
+interface ToolbarProps {
+  /** The active tool, shown pressed. */
+  activeTool: ToolId | null
+  /** Tools work on the open image, so they are disabled until one is open. */
+  imageOpen: boolean
+  onSelectTool: (tool: ToolId) => void
+}
+
+export function Toolbar({ activeTool, imageOpen, onSelectTool }: ToolbarProps) {
   const hasUnavailableTools = TOOLS.some((tool) => !tool.available)
 
   return (
@@ -13,8 +22,10 @@ export function Toolbar() {
             key={tool.id}
             type="button"
             className="toolbar__tool"
-            disabled={!tool.available}
-            title={tool.available ? tool.description : `${tool.label} — coming soon`}
+            disabled={!tool.available || !imageOpen}
+            aria-pressed={tool.available ? tool.id === activeTool : undefined}
+            title={toolTitle(tool.label, tool.description, tool.available, imageOpen)}
+            onClick={() => onSelectTool(tool.id)}
           >
             <ToolIcon toolId={tool.id} />
             <span>{tool.label}</span>
@@ -22,9 +33,12 @@ export function Toolbar() {
         ))}
       </div>
 
-      {hasUnavailableTools && (
-        <p className="toolbar__note">Editing tools are coming in upcoming releases.</p>
-      )}
+      {hasUnavailableTools && <p className="toolbar__note">More tools are coming in upcoming releases.</p>}
     </div>
   )
+}
+
+function toolTitle(label: string, description: string, available: boolean, imageOpen: boolean): string {
+  if (!available) return `${label} — coming soon`
+  return imageOpen ? description : `${description} — open an image first`
 }

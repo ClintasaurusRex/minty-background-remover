@@ -1,19 +1,24 @@
-import { useRef } from 'react'
+import { useCallback, useRef } from 'react'
+import { clientToViewport } from '../../canvas/coordinates'
 import type { ImportNotice, WorkspaceMetrics } from '../../editor/editorState'
 import type { PanGestureEffect } from '../../editor/panGesture'
-import type { ImageDocument, Point, ViewportState } from '../../editor/types'
+import type { PointerPress } from '../../editor/selectionCommands'
+import type { ImageDocument, Point, SelectionMask, ViewportState } from '../../editor/types'
 import type { ImportError } from '../../image/import/errors'
 import { OpenIcon } from '../icons/icons'
 import { EmptyState } from './EmptyState'
 import { ImageCanvas } from './ImageCanvas'
 import { ImportErrorMessage } from './ImportErrorMessage'
 import { ImportNoticeMessage } from './ImportNoticeMessage'
-import { useFileDrop, useSpacePan, useWheelInput } from './workspaceInput'
+import { SelectionOverlayCanvas } from './SelectionOverlayCanvas'
+import { useFileDrop, usePointerPosition, useSpacePan, useWheelInput } from './workspaceInput'
 import './Workspace.css'
 
 interface WorkspaceProps {
   document: ImageDocument | null
   documentBitmap: ImageBitmap | null
+  /** The open document's selection, shown over the image. */
+  selection: SelectionMask | null
   viewport: ViewportState | null
   workspace: WorkspaceMetrics | null
   importing: boolean
@@ -30,11 +35,21 @@ interface WorkspaceProps {
   onWheelPan: (delta: Point) => void
   /** Space + drag panning. */
   onPanGesture: (effect: PanGestureEffect) => void
+  /** Show the Magic Wand pointer over the image. */
+  magicWandActive: boolean
+  /**
+   * A pointer press on the image canvas (any button) that panning did not take.
+   * `point` is in canvas CSS px.
+   */
+  onImagePress: (point: Point, press: PointerPress) => void
+  /** The pointer's position over the canvas (canvas CSS px), or null when it is not over it. */
+  onPointerPosition: (point: Point | null) => void
 }
 
 export function Workspace({
   document,
   documentBitmap,
+  selection,
   viewport,
   workspace,
   importing,
@@ -48,18 +63,32 @@ export function Workspace({
   onWheelZoom,
   onWheelPan,
   onPanGesture,
+  magicWandActive,
+  onImagePress,
+  onPointerPosition,
 }: WorkspaceProps) {
   const workspaceRef = useRef<HTMLElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const imageShown = viewport !== null
   useWheelInput(workspaceRef, canvasRef, imageShown, { onWheelZoom, onWheelPan })
-  const pan = useSpacePan(workspaceRef, imageShown, onPanGesture)
+  // Only presses on the canvas itself count: not on messages or other content above it.
+  const handleToolPress = useCallback(
+    (event: PointerEvent) => {
+      const canvas = canvasRef.current
+      if (!canvas || event.target !== canvas) return
+      onImagePress(clientToViewport({ x: event.clientX, y: event.clientY }, canvas.getBoundingClientRect()), event)
+    },
+    [onImagePress],
+  )
+  const pan = useSpacePan(workspaceRef, imageShown, onPanGesture, handleToolPress)
+  usePointerPosition(workspaceRef, canvasRef, imageShown, onPointerPosition)
   const dropActive = useFileDrop(workspaceRef, onDropFiles)
 
   const className = [
     'workspace',
     pan.ready && !pan.dragging && 'workspace--pan-ready',
     pan.dragging && 'workspace--panning',
+    imageShown && magicWandActive && !pan.ready && !pan.dragging && 'workspace--magic-wand',
     dropActive && 'workspace--drop-target',
   ]
     .filter(Boolean)
@@ -83,6 +112,7 @@ export function Workspace({
         workspace={workspace}
         onResize={onResize}
       />
+      <SelectionOverlayCanvas selection={selection} viewport={viewport} workspace={workspace} />
 
       {!document && <EmptyState onOpenImage={onOpenImage} />}
 

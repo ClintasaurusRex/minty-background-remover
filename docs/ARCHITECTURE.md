@@ -131,6 +131,7 @@ Key rules:
 
 - Viewport maths is in CSS pixels; the device pixel ratio is applied only at the rendering boundary.
 - Rendering and pointer hit-testing both use `displayViewport()` (the stored viewport snapped to device pixels), so they always agree.
+- Pointer hit-testing (`pixelUnderPointer`) finds the device pixel the pointer is in and tests its centre, where the canvas samples the image. Mouse positions lie on device pixel edges, so a 0.01 device pixel tolerance absorbs browser rounding of DOM coordinates. An image pixel edge passing exactly through a device pixel centre is given to the left / upper pixel, as Firefox and Chrome usually draw it.
 - Every import goes through `importImage` and the import runner. The newest action that has image data wins, and a failed import never replaces the open image.
 - Interaction logic (pan gesture, drop target, import ordering) is written as pure functions with Node tests; React hooks only connect them to DOM events.
 
@@ -139,6 +140,13 @@ Key rules:
 ```text
 src/
 ├── editor/types.ts        SelectionMask (empty selection = null), FloodMode, SelectionMode
+├── editor/editorState.ts  active tool, Magic Wand settings and the current selection
+├── editor/selectionCommands.ts  click modifier policy, Magic Wand click, Select All / Clear,
+│                          Ctrl + A / Esc recognition (pure; pixel work outside the reducer)
+├── app/useSelectionShortcuts.ts, app/pointerPosition.ts (pointer readout store)
+├── canvas/selectionOverlay.ts  overlay tile plans and rasterising (pure; typed arrays only)
+├── canvas/selectionOverlayRenderer.ts  the only overlay drawing code (tile cache, canvas)
+├── components/Workspace/SelectionOverlayCanvas.tsx  the overlay canvas over the image canvas
 └── image/selection/       selectionMask (builder: validates, counts, bounds),
                            colourDistance (alpha-aware distance, tolerance threshold),
                            magicWand (Contiguous scanline fill, Global pass),
@@ -151,7 +159,16 @@ Later Phase 2 steps add colour distance, the Magic Wand, combine / invert / grow
 
 - Selection algorithms are pure functions over plain width / height / data inputs, independent of React, the DOM and Canvas.
 - Masks are immutable; the editor state holds one reference to the current mask.
+- Selections are computed outside the reducer and applied with `selection-applied`, tagged with the document version (`documentVersion()`: document id and revision) they were computed from. The reducer discards a result for any other version, or one whose size differs from the document's, so a late result can never land on a different image.
+- A successful import clears the selection and activates the Magic Wand; a failed, rejected or superseded import changes neither. Magic Wand settings last for the session. Zoom, pan and workspace resizing never touch the selection.
+- Magic Wand clicks are computed synchronously in the pointer-down handler from the latest committed state, then dispatched. Panning takes priority: `useSpacePan` passes a press to the tool only when Space is not held and no drag is in progress. Only presses directly on the canvas count.
+- The pointer position for the status bar lives in a small external store read with `useSyncExternalStore`, so pointer movement re-renders only the readout, never the image canvas.
 - The selection overlay is a separate canvas layer aligned with the image renderer, using the same transform. `workspaceRenderer` remains the only image drawing code; the overlay gets its own renderer.
+- The overlay canvas has the image canvas's size and backing store and is planned from the same display viewport, so the image's top-left corner falls on the same device pixel in both. It never reads or writes image pixels, and with `pointer-events: none` every pointer, wheel and drop event still reaches the image canvas.
+- Which image pixel a device pixel shows is decided by `imageIndexAtDevicePixel` (`canvas/coordinates.ts`), the same rule as `pixelUnderPointer`; tests check that the two agree at every device pixel, so the overlay marks exactly the pixels a click would pick. Below 100% (in device pixels) a device pixel shows the selection when any image pixel it covers is selected (`imageSpanAtDevicePixel`).
+- The overlay is rasterised in plain typed arrays at device-pixel resolution, only where it can be seen, in 256 × 256 device-pixel tiles counted from the image's top-left corner. No full-resolution RGBA overlay is ever allocated, and tiles away from the selection's bounds are never created. Tiles are kept while the selection, zoom and device pixel ratio stay the same, so panning only rasterises tiles coming into view; tiles more than one tile out of view are released. With no selection the overlay canvas has no backing store.
+- Drawing a frame is one `drawImage` per visible tile, whatever the selection's shape. The boundary is found per device pixel with states packed 32 to a word, so its cost does not depend on how many edges the selection has.
+- Planning and rasterising run in the overlay's layout effect, after the image is drawn in the same commit, never during React rendering.
 
 ---
 

@@ -88,8 +88,9 @@ export interface SelectionMask {
  * How the image is presented in the workspace. Purely presentational: changing it never
  * touches image pixels or dimensions.
  *
- * Everything is in CSS pixels. Device pixel ratio is applied only when drawing
- * (see canvas/devicePixels.ts), so pointer hit-testing never depends on it.
+ * Everything is in CSS pixels. Device pixel ratio is applied when drawing (see
+ * canvas/devicePixels.ts) and, for pointer hit-testing, only to find the device pixel
+ * the pointer is in (pixelUnderPointer in canvas/coordinates.ts).
  */
 export interface ViewportState {
   /** CSS pixels per image pixel. 1 = 100%. */

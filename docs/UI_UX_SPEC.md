@@ -75,6 +75,8 @@ Flip
 
 Tool names should remain visible rather than relying exclusively on icons.
 
+Tools work on the open image, so available tools are disabled until an image is open. Tools that are not available yet stay disabled with a "coming soon" tooltip. The active tool is shown pressed (`aria-pressed`), with a tinted background and border so the state is not colour-only. In Phase 2 the Magic Wand is the only available tool; while it is active over an image, the pointer is a crosshair.
+
 ---
 
 ## Responsive Behaviour
@@ -183,6 +185,13 @@ Selection visuals should remain understandable when zoomed in.
 
 Reduced-motion users must still have a clear non-animated selection indicator.
 
+As implemented (Step 8):
+
+- Tint: the mint accent (`#6ee7b7`) at 35% opacity over every selected pixel.
+- Boundary: wherever selected and unselected pixels meet, including the image edge, a static black-and-white line about one CSS pixel wide on each side of the edge. Its colours follow a checkerboard of four-CSS-pixel squares anchored to the image: within a square the two sides of the edge take opposite colours, and the colours swap from square to square. Both colours therefore run along every edge, on both sides, so the boundary shows on white, black, transparent and detailed images. It is never animated (optional marching ants are Step 11).
+- At 100% zoom and above, the tint and boundary follow exactly the image pixels as drawn, and the pixels a click would pick. Zoomed out, where one screen pixel covers several image pixels, a screen pixel shows the selection when any pixel it covers is selected, so even a single selected pixel stays visible.
+- The overlay lets every pointer event through to the image, and is hidden from assistive technology; the status bar describes the selection in words.
+
 ---
 
 ## Status Bar
@@ -190,10 +199,13 @@ Reduced-motion users must still have a clear non-animated selection indicator.
 The status bar stays compact and responsive. It shows:
 
 - Image information and zoom
-- The image pixel under the pointer
-- Selection information, including its bounding dimensions
+- The active tool
+- Selection information: the number of selected pixels and the width × height of the area containing them (for example `Selection: 31,428 px · 200 × 200`), or `No selection`
+- The image pixel under the pointer, as `x, y`
 
-Selection state is therefore never communicated by colour or motion alone.
+Selection state is therefore never communicated by colour or motion alone. Selection changes are announced to assistive technology in words; the pointer readout is not announced.
+
+On narrower windows the selection and pointer readouts keep priority: the image format and file size are hidden below 1200 px wide, and the active tool (already shown in the toolbar) below 900 px.
 
 ---
 

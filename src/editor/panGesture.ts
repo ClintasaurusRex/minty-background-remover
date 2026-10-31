@@ -78,3 +78,12 @@ export function updatePanGesture(gesture: PanGesture, event: PanGestureEvent): P
       }
   }
 }
+
+/**
+ * Whether a pointer press belongs to panning: Space is held or a drag is already in
+ * progress. Panning takes priority, so such a press never reaches the active tool.
+ * Check it before applying the press, which may itself start the drag.
+ */
+export function panOwnsPointerDown(gesture: PanGesture): boolean {
+  return gesture.spaceHeld || gesture.drag !== null
+}

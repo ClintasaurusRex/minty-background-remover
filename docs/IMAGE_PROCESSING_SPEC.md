@@ -242,7 +242,39 @@ Magic Wand measurements at Step 3 (whole calls including the mask, production bu
 - 4K, whole-image selection on a noisy, photo-like background: about 45–90 ms.
 - 50 megapixels: about 100–300 ms on flat backgrounds; 250–520 ms for whole-image selections on noisy backgrounds; up to about 0.9 s on synthetic worst cases (random noise, one-pixel mazes).
 
+Step 7 browser measurements (whole pointer-down handling: Magic Wand, combine and React commit, excluding paint; production build, headless Chrome 156 and Firefox 158, device pixel ratios 1–1.5):
+
+- 4K screenshot-like image (3840 × 2400): typically 2–7 ms in Chrome and 7–16 ms in Firefox; about 20–40 ms when the click selects most of the image (7 million pixels).
+- 4K noisy image where one click selects all 8.3 million pixels: about 55–70 ms in both browsers.
+- Each mask is one byte per pixel (8.3 MB at 4K). A New click replaces the selection with the Magic Wand result; Add and Subtract briefly hold that result and the combined mask alongside the current selection.
+
 Near the 50-megapixel limit the main thread can block noticeably. How to respond (time-slicing on the main thread or a Web Worker) is an open owner decision, to be made with real images at the Step 7 checkpoint.
+
+### Selection Overlay
+
+The overlay (Step 8; see `ARCHITECTURE.md`, Phase 2 Modules) reads only the selection mask, never writes it, and never touches image pixels.
+
+Memory follows the screen, not the image:
+
+- The overlay canvas has the workspace's backing store while something is selected (8 MB at 1920 × 1080 device pixels, 33 MB at 3840 × 2160) and none otherwise.
+- Tiles of at most 256 × 256 device pixels (256 KB) are created only where the selection's bounds are visible, and kept only within one tile of the view: at most about 20 MB at 1920 × 1080 and 55 MB at 3840 × 2160, usually much less.
+- Zoomed out, a copy of the mask packed one bit per pixel (one eighth of the mask, 6.25 MB at 50 megapixels) is built once per selection and freed with it.
+- No full-resolution RGBA overlay is ever allocated.
+
+Complexity budget: a frame is one `clearRect` and one `drawImage` per visible tile (about 40 tiles at 1920 × 1080, 140 at 3840 × 2160), whatever the selection's shape. Boundaries are found with bit operations, 32 device pixels at a time, so a million holes or a random-noise selection never becomes a million drawing operations; their cost is bounded by the visible area. Areas entirely inside or outside the selection are filled without per-pixel work. Panning reuses tiles; a selection, zoom or display-scaling change rasterises the visible tiles again.
+
+Step 8 measurements (production builds, headless Chrome 156 and Firefox 158, i7-14700HX). Overlay drawing alone, 1920 × 1080 CSS workspace at device pixel ratio 1:
+
+- 4K screenshot-like background selection: about 9–25 ms after a selection change, 6–17 ms per zoom step, under 0.2 ms (Chrome) or about 3 ms (Firefox) per pan frame.
+- Pathological 4K selections (50% random noise): 15–37 ms per full redraw.
+- 50 megapixels, fitted: 37–45 ms after a large selection change (including the packed copy), 14–18 ms per zoom step; 53–70 ms and 43–60 ms for a million scattered pixels. A single selected pixel: under 4 ms.
+- At device pixel ratio 2 (3840 × 2160 device pixels) costs are about 2–3 times higher: 10–64 ms for a 4K screenshot-like selection, up to about 180 ms for the 50-megapixel scattered-pixel worst case.
+
+Added to whole interactions (pointer-down or button click including the React commit, median, compared with the same build without the overlay, device pixel ratio 1):
+
+- Magic Wand click on a 4K screenshot: +2 ms (Chrome) and +3 ms (Firefox); a click selecting all 8.3 million pixels of a 4K image: +12 to +14 ms.
+- 50-megapixel clicks, which already take 210–430 ms: +19 to +47 ms.
+- Zoom In / Out, Fit and 100% with a selection: 15–42 ms instead of under 13 ms.
 
 ---
 

@@ -4,6 +4,7 @@ import { imageToViewport, viewportToImage, viewportToPixel } from './coordinates
 import {
   type CanvasTransform,
   backingStoreSize,
+  devicePixelCentre,
   deviceTransform,
   snapToDevicePixels,
 } from './devicePixels'
@@ -155,5 +156,32 @@ describe('snapToDevicePixels', () => {
       x: 12.5,
       y: -7.5,
     })
+  })
+})
+
+describe('devicePixelCentre', () => {
+  it('moves any point inside a device pixel to that device pixel\'s centre', () => {
+    expect(devicePixelCentre({ x: 4, y: 7.9 }, 1)).toEqual({ x: 4.5, y: 7.5 })
+    expect(devicePixelCentre({ x: 4.5, y: 0 }, 2)).toEqual({ x: 4.75, y: 0.25 })
+    expect(devicePixelCentre({ x: -0.1, y: 0 }, 1)).toEqual({ x: -0.5, y: 0.5 })
+  })
+
+  it('places a position rounded to just before a device pixel edge in the next device pixel', () => {
+    // Device row 189 at ratio 1.25 starts at CSS 151.2; DOM rounding can report 151.19999.
+    expect(devicePixelCentre({ x: 0, y: 151.19999 }, 1.25).y * 1.25).toBeCloseTo(189.5, 9)
+    // 101.333… at ratio 1.5, as an element position, is device pixel 152.
+    expect(devicePixelCentre({ x: 101.33333, y: 0 }, 1.5).x * 1.5).toBeCloseTo(152.5, 9)
+    // Anything further from the edge stays where it is.
+    expect(devicePixelCentre({ x: 151.19, y: 0 }, 1.25).x * 1.25).toBeCloseTo(188.5, 9)
+  })
+
+  it('keeps the point inside the same device pixel at every ratio', () => {
+    for (const ratio of RATIOS) {
+      for (const x of [0, 0.3, 1, 17.77, 401.6, 999.9]) {
+        const centre = devicePixelCentre({ x, y: x }, ratio)
+        expect(Math.floor(centre.x * ratio)).toBe(Math.floor(x * ratio))
+        expect(centre.x * ratio - Math.floor(centre.x * ratio)).toBeCloseTo(0.5, 9)
+      }
+    }
   })
 })

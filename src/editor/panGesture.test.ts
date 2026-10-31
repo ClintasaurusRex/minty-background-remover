@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { type PanGesture, type PanGestureEvent, idlePanGesture, updatePanGesture } from './panGesture'
+import {
+  type PanGesture,
+  type PanGestureEvent,
+  idlePanGesture,
+  panOwnsPointerDown,
+  updatePanGesture,
+} from './panGesture'
 
 function run(events: PanGestureEvent[], start: PanGesture = idlePanGesture) {
   let gesture = start
@@ -78,5 +84,20 @@ describe('updatePanGesture', () => {
     const held = run([{ type: 'space-down' }]).gesture
     expect(updatePanGesture(held, { type: 'space-down' }).gesture).toBe(held)
     expect(updatePanGesture(idlePanGesture, { type: 'space-up' }).gesture).toBe(idlePanGesture)
+  })
+})
+
+describe('panOwnsPointerDown', () => {
+  it('gives presses to the active tool only when Space is not held and no drag is in progress', () => {
+    expect(panOwnsPointerDown(idlePanGesture)).toBe(false)
+    expect(panOwnsPointerDown(run([{ type: 'space-down' }]).gesture)).toBe(true)
+    expect(panOwnsPointerDown(run([{ type: 'space-down' }, down()]).gesture)).toBe(true)
+    expect(panOwnsPointerDown(run([{ type: 'space-down' }, down(), { type: 'space-up' }]).gesture)).toBe(false)
+    expect(panOwnsPointerDown(run([{ type: 'space-down' }, { type: 'reset' }]).gesture)).toBe(false)
+  })
+
+  it('keeps a press with Space held for panning even when it is not the primary button', () => {
+    // A right or middle press with Space held starts no drag, but must not reach the tool either.
+    expect(panOwnsPointerDown(run([{ type: 'space-down' }, down(1, 2)]).gesture)).toBe(true)
   })
 })

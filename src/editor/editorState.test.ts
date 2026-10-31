@@ -4,17 +4,23 @@ import { planFrame } from '../canvas/rendering'
 import { MAX_ZOOM, MIN_ZOOM } from '../canvas/viewport'
 import { createImportError } from '../image/import/errors'
 import { fakeImageData } from '../image/import/testFixtures'
+import { createSelectionMask } from '../image/selection/selectionMask'
+import { selectAll } from '../image/selection/selectionOperations'
+import { maskBytes, maskRows } from '../image/selection/testFixtures'
 import {
+  type DocumentVersion,
   type EditorAction,
   type EditorImportResult,
   type EditorState,
   type WorkspaceMetrics,
   displayViewport,
+  documentVersion,
   editorReducer,
   initialEditorState,
   isImporting,
 } from './editorState'
 import { createImageDocument } from './imageDocument'
+import type { FloodMode, SelectionMask, SelectionMode, ToolId } from './types'
 
 function documentOf(width: number, height: number, name = 'a.png') {
   return createImageDocument({
@@ -51,6 +57,9 @@ describe('editorReducer: imports', () => {
       importError: null,
       pan: null,
       importNotice: null,
+      activeTool: null,
+      magicWand: { tolerance: 20, floodMode: 'contiguous', selectionMode: 'new' },
+      selection: null,
     })
     expect(isImporting(initialEditorState)).toBe(false)
   })
@@ -708,5 +717,384 @@ describe('editorReducer: dropped files', () => {
     expect(state.document?.name).toBe('dropped.png')
     expect(state.viewport).toEqual({ zoom: 1, offset: { x: 450, y: 250 } })
     expect(state.pan).toBeNull()
+  })
+})
+
+describe('editorReducer: tools and Magic Wand options', () => {
+  function opened(width = 4, height = 3, importId = 1) {
+    return reduce(
+      measured,
+      { type: 'import-started', importId },
+      { type: 'import-finished', importId, result: succeeded(width, height) },
+    )
+  }
+
+  it('has no active tool and default Magic Wand options before an image is open', () => {
+    expect(initialEditorState.activeTool).toBeNull()
+    expect(initialEditorState.magicWand).toEqual({ tolerance: 20, floodMode: 'contiguous', selectionMode: 'new' })
+    expect(initialEditorState.selection).toBeNull()
+  })
+
+  it('activates the Magic Wand when an image opens successfully', () => {
+    const state = opened()
+    expect(state.activeTool).toBe('magic-wand')
+    expect(state.magicWand).toBe(initialEditorState.magicWand)
+  })
+
+  it('does not activate a tool when an import fails, is rejected or is superseded', () => {
+    const failedImport = reduce(
+      measured,
+      { type: 'import-started', importId: 1 },
+      { type: 'import-finished', importId: 1, result: failed },
+    )
+    expect(failedImport.activeTool).toBeNull()
+
+    const rejected = reduce(measured, { type: 'import-rejected', error: createImportError('unsupported-format', 'folder') })
+    expect(rejected.activeTool).toBeNull()
+
+    const superseded = reduce(
+      measured,
+      { type: 'import-started', importId: 1 },
+      { type: 'import-started', importId: 2 },
+      { type: 'import-finished', importId: 1, result: succeeded(4, 3) },
+    )
+    expect(superseded.activeTool).toBeNull()
+    expect(superseded.document).toBeNull()
+  })
+
+  /**
+   * Only the Magic Wand is available in Phase 2, so another active tool cannot be reached
+   * through actions yet. These tests start from such a state directly.
+   */
+  function withCropActive(state: EditorState): EditorState {
+    return { ...state, activeTool: 'crop' }
+  }
+
+  it('ignores tool changes until an image is open', () => {
+    expect(reduce(measured, { type: 'tool-selected', tool: 'magic-wand' })).toBe(measured)
+  })
+
+  it('activates an available tool once an image is open', () => {
+    const state = reduce(withCropActive(opened()), { type: 'tool-selected', tool: 'magic-wand' })
+    expect(state.activeTool).toBe('magic-wand')
+    expect(reduce(state, { type: 'tool-selected', tool: 'magic-wand' })).toBe(state)
+  })
+
+  it('ignores tools that are not available yet', () => {
+    const state = opened()
+    for (const tool of ['crop', 'replace-color', 'auto-trim'] as const) {
+      expect(reduce(state, { type: 'tool-selected', tool })).toBe(state)
+    }
+  })
+
+  it('ignores unknown and malformed tool ids', () => {
+    const state = opened()
+    for (const tool of ['lasso', '', 'Magic-Wand', 'magic-wand ', null, undefined, 3, {}]) {
+      expect(reduce(state, { type: 'tool-selected', tool: tool as ToolId })).toBe(state)
+    }
+  })
+
+  it('reactivates the Magic Wand when another image opens', () => {
+    const state = reduce(
+      withCropActive(opened()),
+      { type: 'import-started', importId: 2 },
+      { type: 'import-finished', importId: 2, result: succeeded(5, 5) },
+    )
+    expect(state.activeTool).toBe('magic-wand')
+  })
+
+  it('keeps the active tool when an import fails', () => {
+    const state = reduce(
+      withCropActive(opened()),
+      { type: 'import-started', importId: 2 },
+      { type: 'import-finished', importId: 2, result: failed },
+    )
+    expect(state.activeTool).toBe('crop')
+  })
+
+  it('changes the tolerance, flood mode and selection mode', () => {
+    const state = reduce(
+      opened(),
+      { type: 'magic-wand-tolerance-changed', tolerance: 35 },
+      { type: 'magic-wand-flood-mode-changed', floodMode: 'global' },
+      { type: 'magic-wand-selection-mode-changed', selectionMode: 'subtract' },
+    )
+    expect(state.magicWand).toEqual({ tolerance: 35, floodMode: 'global', selectionMode: 'subtract' })
+  })
+
+  it('accepts option changes before an image is open', () => {
+    const state = reduce(
+      initialEditorState,
+      { type: 'magic-wand-tolerance-changed', tolerance: 0 },
+      { type: 'magic-wand-flood-mode-changed', floodMode: 'global' },
+      { type: 'magic-wand-selection-mode-changed', selectionMode: 'add' },
+    )
+    expect(state.magicWand).toEqual({ tolerance: 0, floodMode: 'global', selectionMode: 'add' })
+    expect(state.document).toBeNull()
+    expect(state.activeTool).toBeNull()
+    expect(state.selection).toBeNull()
+  })
+
+  it('rounds the tolerance to a whole number and clamps it to 0–100', () => {
+    const tolerance = (value: number) =>
+      reduce(initialEditorState, { type: 'magic-wand-tolerance-changed', tolerance: value }).magicWand.tolerance
+    expect(tolerance(100)).toBe(100)
+    expect(tolerance(0)).toBe(0)
+    expect(tolerance(42.4)).toBe(42)
+    expect(tolerance(42.5)).toBe(43)
+    expect(tolerance(150)).toBe(100)
+    expect(tolerance(-3)).toBe(0)
+    expect(tolerance(-0.4)).toBe(0)
+    expect(Object.is(tolerance(-0.4), -0)).toBe(false)
+  })
+
+  it('ignores invalid option values', () => {
+    const state = reduce(opened(), { type: 'magic-wand-tolerance-changed', tolerance: 30 })
+    for (const tolerance of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(reduce(state, { type: 'magic-wand-tolerance-changed', tolerance })).toBe(state)
+    }
+    expect(reduce(state, { type: 'magic-wand-flood-mode-changed', floodMode: 'diagonal' as FloodMode })).toBe(state)
+    expect(
+      reduce(state, { type: 'magic-wand-selection-mode-changed', selectionMode: 'intersect' as SelectionMode }),
+    ).toBe(state)
+  })
+
+  it('returns the same state when an option does not change', () => {
+    const state = opened()
+    expect(reduce(state, { type: 'magic-wand-tolerance-changed', tolerance: 20 })).toBe(state)
+    expect(reduce(state, { type: 'magic-wand-tolerance-changed', tolerance: 19.6 })).toBe(state)
+    expect(reduce(state, { type: 'magic-wand-flood-mode-changed', floodMode: 'contiguous' })).toBe(state)
+    expect(reduce(state, { type: 'magic-wand-selection-mode-changed', selectionMode: 'new' })).toBe(state)
+  })
+
+  it('keeps Magic Wand options across successful, failed and superseded imports', () => {
+    const state = reduce(
+      opened(),
+      { type: 'magic-wand-tolerance-changed', tolerance: 55 },
+      { type: 'magic-wand-flood-mode-changed', floodMode: 'global' },
+      { type: 'magic-wand-selection-mode-changed', selectionMode: 'add' },
+      { type: 'import-started', importId: 2 },
+      { type: 'import-finished', importId: 2, result: failed },
+      { type: 'import-started', importId: 3 },
+      { type: 'import-started', importId: 4 },
+      { type: 'import-finished', importId: 3, result: succeeded(9, 9) },
+      { type: 'import-finished', importId: 4, result: succeeded(6, 6) },
+      { type: 'tool-selected', tool: 'magic-wand' },
+    )
+    expect(state.document).toMatchObject({ width: 6, height: 6 })
+    expect(state.magicWand).toEqual({ tolerance: 55, floodMode: 'global', selectionMode: 'add' })
+  })
+})
+
+describe('editorReducer: selection', () => {
+  function opened(width = 4, height = 3, importId = 1, state: EditorState = measured) {
+    return reduce(
+      state,
+      { type: 'import-started', importId },
+      { type: 'import-finished', importId, result: succeeded(width, height) },
+    )
+  }
+
+  function mask(...rows: string[]): SelectionMask {
+    const { width, height, data } = maskBytes(...rows)
+    const selection = createSelectionMask(width, height, data)
+    if (!selection) throw new Error('Test mask selects nothing')
+    return selection
+  }
+
+  function apply(state: EditorState, selection: SelectionMask | null, version = documentVersion(state)!) {
+    return reduce(state, { type: 'selection-applied', version, selection })
+  }
+
+  /** A 4 × 3 selection. */
+  const corner = () => mask('##..', '#...', '....')
+
+  it('reports the open document version, or null without a document', () => {
+    expect(documentVersion(measured)).toBeNull()
+    const state = opened()
+    expect(documentVersion(state)).toEqual({ documentId: state.document!.id, revision: 0 })
+  })
+
+  it('applies a selection, keeping the mask itself', () => {
+    const selection = corner()
+    const state = apply(opened(), selection)
+    expect(state.selection).toBe(selection)
+    expect(maskRows(state.selection!)).toEqual(['##..', '#...', '....'])
+  })
+
+  it('replaces the selection with a later one', () => {
+    const second = mask('....', '....', '..##')
+    const state = apply(apply(opened(), corner()), second)
+    expect(state.selection).toBe(second)
+  })
+
+  it('clears the selection by applying null or with Clear Selection', () => {
+    const selected = apply(opened(), corner())
+    expect(apply(selected, null).selection).toBeNull()
+    expect(reduce(selected, { type: 'selection-cleared' }).selection).toBeNull()
+  })
+
+  it('returns the same state when the selection does not change', () => {
+    const state = opened()
+    expect(apply(state, null)).toBe(state)
+    expect(reduce(state, { type: 'selection-cleared' })).toBe(state)
+    const selected = apply(state, corner())
+    expect(apply(selected, selected.selection)).toBe(selected)
+  })
+
+  it('ignores selection changes without an open image', () => {
+    const version: DocumentVersion = { documentId: 1, revision: 0 }
+    const selectAction = { type: 'selection-applied', version, selection: corner() } as const
+    expect(reduce(measured, selectAction)).toBe(measured)
+    expect(reduce(initialEditorState, selectAction)).toBe(initialEditorState)
+    expect(reduce(measured, { type: 'selection-cleared' })).toBe(measured)
+
+    // Also while the first image is still importing.
+    const importing = reduce(measured, { type: 'import-started', importId: 1 })
+    expect(reduce(importing, selectAction)).toBe(importing)
+  })
+
+  it('rejects a mask that is not the size of the image', () => {
+    const state = opened(4, 3)
+    expect(apply(state, mask('###', '...', '...'))).toBe(state)
+    expect(apply(state, mask('####', '....'))).toBe(state)
+    expect(apply(state, mask('###.', '....', '....', '....'))).toBe(state)
+    expect(apply(state, mask('...#', '....', '....'))).not.toBe(state)
+  })
+
+  it('rejects a selection computed for a different image', () => {
+    const first = opened(4, 3, 1)
+    const firstVersion = documentVersion(first)!
+    const second = opened(4, 3, 2, first)
+    // Same size, so only the version tells them apart.
+    expect(second.document!.id).not.toBe(first.document!.id)
+    expect(apply(second, corner(), firstVersion)).toBe(second)
+  })
+
+  it('rejects a selection computed for a different revision of the image', () => {
+    const state = opened()
+    const { documentId } = documentVersion(state)!
+    expect(apply(state, corner(), { documentId, revision: 1 })).toBe(state)
+  })
+
+  it('rejects a selection result that arrives after its image was replaced', () => {
+    // The result is computed while a new image is still importing, then delivered late.
+    let state = apply(opened(4, 3, 1), selectAll(4, 3))
+    const version = documentVersion(state)!
+    state = reduce(state, { type: 'import-started', importId: 2 })
+    state = reduce(state, { type: 'import-finished', importId: 2, result: succeeded(4, 3) })
+    expect(apply(state, corner(), version)).toBe(state)
+    expect(state.selection).toBeNull()
+  })
+
+  it('accepts a selection for the open image while another import is in progress', () => {
+    const importing = reduce(opened(), { type: 'import-started', importId: 2 })
+    const selection = corner()
+    expect(apply(importing, selection).selection).toBe(selection)
+  })
+
+  it('clears the selection when another image opens successfully', () => {
+    const state = reduce(
+      apply(opened(), corner()),
+      { type: 'import-started', importId: 2 },
+      { type: 'import-finished', importId: 2, result: succeeded(4, 3) },
+    )
+    expect(state.selection).toBeNull()
+  })
+
+  it('keeps the document and selection when an import fails, is rejected or is superseded', () => {
+    const selected = apply(opened(), corner())
+
+    const failedImport = reduce(
+      selected,
+      { type: 'import-started', importId: 2 },
+      { type: 'import-finished', importId: 2, result: failed },
+    )
+    expect(failedImport.document).toBe(selected.document)
+    expect(failedImport.selection).toBe(selected.selection)
+
+    const rejected = reduce(selected, { type: 'import-rejected', error: createImportError('unsupported-format', 'folder') })
+    expect(rejected.document).toBe(selected.document)
+    expect(rejected.selection).toBe(selected.selection)
+
+    // The older import finishes after a newer one started (its cancelled result is discarded),
+    // then the newer one fails too.
+    const superseded = reduce(
+      selected,
+      { type: 'import-started', importId: 2 },
+      { type: 'import-started', importId: 3 },
+      { type: 'import-finished', importId: 2, result: succeeded(8, 8) },
+      { type: 'import-finished', importId: 3, result: failed },
+    )
+    expect(superseded.document).toBe(selected.document)
+    expect(superseded.selection).toBe(selected.selection)
+
+    // An import that only starts keeps the selection until it succeeds.
+    const started = reduce(selected, { type: 'import-started', importId: 2 })
+    expect(started.selection).toBe(selected.selection)
+  })
+
+  it('keeps the selection when the tool or Magic Wand options change', () => {
+    const selected = apply(opened(), corner())
+    const state = reduce(
+      // Only the Magic Wand is available in Phase 2; another tool is set directly.
+      { ...selected, activeTool: 'crop' },
+      { type: 'tool-selected', tool: 'magic-wand' },
+      { type: 'magic-wand-tolerance-changed', tolerance: 70 },
+      { type: 'magic-wand-flood-mode-changed', floodMode: 'global' },
+      { type: 'magic-wand-selection-mode-changed', selectionMode: 'subtract' },
+    )
+    expect(state.selection).toBe(selected.selection)
+  })
+
+  it('never changes the selection when zooming, panning or resizing the workspace', () => {
+    const selected = apply(opened(400, 200), selectAll(400, 200))
+    const state = reduce(
+      selected,
+      { type: 'zoom-scaled', anchor: { x: 100, y: 100 }, factor: 3 },
+      { type: 'zoom-stepped', direction: 1 },
+      { type: 'zoom-stepped', direction: -1 },
+      { type: 'zoom-fitted' },
+      { type: 'zoom-actual-size' },
+      { type: 'wheel-panned', delta: { x: 30, y: -20 } },
+      { type: 'pan-drag-started' },
+      { type: 'pan-dragged', delta: { x: 15, y: 5 } },
+      { type: 'pan-drag-ended' },
+      { type: 'workspace-resized', workspace: { size: { width: 700, height: 500 }, devicePixelRatio: 1.25 } },
+    )
+    expect(state.viewport).not.toEqual(selected.viewport)
+    expect(state.selection).toBe(selected.selection)
+    expect(state.selection!.data).toEqual(selectAll(400, 200).data)
+  })
+
+  it('never modifies the previous state, its Magic Wand options or the mask', () => {
+    const selection = corner()
+    const before = apply(opened(), selection)
+    const frozenOptions = { ...before.magicWand }
+    const frozenState = { ...before }
+    const bytes = selection.data.slice()
+
+    reduce(
+      before,
+      { type: 'magic-wand-tolerance-changed', tolerance: 80 },
+      { type: 'magic-wand-flood-mode-changed', floodMode: 'global' },
+      { type: 'tool-selected', tool: 'magic-wand' },
+      { type: 'selection-applied', version: documentVersion(before)!, selection: mask('....', '....', '...#') },
+      { type: 'selection-cleared' },
+      { type: 'import-started', importId: 2 },
+      { type: 'import-finished', importId: 2, result: succeeded(4, 3) },
+    )
+
+    expect(before).toEqual(frozenState)
+    expect(before.magicWand).toEqual(frozenOptions)
+    expect(before.selection).toBe(selection)
+    expect(selection.data).toEqual(bytes)
+    expect(initialEditorState.magicWand).toEqual({ tolerance: 20, floodMode: 'contiguous', selectionMode: 'new' })
+  })
+
+  it('stores a new options object rather than changing the shared default', () => {
+    const state = reduce(initialEditorState, { type: 'magic-wand-tolerance-changed', tolerance: 90 })
+    expect(state.magicWand).not.toBe(initialEditorState.magicWand)
+    expect(initialEditorState.magicWand.tolerance).toBe(20)
   })
 })

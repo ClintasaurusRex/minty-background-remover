@@ -1,0 +1,639 @@
+import type { Point, Rectangle, SelectionMask, Size, ViewportState } from '../editor/types'
+import { imageIndexAtDevicePixel, imageSpanAtDevicePixel } from './coordinates'
+import { backingStoreSize } from './devicePixels'
+import { intersect } from './rendering'
+
+/*
+ * The selection overlay: a mint tint over selected pixels and a black-and-white boundary where
+ * selected and unselected pixels meet. It is drawn on its own canvas above the image and never
+ * touches image pixels.
+ *
+ * It is rasterised here, in plain typed arrays, at device-pixel resolution and only where it can
+ * be seen, in square tiles. Tiles are positioned in device pixels counted from the image's
+ * top-left corner ("image-anchored"), which the display viewport puts on a device pixel edge, so:
+ *
+ * - Memory follows the screen, never the image: no full-resolution overlay is ever allocated, and
+ *   tiles away from the selection are never created.
+ * - Drawing a frame is one drawImage per visible tile, however complex the selection is. Pixel
+ *   work per tile is bounded by its size (and, zoomed out, by the image pixels it covers).
+ * - Panning moves the image by whole device pixels, so tiles already rasterised stay valid; only
+ *   a change of selection, zoom or device pixel ratio needs new tiles.
+ */
+
+/** Overlay tiles are this many device pixels square. */
+export const OVERLAY_TILE_SIZE = 256
+
+/** An RGBA colour with 8-bit channels. */
+type OverlayColour = readonly [r: number, g: number, b: number, a: number]
+
+/** The mint accent (--color-accent, #6ee7b7) at 35% opacity (89 / 255). */
+const SELECTION_TINT: OverlayColour = [110, 231, 183, 89]
+const BOUNDARY_DARK: OverlayColour = [0, 0, 0, 255]
+const BOUNDARY_LIGHT: OverlayColour = [255, 255, 255, 255]
+
+/** Boundary dashes are this many boundary line widths long. */
+const DASH_LENGTH_IN_LINE_WIDTHS = 4
+
+/** A colour as one 32-bit value laid out like ImageData bytes, whatever the platform's byte order. */
+function packColour([r, g, b, a]: OverlayColour): number {
+  return new Uint32Array(new Uint8Array([r, g, b, a]).buffer)[0]
+}
+
+/** Overlay pixels as written by rasteriseSelectionOverlay. */
+export const OVERLAY_PIXELS = {
+  transparent: 0,
+  tint: packColour(SELECTION_TINT),
+  dark: packColour(BOUNDARY_DARK),
+  light: packColour(BOUNDARY_LIGHT),
+} as const
+
+/**
+ * Width of each side of the boundary, in device pixels: one CSS pixel or a little less, so the
+ * boundary looks the same at every device pixel ratio and stays crisp.
+ */
+export function boundaryLineWidth(devicePixelRatio: number): number {
+  return Math.max(1, Math.floor(devicePixelRatio))
+}
+
+export interface SelectionOverlayInput {
+  readonly selection: SelectionMask
+  /** The display (snapped) viewport the image is drawn with, in CSS pixels. */
+  readonly viewport: ViewportState
+  /** The overlay canvas's size in CSS pixels: the same as the image canvas. */
+  readonly viewportSize: Size
+  readonly devicePixelRatio: number
+}
+
+export interface OverlayTile {
+  /** Position in the tile grid. */
+  readonly column: number
+  readonly row: number
+  /** The part of the tile that can hold overlay pixels, in image-anchored device pixels. */
+  readonly rect: Rectangle
+}
+
+export interface SelectionOverlayPlan {
+  readonly backingStore: Size
+  /** Device pixels per image pixel (zoom × device pixel ratio). */
+  readonly scale: number
+  /** Width of each side of the boundary, in device pixels. */
+  readonly lineWidth: number
+  /** The image's top-left corner in backing-store pixels; always whole numbers. */
+  readonly origin: Point
+  /** The visible tiles that can hold overlay pixels. A tile is drawn at origin + rect. */
+  readonly tiles: readonly OverlayTile[]
+  /** Tiles from earlier frames that intersect this area (image-anchored) are worth keeping. */
+  readonly keep: Rectangle
+}
+
+/**
+ * Which overlay tiles a frame needs. The canvas backing store matches the image canvas
+ * (planFrame), and the image's corner is placed exactly where the image renderer draws it.
+ */
+export function planSelectionOverlay({
+  selection,
+  viewport,
+  viewportSize,
+  devicePixelRatio,
+}: SelectionOverlayInput): SelectionOverlayPlan {
+  const backingStore = backingStoreSize(viewportSize, devicePixelRatio)
+  const scale = viewport.zoom * devicePixelRatio
+  const lineWidth = boundaryLineWidth(devicePixelRatio)
+  // Already whole numbers for a snapped viewport; rounding removes floating-point noise.
+  const origin = {
+    x: Math.round(viewport.offset.x * devicePixelRatio),
+    y: Math.round(viewport.offset.y * devicePixelRatio),
+  }
+  const visible = { x: -origin.x, y: -origin.y, width: backingStore.width, height: backingStore.height }
+  const content = overlayContentRect(selection, scale, lineWidth)
+  const area = intersect(visible, content)
+  const size = OVERLAY_TILE_SIZE
+
+  const tiles: OverlayTile[] = []
+  if (area) {
+    for (let row = Math.floor(area.y / size); row * size < area.y + area.height; row++) {
+      for (let column = Math.floor(area.x / size); column * size < area.x + area.width; column++) {
+        const rect = intersect({ x: column * size, y: row * size, width: size, height: size }, content)
+        if (rect) tiles.push({ column, row, rect })
+      }
+    }
+  }
+  const keep = {
+    x: visible.x - size,
+    y: visible.y - size,
+    width: visible.width + 2 * size,
+    height: visible.height + 2 * size,
+  }
+  return { backingStore, scale, lineWidth, origin, tiles, keep }
+}
+
+/**
+ * The image-anchored device pixels that can hold overlay pixels: those over the selection's
+ * bounds, the boundary drawn just outside them, and one more pixel for rounding.
+ */
+export function overlayContentRect(selection: SelectionMask, scale: number, lineWidth: number): Rectangle {
+  const { x, y, width, height } = selection.bounds
+  const margin = lineWidth + 1
+  const left = Math.floor(x * scale) - margin
+  const top = Math.floor(y * scale) - margin
+  return {
+    x: left,
+    y: top,
+    width: Math.ceil((x + width) * scale) + margin - left,
+    height: Math.ceil((y + height) * scale) + margin - top,
+  }
+}
+
+/**
+ * Whether each device pixel in `rect` (image-anchored) shows the selection, row by row:
+ * 1 selected, 0 not. Device pixels outside the image are not selected.
+ *
+ * - At 100% zoom and above (in device pixels), a device pixel shows the image pixel drawn there,
+ *   by the same rule as pointer hit-testing, so the overlay marks exactly the pixels a click
+ *   would pick.
+ * - Zoomed out, a device pixel covers several image pixels and counts as selected when any of
+ *   them is, so no selected pixel ever disappears from view.
+ */
+export function selectionStates(selection: SelectionMask, scale: number, rect: Rectangle): Uint8Array {
+  const rowWords = wordsPerRow(rect.width)
+  const bits = new Uint32Array(rowWords * rect.height)
+  fillStateBits(selection, scale, rect, bits, rowWords, new Int32Array(rect.height))
+  const states = new Uint8Array(rect.width * rect.height)
+  for (let r = 0; r < rect.height; r++) {
+    for (let c = 0; c < rect.width; c++) {
+      states[r * rect.width + c] = (bits[r * rowWords + (c >>> 5)] >>> (c & 31)) & 1
+    }
+  }
+  return states
+}
+
+/**
+ * Rasterises the overlay for `rect` (image-anchored device pixels) into `out`, `stride` values
+ * per row, as packed RGBA in ImageData byte order (OVERLAY_PIXELS):
+ *
+ * - Every device pixel within `lineWidth` device pixels (including diagonally) of a pixel in the
+ *   other state is boundary, so the boundary is `lineWidth` wide on each side of the edge. Its
+ *   pixels are black or white by a checkerboard of square cells, four line widths wide: within a
+ *   cell, selected and unselected pixels take opposite colours, and the colours swap from cell to
+ *   cell. Both colours therefore alternate along every edge, on both sides of it, and the
+ *   boundary stays visible on white, black, transparent and detailed images.
+ * - Other selected pixels get the tint; other unselected pixels stay transparent.
+ *
+ * The cell pattern is anchored to the image, so it does not shimmer while panning. Returns false,
+ * leaving `out` untouched, when nothing in `rect` is drawn.
+ *
+ * Cost does not depend on how complex the boundary is. Areas entirely inside or outside the
+ * selection are recognised with native scans of the mask. Elsewhere, states are kept one bit per
+ * device pixel, so finding the boundary takes a few 32-bit operations per 32 pixels; stretches
+ * without boundary are written with native fills, and only boundary pixels one at a time.
+ */
+export function rasteriseSelectionOverlay(
+  selection: SelectionMask,
+  scale: number,
+  lineWidth: number,
+  rect: Rectangle,
+  out: Uint32Array,
+  stride: number,
+): boolean {
+  const { x: x0, y: y0, width, height } = rect
+  const margin = lineWidth
+  const span = 2 * margin + 1
+  const outer = { x: x0 - margin, y: y0 - margin, width: width + 2 * margin, height: height + 2 * margin }
+
+  const uniform = uniformState(selection, scale, outer)
+  if (uniform === 0) return false
+  if (uniform === 1) {
+    for (let r = 0; r < height; r++) out.fill(OVERLAY_PIXELS.tint, r * stride, r * stride + width)
+    return true
+  }
+
+  // Device pixel states, one bit each: bit c of row k is column c of `outer`.
+  const rowWords = wordsPerRow(outer.width)
+  const bits = scratch.words('bits', rowWords * outer.height)
+  const rowKeys = scratch.ints('rowKeys', outer.height)
+  fillStateBits(selection, scale, outer, bits, rowWords, rowKeys)
+
+  // Bit c of word c >> 5, for each row of `outer`: whether any (rowAny) or all (rowAll) of the
+  // `span` pixels from column c + 0 to c + 2 × margin are selected. That is the row's part of the
+  // square window around output column c.
+  const outWords = (width + 31) >>> 5
+  const rowAny = scratch.words('rowAny', outer.height * outWords)
+  const rowAll = scratch.words('rowAll', outer.height * outWords)
+  for (let k = 0; k < outer.height; k++) {
+    const target = k * outWords
+    if (rowKeys[k] === EMPTY_ROW) continue // nothing selected: both stay zero
+    if (k > 0 && rowKeys[k] === rowKeys[k - 1]) {
+      rowAny.copyWithin(target, target - outWords, target)
+      rowAll.copyWithin(target, target - outWords, target)
+      continue
+    }
+    const base = k * rowWords
+    for (let i = 0; i < outWords; i++) {
+      let any = 0
+      let all = -1
+      for (let j = 0; j < span; j++) {
+        const word = bitsAt(bits, base, 32 * i + j)
+        any |= word
+        all &= word
+      }
+      rowAny[target + i] = any
+      rowAll[target + i] = all
+    }
+  }
+
+  const { tint } = OVERLAY_PIXELS
+  const cell = DASH_LENGTH_IN_LINE_WIDTHS * lineWidth
+  const columnCells = scratch.bytes('columnCells', width)
+  for (let c = 0; c < width; c++) columnCells[c] = (Math.floor((x0 + c) / cell) & 1) << 2
+
+  let previousRowCell = -1
+  for (let r = 0; r < height; r++) {
+    const rowCell = Math.floor((y0 + r) / cell) & 1
+    const target = r * stride
+    // Rows with equal keys are equal, so when the row entering the window equals the one leaving
+    // it and the centre row is unchanged, this output row repeats the previous one.
+    if (
+      r > 0 &&
+      rowCell === previousRowCell &&
+      rowKeys[r + span - 1] === rowKeys[r - 1] &&
+      rowKeys[r + margin] === rowKeys[r + margin - 1]
+    ) {
+      out.copyWithin(target, target - stride, target - stride + width)
+      continue
+    }
+    previousRowCell = rowCell
+    const palette = rowCell === 1 ? PALETTE_ODD_ROW : PALETTE_EVEN_ROW
+    const centreBase = (r + margin) * rowWords
+    // Words without boundary are collected into one fill.
+    let runStart = 0
+    let runValue = -1
+    for (let i = 0; i < outWords; i++) {
+      let any = 0
+      let all = -1
+      for (let k = r; k < r + span; k++) {
+        any |= rowAny[k * outWords + i]
+        all &= rowAll[k * outWords + i]
+      }
+      const start = 32 * i
+      const edge = any & ~all
+      const centre = bitsAt(bits, centreBase, start + margin)
+      if (edge === 0) {
+        // No boundary pixel, so no change of state either: the whole word is tint or transparent.
+        const value = (centre & 1) === 1 ? tint : 0
+        if (value !== runValue) {
+          if (runValue !== -1) out.fill(runValue, target + runStart, target + start)
+          runValue = value
+          runStart = start
+        }
+        continue
+      }
+      if (runValue !== -1) {
+        out.fill(runValue, target + runStart, target + start)
+        runValue = -1
+      }
+      const end = Math.min(start + 32, width)
+      for (let c = start, bit = 0; c < end; c++, bit++) {
+        out[target + c] = palette[columnCells[c] | (((edge >>> bit) & 1) << 1) | ((centre >>> bit) & 1)]
+      }
+    }
+    if (runValue !== -1) out.fill(runValue, target + runStart, target + width)
+  }
+  return true
+}
+
+/** Row key for a row with nothing selected. */
+const EMPTY_ROW = -1
+
+/**
+ * Colours by class (bit 1 boundary, bit 0 selected) plus 4 in odd checkerboard columns: on the
+ * boundary, the two sides take opposite colours, and the colours swap from cell to cell.
+ */
+const PALETTE_EVEN_ROW = Uint32Array.of(
+  ...[OVERLAY_PIXELS.transparent, OVERLAY_PIXELS.tint, OVERLAY_PIXELS.dark, OVERLAY_PIXELS.light],
+  ...[OVERLAY_PIXELS.transparent, OVERLAY_PIXELS.tint, OVERLAY_PIXELS.light, OVERLAY_PIXELS.dark],
+)
+const PALETTE_ODD_ROW = Uint32Array.of(...PALETTE_EVEN_ROW.subarray(4), ...PALETTE_EVEN_ROW.subarray(0, 4))
+
+/** Words per bit row: one bit per pixel, and at least one zero word after the last pixel. */
+function wordsPerRow(width: number): number {
+  return (width >>> 5) + 2
+}
+
+/** The 32 bits of a bit row (starting at word `base`) from bit `offset` on. */
+function bitsAt(bits: Uint32Array, base: number, offset: number): number {
+  const word = base + (offset >>> 5)
+  const shift = offset & 31
+  return shift === 0 ? bits[word] : (bits[word] >>> shift) | (bits[word + 1] << (32 - shift))
+}
+
+/**
+ * Scratch typed arrays reused between calls, grown as needed. Rasterising is synchronous, so one
+ * set is enough. Byte and word buffers are returned zeroed.
+ */
+const scratch = (() => {
+  const bytes = new Map<string, Uint8Array>()
+  const words = new Map<string, Uint32Array>()
+  const ints = new Map<string, Int32Array>()
+  return {
+    bytes(name: string, length: number): Uint8Array {
+      let buffer = bytes.get(name)
+      if (!buffer || buffer.length < length) bytes.set(name, (buffer = new Uint8Array(length)))
+      return buffer.subarray(0, length).fill(0)
+    },
+    words(name: string, length: number): Uint32Array {
+      let buffer = words.get(name)
+      if (!buffer || buffer.length < length) words.set(name, (buffer = new Uint32Array(length)))
+      return buffer.subarray(0, length).fill(0)
+    },
+    ints(name: string, length: number): Int32Array {
+      let buffer = ints.get(name)
+      if (!buffer || buffer.length < length) ints.set(name, (buffer = new Int32Array(length)))
+      return buffer.subarray(0, length)
+    },
+  }
+})()
+
+/** The image columns (or rows) a run of device pixels can show, before clamping to the image. */
+function coveredRange(start: number, length: number, scale: number): { first: number; last: number } {
+  if (scale >= 1) {
+    return { first: imageIndexAtDevicePixel(start, scale), last: imageIndexAtDevicePixel(start + length - 1, scale) }
+  }
+  return { first: imageSpanAtDevicePixel(start, scale).first, last: imageSpanAtDevicePixel(start + length - 1, scale).last }
+}
+
+/**
+ * 0 when no device pixel in `rect` shows the selection, 1 when every one does, -1 otherwise
+ * (or when that is not known), found without visiting device pixels one by one.
+ */
+function uniformState(selection: SelectionMask, scale: number, rect: Rectangle): 0 | 1 | -1 {
+  const { width: imageWidth, height: imageHeight, bounds } = selection
+  const columns = coveredRange(rect.x, rect.width, scale)
+  const rows = coveredRange(rect.y, rect.height, scale)
+  const contains = scale >= 1 ? bytesContain : packedContains
+
+  // Nothing selected: only pixels inside the selection's bounds can be selected.
+  const left = Math.max(columns.first, bounds.x)
+  const right = Math.min(columns.last, bounds.x + bounds.width - 1)
+  const top = Math.max(rows.first, bounds.y)
+  const bottom = Math.min(rows.last, bounds.y + bounds.height - 1)
+  if (left > right || top > bottom) return 0
+  if (!contains(selection, left, right, top, bottom, 1)) return 0
+
+  // Everything selected: needs every device pixel inside the image, over selected pixels.
+  const inside = columns.first >= 0 && columns.last < imageWidth && rows.first >= 0 && rows.last < imageHeight
+  if (inside && !contains(selection, columns.first, columns.last, rows.first, rows.last, 0)) return 1
+  return -1
+}
+
+/**
+ * Whether any pixel in columns left ..= right of rows top ..= bottom has `value` (1 selected, 0
+ * not). These read the mask bytes with native indexOf, or the packed mask 32 pixels at a time.
+ */
+type RegionContains = (
+  selection: SelectionMask,
+  left: number,
+  right: number,
+  top: number,
+  bottom: number,
+  value: 0 | 1,
+) => boolean
+
+const bytesContain: RegionContains = ({ width, data }, left, right, top, bottom, value) => {
+  for (let y = top; y <= bottom; y++) {
+    const base = y * width
+    if (data.subarray(base + left, base + right + 1).indexOf(value) !== -1) return true
+  }
+  return false
+}
+
+const packedContains: RegionContains = (selection, left, right, top, bottom, value) => {
+  const packed = packedMask(selection)
+  // Unselected pixels are found as set bits of the inverted words.
+  const invert = value === 0 ? -1 : 0
+  for (let y = top; y <= bottom; y++) {
+    const row = y * selection.width
+    if (anyBitSet(packed, 0, row + left, row + right, invert)) return true
+  }
+  return false
+}
+
+/**
+ * The selection packed one bit per pixel, in mask order: pixel i is bit i & 31 of word i >> 5
+ * (followed by a zero word, so reads past the last pixel are safe). Built once per mask, the
+ * first time it is shown zoomed out, and kept only as long as the mask is (masks never change).
+ * Memory: one eighth of the mask.
+ */
+const packedMasks = new WeakMap<SelectionMask, Uint32Array>()
+
+/** Whether 32-bit words of mask bytes hold pixel i in bits 8 × (i & 3), i.e. little-endian order. */
+const LITTLE_ENDIAN = new Uint8Array(Uint32Array.of(1).buffer)[0] === 1
+
+function packedMask(selection: SelectionMask): Uint32Array {
+  const cached = packedMasks.get(selection)
+  if (cached) return cached
+  const { width, height, data, bounds } = selection
+  const packed = new Uint32Array(((width * height) >>> 5) + 2)
+  // Only the rows of the bounds can hold selected pixels.
+  const end = (bounds.y + bounds.height) * width
+  let i = bounds.y * width
+  if (LITTLE_ENDIAN && data.byteOffset % 4 === 0) {
+    // 32 pixels at a time, from eight aligned words of four mask bytes (each 0 or 1).
+    for (; i < end && (i & 31) !== 0; i++) packed[i >>> 5] |= data[i] << (i & 31)
+    const quads = new Uint32Array(data.buffer, data.byteOffset, data.length >>> 2)
+    for (; i + 32 <= end; i += 32) {
+      let word = 0
+      for (let k = 0, q = i >>> 2; k < 8; k++, q++) {
+        const quad = quads[q]
+        word |= ((quad | (quad >>> 7) | (quad >>> 14) | (quad >>> 21)) & 15) << (4 * k)
+      }
+      packed[i >>> 5] = word
+    }
+  }
+  for (; i < end; i++) packed[i >>> 5] |= data[i] << (i & 31)
+  packedMasks.set(selection, packed)
+  return packed
+}
+
+/**
+ * Whether any of bits first ..= last (counted from word `base`) is set, after XOR with `invert`
+ * (0, or -1 to look for clear bits instead).
+ */
+function anyBitSet(words: Uint32Array, base: number, first: number, last: number, invert: number): boolean {
+  let word = base + (first >>> 5)
+  const lastWord = base + (last >>> 5)
+  let value = (words[word] ^ invert) & (-1 << (first & 31))
+  while (word < lastWord) {
+    if (value !== 0) return true
+    value = words[++word] ^ invert
+  }
+  const end = last & 31
+  return (value & (end === 31 ? -1 : (1 << (end + 1)) - 1)) !== 0
+}
+
+/**
+ * Writes the states of selectionStates into `bits` (zeroed), one bit per device pixel and
+ * `rowWords` words per row. `rowKeys` receives a key per row: rows with equal keys are equal.
+ * Only the selection's bounds are read.
+ */
+function fillStateBits(
+  selection: SelectionMask,
+  scale: number,
+  rect: Rectangle,
+  bits: Uint32Array,
+  rowWords: number,
+  rowKeys: Int32Array,
+): void {
+  if (scale >= 1) fillBitsZoomedIn(selection, scale, rect, bits, rowWords, rowKeys)
+  else fillBitsZoomedOut(selection, scale, rect, bits, rowWords, rowKeys)
+}
+
+/**
+ * Each device pixel shows one image pixel. Device rows showing the same image row are copied, so
+ * at high zoom most rows cost a memory copy.
+ */
+function fillBitsZoomedIn(
+  selection: SelectionMask,
+  scale: number,
+  rect: Rectangle,
+  bits: Uint32Array,
+  rowWords: number,
+  rowKeys: Int32Array,
+): void {
+  const { width: imageWidth, data, bounds } = selection
+  const { x: x0, y: y0, width, height } = rect
+  const boundsRight = bounds.x + bounds.width
+  const boundsBottom = bounds.y + bounds.height
+
+  // The image column shown in each device column. Columns increase with x, so those inside the
+  // selection's bounds form one run, first ..= last.
+  const columns = scratch.ints('columns', width)
+  let first = width
+  let last = -1
+  for (let c = 0; c < width; c++) {
+    const x = imageIndexAtDevicePixel(x0 + c, scale)
+    columns[c] = x
+    if (x >= bounds.x && x < boundsRight) {
+      if (first > c) first = c
+      last = c
+    }
+  }
+
+  for (let r = 0; r < height; r++) {
+    const y = imageIndexAtDevicePixel(y0 + r, scale)
+    if (y < bounds.y || y >= boundsBottom || first > last) {
+      rowKeys[r] = EMPTY_ROW
+      continue
+    }
+    rowKeys[r] = y
+    const row = r * rowWords
+    if (r > 0 && rowKeys[r - 1] === y) {
+      bits.copyWithin(row, row - rowWords, row)
+      continue
+    }
+    const base = y * imageWidth
+    let word = 0
+    for (let c = first; c <= last; c++) {
+      word |= data[base + columns[c]] << (c & 31)
+      if ((c & 31) === 31) {
+        bits[row + (c >>> 5)] = word
+        word = 0
+      }
+    }
+    if ((last & 31) !== 31) bits[row + (last >>> 5)] = word
+  }
+}
+
+/**
+ * Each device pixel covers several image pixels and is selected when any of them is. For each
+ * device row, the packed rows of the image rows it covers are combined with OR, 32 pixels at a
+ * time, then each device column checks its span of the combined row.
+ */
+function fillBitsZoomedOut(
+  selection: SelectionMask,
+  scale: number,
+  rect: Rectangle,
+  bits: Uint32Array,
+  rowWords: number,
+  rowKeys: Int32Array,
+): void {
+  const { width: imageWidth, bounds } = selection
+  const { x: x0, y: y0, width, height } = rect
+  const boundsRight = bounds.x + bounds.width - 1
+  const boundsBottom = bounds.y + bounds.height - 1
+
+  // The image columns each device column covers, clamped to the selection's bounds. Spans
+  // increase with x and leave no gaps; neighbours share a column that straddles their edge.
+  const spanFirst = scratch.ints('spanFirst', width)
+  const spanLast = scratch.ints('spanLast', width)
+  let firstColumn = -1
+  let lastColumn = -1
+  for (let c = 0; c < width; c++) {
+    const span = imageSpanAtDevicePixel(x0 + c, scale)
+    spanFirst[c] = Math.max(bounds.x, span.first)
+    spanLast[c] = Math.min(boundsRight, span.last)
+    if (spanFirst[c] <= spanLast[c]) {
+      if (firstColumn < 0) firstColumn = c
+      lastColumn = c
+    }
+  }
+  if (firstColumn < 0) {
+    rowKeys.fill(EMPTY_ROW)
+    return
+  }
+
+  const packed = packedMask(selection)
+  // Bit i of the combined row is image column `offset` + i, from the first column any span covers.
+  const offset = spanFirst[firstColumn]
+  const wordCount = ((spanLast[lastColumn] - offset) >>> 5) + 1
+  const combined = scratch.words('combinedRow', wordCount)
+
+  for (let r = 0; r < height; r++) {
+    const span = imageSpanAtDevicePixel(y0 + r, scale)
+    const top = Math.max(bounds.y, span.first)
+    const bottom = Math.min(boundsBottom, span.last)
+    if (top > bottom) {
+      rowKeys[r] = EMPTY_ROW
+      continue
+    }
+    // Rows are all different, apart from those with nothing to read.
+    rowKeys[r] = -2 - r
+    const first = top * imageWidth + offset
+    for (let i = 0; i < wordCount; i++) combined[i] = bitsAt(packed, 0, first + 32 * i)
+    for (let y = top + 1; y <= bottom; y++) {
+      const start = y * imageWidth + offset
+      for (let i = 0; i < wordCount; i++) combined[i] |= bitsAt(packed, 0, start + 32 * i)
+    }
+    markColumns(combined, offset, spanFirst, spanLast, firstColumn, lastColumn, bits, r * rowWords)
+  }
+}
+
+/**
+ * Sets the bit (in the bit row starting at word `row`) of every device column whose span of the
+ * combined row has a selected pixel. `offset` is the image column of the combined row's bit 0.
+ */
+function markColumns(
+  combined: Uint32Array,
+  offset: number,
+  spanFirst: Int32Array,
+  spanLast: Int32Array,
+  firstColumn: number,
+  lastColumn: number,
+  bits: Uint32Array,
+  row: number,
+): void {
+  for (let c = firstColumn; c <= lastColumn; c++) {
+    const first = spanFirst[c] - offset
+    const last = spanLast[c] - offset
+    const word = first >>> 5
+    let selected: boolean
+    if (word === last >>> 5) {
+      // The usual case: the span lies within one word.
+      const length = last - first + 1
+      const span = combined[word] >>> (first & 31)
+      selected = (length === 32 ? span : span & ((1 << length) - 1)) !== 0
+    } else {
+      selected = anyBitSet(combined, 0, first, last, 0)
+    }
+    if (selected) bits[row + (c >>> 5)] |= 1 << (c & 31)
+  }
+}

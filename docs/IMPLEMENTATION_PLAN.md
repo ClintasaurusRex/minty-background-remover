@@ -165,14 +165,24 @@ Phase 2 is implemented in twelve reviewed steps, each stopping for review:
 2. Colour distance and tolerance. Done.
 3. Magic Wand: Contiguous and Global. Done.
 4. Combine (New / Add / Subtract), Select All and Invert. Done.
-5. Grow and Shrink. (Implemented; awaiting review.)
-6. Editor state for the active tool, Magic Wand options and selection.
-7. Magic Wand click, Ctrl + A / Esc and status bar (first manual checkpoint).
-8. Selection overlay.
+5. Grow and Shrink. Done.
+6. Editor state for the active tool, Magic Wand options and selection. Done.
+7. Magic Wand click, Ctrl + A / Esc and status bar (first manual checkpoint). Done.
+8. Selection overlay. (Implemented; awaiting review.)
 9. Magic Wand options row.
 10. Re-apply on tolerance change.
 11. Marching ants (optional).
 12. Browser performance measurement, hardening and docs.
+
+Known limitation (Step 7): where an image pixel edge passes exactly through the centre of a device pixel (for example at 150% zoom, or 100% zoom with 150% display scaling), that device pixel is split equally between two image pixels and the browser decides which one it shows. Hit-testing picks the left / upper pixel, as both browsers usually draw it. Chrome sometimes shows the other pixel, and the Step 8 checks of whole neighbourhoods found Firefox doing so occasionally too, so a click there can select the neighbouring pixel. Everywhere else the clicked pixel is exactly the one drawn under the pointer.
+
+Known limitations (Step 8):
+
+- The overlay follows the hit-testing rule exactly, so at those exact ties its boundary can sit one device pixel away from the edge the browser drew.
+- When the workspace's CSS size times the device pixel ratio is not a whole number of device pixels (seen after changing Chrome's display scaling at runtime), the browser stretches both canvases by a fraction of a pixel and resamples them. The overlay stays aligned with the image, but neither is pixel-exact. Sizing backing stores from `ResizeObserver`'s `devicePixelContentBoxSize` would avoid this; it changes image rendering, so it awaits an owner decision.
+- Zoomed out, a screen pixel shows the selection when any image pixel it covers is selected: the selection can look up to one screen pixel larger, and holes smaller than a screen pixel are not shown.
+- The boundary is about one CSS pixel on each side of an edge, so near 100% it covers one- or two-pixel features; a selection with many tiny holes looks speckled with black and white until zoomed in.
+- Overlay tiles are rasterised synchronously on the main thread when the selection, zoom or display scaling changes (measurements in `IMAGE_PROCESSING_SPEC.md`, Selection Overlay). On large displays with very complex selections a zoom step can take over 100 ms.
 
 Out of Phase 2: deleting selected pixels, edge cleanup, Auto Trim (Phase 3) and selection Undo / Redo.
 

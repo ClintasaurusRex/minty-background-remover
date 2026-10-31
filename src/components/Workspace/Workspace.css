@@ -30,6 +30,11 @@
   cursor: grabbing;
 }
 
+/* Magic Wand: a precise pointer over the image area. */
+.workspace--magic-wand .workspace__canvas {
+  cursor: crosshair;
+}
+
 .empty-state {
   display: flex;
   flex-direction: column;
@@ -96,6 +101,17 @@
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/* The selection overlay lies exactly over the image canvas and lets every pointer event
+   through to it, so hit-testing, the cursor and drag and drop are unchanged. */
+.workspace__overlay {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 
 .empty-state {

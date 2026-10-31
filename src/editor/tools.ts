@@ -1,12 +1,12 @@
 import type { ToolDefinition } from './types'
 
-/** Primary tools, in toolbar order. None are implemented during Phase 0. */
+/** Primary tools, in toolbar order. Tools become available in their assigned phase. */
 export const TOOLS: readonly ToolDefinition[] = [
   {
     id: 'magic-wand',
     label: 'Magic Wand',
     description: 'Select areas of similar colour',
-    available: false,
+    available: true,
   },
   {
     id: 'crop',

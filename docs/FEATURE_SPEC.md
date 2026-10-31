@@ -220,6 +220,8 @@ The overlay is drawn on a separate canvas layer aligned exactly with the image.
 
 Visual selection effects must not modify the image pixels themselves.
 
+The overlay shows the current selection however it was made (Contiguous or Global; New, Add or Subtract; Select All) and disappears when the selection is cleared. Separate regions and holes each get their own boundary. Zoom, pan, window resizing and changes of display scaling redraw it in place; they never change the selection. Its appearance is specified in `UI_UX_SPEC.md` (Selection UX).
+
 ---
 
 ## 7. Selection Operations
@@ -246,6 +248,16 @@ Esc           = clear selection
 ```
 
 Visible **New / Add / Subtract** controls provide the same modes, so modifier keys are never required. Alt is not used as a selection modifier (several Linux desktops reserve Alt + drag for moving windows). Global mode comes from its own toggle, not from a modifier.
+
+Modifier policy for Magic Wand clicks, in priority order:
+
+1. Ctrl (or ⌘ Command) held: Subtract, even when Shift is also held.
+2. Shift held: Add.
+3. Neither: the mode chosen in the editor (New by default).
+
+Alt held with a click has no effect on the mode. Only the primary mouse button uses the Magic Wand; other buttons do nothing. While Space is held, or a Space + drag pan is in progress, presses pan and never select.
+
+Ctrl + A and Escape work wherever keyboard focus is, except in text fields and editable content, where they keep their usual meaning. Without an open image they are left to the browser. Select All when everything is already selected, and Escape with no selection, change nothing.
 
 Grow and Shrink move the selection edge by one pixel per action, including diagonal neighbours. When shrinking, the area outside the image counts as selected, so a selection touching the image border is not pulled away from it.
 
