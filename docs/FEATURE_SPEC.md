@@ -50,7 +50,9 @@ Only drags that carry files highlight the workspace and open an image. Dropping 
 
 When imports overlap (file picker, drop and paste in any combination), the most recent action that has image data wins.
 
-Opening a new image replaces the current one without confirmation during Phase 1.
+Opening a new image replaces the current one without confirmation while the open image has no pixel edits. Replacing it discards its edits and its Undo / Redo history; a failed import keeps both.
+
+Approved for Phase 3 (P3-D12): when the open image has unsaved pixel edits, the user is warned before another image replaces it. The warning is implemented at a later checkpoint, to be agreed; until then, replacing an edited image does not ask.
 
 ### Format Detection
 
@@ -272,6 +274,8 @@ Further selection shortcuts (for example Invert or Deselect key combinations) ar
 
 Selection changes are not undoable in Phase 2. They should eventually support Undo / Redo; the selection representation must not prevent an efficient history later.
 
+Approved for Phase 3 (P3-D7): Undo / Redo covers image edits, not individual selection changes. Undoing an edit restores the selection from just before that edit (see §8 and §21).
+
 ---
 
 ## 8. Delete Selection
@@ -288,6 +292,14 @@ A visible **Delete Selection** action should also be available.
 
 Deleting pixels must be undoable.
 
+Approved for Phase 3:
+
+- Delete sets the alpha of every selected pixel to 0 and keeps its RGB values internally, hidden, so that Undo stays compact (P3-D2). Hidden colour must never become visible again in the editor, and export (Phase 6) writes fully transparent pixels as 0, 0, 0, 0, so deleted content never leaves the application.
+- Unselected pixels are never changed by Delete itself; edge cleanup and feathering (§9) are the only exceptions, and both default to 0 px.
+- Delete needs a selection, and clears the selection when it is done. Undo restores both the pixels and the selection from before the Delete (P3-D3).
+- Delete behaves the same for every source format (PNG, JPEG, WebP, SVG): all images are edited as 8-bit RGBA, so transparency can be added to a JPEG as to a PNG.
+- The Delete key is ignored while a text field has focus and does not repeat when held (P3-D9).
+
 ---
 
 ## 9. Edge Cleanup
@@ -303,13 +315,17 @@ Feather: 0 - 5 px
 
 Initial desired behaviour:
 
-- Cleanup enabled by default.
+- Cleanup available, but 0 px by default (owner decision, Phase 3).
 - Conservative cleanup.
 - Crisp edge priority.
-- Initial cleanup target: approximately 1 px.
-- Feather default: 0.
+- Feather default: 0 px.
 
 Edge cleanup should avoid aggressively eroding legitimate image details.
+
+Approved for Phase 3:
+
+- Cleanup and feathering both default to 0 px, so fine lines and anti-aliasing in 2D technical graphics are never changed unless the user asks (P3-D4). With both at 0, Delete changes only selected pixels.
+- The cleanup algorithm is not decided. It is chosen after a prototype comparison on representative images (Phase 3 Step 7; P3-D5). Whether cleanup and feathering run as part of Delete or as a separate action is decided with it.
 
 ---
 
@@ -318,6 +334,8 @@ Edge cleanup should avoid aggressively eroding legitimate image details.
 Auto Trim finds the bounding rectangle around visible pixels.
 
 Pixels should generally count as visible when their alpha value is above the configured transparency threshold.
+
+Approved for Phase 3 (P3-D6): Auto Trim finds visible bounds from alpha alone and supports adjustable padding. The threshold value, how padding behaves at the image edge, and what happens to the selection and the view are confirmed when Auto Trim is implemented (Phase 3 Step 10).
 
 The tool should determine:
 
@@ -515,8 +533,9 @@ This is a secondary feature and should not complicate early phases.
 Required shortcuts:
 
 ```text
-Ctrl + Z = Undo
-Ctrl + Y = Redo
+Ctrl + Z         = Undo
+Ctrl + Y         = Redo
+Ctrl + Shift + Z = Redo (alternative, approved for Phase 3, P3-D9)
 ```
 
 Visible toolbar actions are required.
@@ -524,6 +543,13 @@ Visible toolbar actions are required.
 History must be bounded.
 
 The implementation should account for memory usage when handling large images.
+
+Approved for Phase 3:
+
+- History holds image edits only (P3-D7): Delete (with any cleanup or feathering) and Auto Trim, and later pixel tools. Selection changes are not entries; undoing an edit restores the selection from just before it, and the Magic Wand click that made it can again be re-applied with a new tolerance.
+- A new edit clears Redo. Opening another image clears the history; a failed import keeps it.
+- Limits (P3-D8): at most 25 entries and 256 MB of history data. The oldest entries are dropped first. The newest entry is always kept, even when it alone exceeds 256 MB, so the last edit can always be undone.
+- Undo and Redo shortcuts keep their text-editing meaning in text fields.
 
 ---
 

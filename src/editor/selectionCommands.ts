@@ -5,7 +5,7 @@ import { combineSelections, invertSelection, selectAll } from '../image/selectio
 import { isEditableTarget } from '../utils/domTargets'
 import { type EditorAction, type EditorState, type MagicWandOperation, displayViewport, documentVersion } from './editorState'
 import { clampTolerance } from './toleranceInput'
-import type { Point, SelectionMask, SelectionMode } from './types'
+import type { PixelBuffer, Point, SelectionMask, SelectionMode } from './types'
 
 /*
  * Selection commands: pointer and keyboard input turned into editor actions. The pixel
@@ -88,7 +88,7 @@ export function magicWandClick(state: EditorState, point: Point, mode: Selection
  * with the selection from before the click. The single formula for a click and for every
  * re-apply, so re-applying always equals clicking once at the latest tolerance.
  */
-function operationResult(pixels: ImageData, operation: MagicWandOperation, tolerance: number): SelectionMask | null {
+function operationResult(pixels: PixelBuffer, operation: MagicWandOperation, tolerance: number): SelectionMask | null {
   // Subtracting from nothing leaves nothing at any tolerance, so the Magic Wand need not run.
   if (operation.selectionMode === 'subtract' && !operation.base) return null
   const found = createMagicWandSelection(pixels, operation.seed, { tolerance, floodMode: operation.floodMode })

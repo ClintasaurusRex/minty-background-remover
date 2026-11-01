@@ -1,4 +1,5 @@
 import { type ChangeEvent, type Dispatch, useCallback, useEffect, useRef, useState } from 'react'
+import { toImageData } from '../canvas/imageData'
 import type { EditorAction } from '../editor/editorState'
 import { createImportRunner } from '../editor/importRunner'
 import { createImportSources } from '../editor/importSources'
@@ -24,7 +25,7 @@ export function useImageImport(dispatch: Dispatch<EditorAction>) {
     createImportRunner(
       dispatch,
       (request, signal) => importImage(request, { decoder, signal }),
-      (document) => createImageBitmap(document.pixels),
+      (document) => createImageBitmap(toImageData(document.pixels)),
     ),
   )
   const [sources] = useState(() =>

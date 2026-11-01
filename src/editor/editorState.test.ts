@@ -4,6 +4,7 @@ import { planFrame } from '../canvas/rendering'
 import { MAX_ZOOM, MIN_ZOOM } from '../canvas/viewport'
 import { createImportError } from '../image/import/errors'
 import { fakeImageData } from '../image/import/testFixtures'
+import { copyPixelData, createPixelBuffer } from '../image/pixelBuffer'
 import { createSelectionMask } from '../image/selection/selectionMask'
 import { selectAll } from '../image/selection/selectionOperations'
 import { maskBytes, maskRows } from '../image/selection/testFixtures'
@@ -20,7 +21,7 @@ import {
   initialEditorState,
   isImporting,
 } from './editorState'
-import { createImageDocument } from './imageDocument'
+import { createEditedDocument, createImageDocument } from './imageDocument'
 import type { FloodMode, SelectionMask, SelectionMode, ToolId } from './types'
 
 function documentOf(width: number, height: number, name = 'a.png') {
@@ -46,6 +47,13 @@ function reduce(state: EditorState, ...actions: EditorAction[]): EditorState {
 }
 
 const measured = reduce(initialEditorState, { type: 'workspace-resized', workspace: WORKSPACE })
+
+/** `state` with its image edited the copy-on-write way: the same image, unchanged pixels, a new revision. */
+function withEditedPixels(state: EditorState): EditorState {
+  const document = state.document!
+  const pixels = createPixelBuffer(document.width, document.height, copyPixelData(document.pixels))
+  return { ...state, document: createEditedDocument(document, pixels) }
+}
 
 describe('editorReducer: imports', () => {
   it('starts with no document, viewport or error', () => {
@@ -1052,6 +1060,18 @@ describe('editorReducer: selection', () => {
     expect(apply(state, corner(), { documentId, revision: 1 })).toBe(state)
   })
 
+  it('rejects a selection computed before a pixel edit, and accepts one computed after it', () => {
+    const state = opened()
+    const before = documentVersion(state)!
+    const edited = withEditedPixels(state)
+    const after = documentVersion(edited)!
+    expect(after.documentId).toBe(before.documentId)
+    expect(after.revision).toBeGreaterThan(before.revision)
+    expect(apply(edited, corner(), before)).toBe(edited)
+    const selection = corner()
+    expect(apply(edited, selection, after).selection).toBe(selection)
+  })
+
   it('rejects a selection result that arrives after its image was replaced', () => {
     // The result is computed while a new image is still importing, then delivered late.
     let state = apply(opened(4, 3, 1), selectAll(4, 3))
@@ -1242,6 +1262,22 @@ describe('editorReducer: Magic Wand operations', () => {
     expect(applied(second, op, corner())).toBe(second)
     expect(applied(second, operation(second, { version: { ...documentVersion(second)!, revision: 1 } }), corner())).toBe(second)
     expect(applied(second, operation(second), mask('##.', '#..', '...'))).toBe(second)
+  })
+
+  it('rejects a click or re-apply recorded before a pixel edit until it is rebound to the new revision', () => {
+    const state = opened()
+    const op = operation(state)
+    const edited = withEditedPixels(applied(state, op, corner()))
+    expect(applied(edited, op, corner())).toBe(edited)
+    expect(reduce(edited, { type: 'magic-wand-reapplied', operation: op, tolerance: 60, selection: side() })).toBe(edited)
+
+    // The same click tagged with the current version (how Undo is planned to restore it) is accepted.
+    const rebound: MagicWandOperation = { ...op, version: documentVersion(edited)! }
+    const restored: EditorState = { ...edited, lastMagicWandOperation: rebound }
+    const selection = side()
+    const reapplied = reduce(restored, { type: 'magic-wand-reapplied', operation: rebound, tolerance: 60, selection })
+    expect(reapplied.selection).toBe(selection)
+    expect(reapplied.lastMagicWandOperation).toEqual({ ...rebound, tolerance: 60 })
   })
 
   it('re-applies only the latest operation, keeping everything but the tolerance', () => {

@@ -253,10 +253,9 @@ Background removal should support optional edge cleanup.
 
 Initial direction:
 
-- Edge cleanup enabled by default.
+- Edge cleanup available, but defaulting to 0 px (project owner decision, Phase 3), so fine lines and anti-aliasing in 2D technical graphics are never altered unless the user asks.
 - Crisp results prioritised.
-- Conservative default cleanup amount.
-- Initial default cleanup target: approximately 1 px.
+- Conservative cleanup amounts.
 - Feathering should exist but default to 0 px.
 
 The application is expected to work well with:

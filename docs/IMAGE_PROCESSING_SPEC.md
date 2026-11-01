@@ -54,6 +54,28 @@ Alpha:
 255 = fully opaque
 ```
 
+In the editor, pixels are held as a `PixelBuffer` (`editor/types.ts`): width, height and 8-bit straight (non-premultiplied) sRGB RGBA bytes, row-major. Decoded `ImageData` already has this shape and is used as it is; edits produce plain typed-array buffers, so pixel algorithms run without a canvas and are tested in Node. Every source format (PNG, JPEG, WebP, SVG) is decoded into this one representation, so transparency is handled the same way whatever the file was.
+
+---
+
+## Pixel Buffers and Revisions
+
+Approved for Phase 3 (P3-D1), implemented in Phase 3 Step 1.
+
+Copy-on-write:
+
+- A pixel buffer is never written once it belongs to a document. An edit copies the current pixels (`copyPixelData`), writes only to the copy and wraps it (`createPixelBuffer`), then makes a new document from it (`createEditedDocument`). The previous document and its pixels stay exactly as they were.
+- Buffers must be complete: width and height whole numbers of at least 1, exactly width × height × 4 bytes, starting on a 4-byte boundary so pixels can be read as 32-bit values (`validatePixelBuffer`). Imported and edited documents are validated the same way. A buffer whose memory was transferred away has no bytes and is rejected.
+- A new document takes ownership of its buffer without copying it. Pixels that share memory with the document's current pixels are rejected: that is what an edit made in place looks like.
+- The type makes a document's pixel bytes read-only (`Readonly<Uint8ClampedArray>`), so an indexed write is a compile error. Mutating methods (`set`, `fill`) and other views of the same memory are excluded by rule, not by the type.
+- Copying is proportional to the image (about 15 ms at 4K and 70 ms at 50 MP in Node), so it happens in commands, never inside the editor reducer. Validating and creating a document only check sizes and take constant time.
+
+Revisions:
+
+- A document keeps its `id` across edits; `revision` identifies its pixel content. An opened image starts at revision 0. Every later content state gets a revision never given out before in the session, larger than any earlier one. Revisions come from one session-wide counter, so they are unique across all images, and `id` with `revision` (the `DocumentVersion`) never repeats.
+- This includes Undo and Redo: restoring earlier pixels creates a new revision with a copy of them, never the earlier revision number. Work tagged with any earlier version (a selection, a Magic Wand click or re-apply, and later edits computed outside the reducer) can therefore never be accepted, even when the restored pixels are identical.
+- Undo must still restore the selection and the Magic Wand click that can be re-applied. The recorded click is rebound to the new version (its `version` replaced with the restored document's) when it is restored, which is valid because the restored pixels and selection are exactly those it was made on. Stale version identifiers are never restored. (Planned for the Undo / Redo steps.)
+
 ---
 
 ## Source Image Integrity
@@ -424,6 +446,13 @@ RGB values may remain internally unchanged because fully transparent RGB values 
 
 The operation must be undoable.
 
+Approved for Phase 3 (P3-D2): Delete keeps the RGB values of deleted pixels internally, hidden, so its Undo record stays small (about 45 KB when deleting a smooth-edged background from a 50 MP image in the planning measurements, against roughly 4 bytes per deleted pixel of a photograph when RGB is cleared as well). Consequences that later work must respect:
+
+- No operation may make a fully transparent pixel visible again without also setting its colour, so hidden colour never reappears in the editor.
+- Export (Phase 6) writes every fully transparent pixel as 0, 0, 0, 0, so deleted content never leaves the application.
+- Operations that resample (resize, rotation by other angles) must work on premultiplied colour, so hidden colour cannot bleed into visible neighbours.
+- Delete clears the selection; Undo restores it (P3-D3).
+
 ---
 
 ## Edge Cleanup
@@ -439,6 +468,8 @@ Initial goals:
 - Undoable
 
 Exact implementation should be prototyped and visually tested.
+
+Approved for Phase 3: cleanup defaults to 0 px, so Delete alone never changes unselected pixels and fine technical lines are protected (P3-D4). The algorithm remains undecided until the prototype comparison (Phase 3 Step 7, P3-D5), which compares conservative fringe removal with background-colour decontamination on screenshots, anti-aliased logos, HMI graphics with one-pixel lines, photographs, SVG renders, gradients and text.
 
 Potential techniques may include:
 
@@ -463,6 +494,8 @@ Default:
 Because many target assets are technical or flat graphics, crisp edges are preferred.
 
 Feathering should be optional.
+
+Feathering must respect the hidden-colour rule under Delete Selection: it may not raise the alpha of a deleted pixel without setting its colour.
 
 ---
 
@@ -496,6 +529,8 @@ alpha > 0
 because anti-aliased edge pixels may contain extremely low alpha.
 
 The chosen threshold must be documented and tested.
+
+Approved for Phase 3 (P3-D6): visible bounds come from alpha alone, with adjustable padding. The threshold value is fixed and tested in Phase 3 Step 10 (recommendation: alpha > 0, so faint anti-aliasing is never cut off).
 
 ### Fully Transparent Image
 
@@ -692,6 +727,13 @@ A reasonable early target is approximately:
 
 subject to memory constraints.
 
+Approved for Phase 3:
+
+- History covers image edits, not individual selection changes (P3-D7).
+- At most 25 entries and 256 MB of history data; oldest entries are dropped first, and the newest entry is always kept even if it alone exceeds the budget (P3-D8).
+- Undo and Redo produce new revisions (see Pixel Buffers and Revisions); they never reuse a revision number.
+- History never holds full-image snapshots or display bitmaps. The planned representation (Phase 3 Step 3) is a compact patch per edit: which pixels changed and their old XOR new values, run-length encoded, so one patch serves Undo and Redo; a size change such as Auto Trim keeps the kept rectangle and the removed borders exactly; selections are stored as row runs or packed bits.
+
 ---
 
 ## Performance
@@ -708,6 +750,8 @@ Potential future performance tools:
 - Chunked processing
 
 Do not introduce these until profiling demonstrates a need.
+
+Phase 3 (P3-D11): pixel edits start synchronous on the main thread, like Phase 2 selection work, and are measured at 4K and 50 MP before anything else is decided. Copy-on-write buffers can be handed to a Web Worker later without changing the algorithms. How the display image is rebuilt after an edit (P3-D10, recommendation: synchronously through `OffscreenCanvas`) is verified in Phase 3 Step 4.
 
 ---
 

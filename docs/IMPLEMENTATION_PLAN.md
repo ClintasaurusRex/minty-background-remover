@@ -172,7 +172,9 @@ Phase 2 is implemented in twelve reviewed steps, each stopping for review:
 9. Magic Wand options row. Done.
 10. Re-apply on tolerance change. Done.
 11. Marching ants (optional). Done.
-12. Final quality assurance, performance review and Phase 2 readiness assessment. (Implemented; awaiting manual approval.)
+12. Final quality assurance, performance review and Phase 2 readiness assessment. Done.
+
+Phase 2 was approved by the project owner and merged into `main` (d329646).
 
 Known limitation (Step 7): where an image pixel edge passes exactly through the centre of a device pixel (for example at 150% zoom, or 100% zoom with 150% display scaling), that device pixel is split equally between two image pixels and the browser decides which one it shows. Hit-testing picks the left / upper pixel, as both browsers usually draw it. Chrome sometimes shows the other pixel, and the Step 8 checks of whole neighbourhoods found Firefox doing so occasionally too, so a click there can select the neighbouring pixel. Everywhere else the clicked pixel is exactly the one drawn under the pointer.
 
@@ -203,7 +205,7 @@ Known limitations (Step 11):
 - The ants keep moving while the window is visible but not focused; only a hidden page (another tab, a minimised window) pauses them.
 - Measured in headless Chrome 156 and Firefox 158; the appearance, the 150 ms speed, reduced motion and performance on a real display were approved in the Step 11 manual review on Linux Mint. The Step 7 and Step 8 limitations (exact ties, fractional display scaling) are unchanged: the moving pattern follows the same pixels as the static one.
 
-#### Step 12: Final Review (implemented; awaiting manual approval)
+#### Step 12: Final Review (done; Phase 2 approved and merged)
 
 Readiness: every Phase 2 feature works together as specified in Chrome 156 and Firefox 158 (headless, production build), at device pixel ratios 1–2, from 25% to 3200% zoom (and Fit, down to about 20% for 50-megapixel images), in narrow and ultrawide windows, and with reduced motion. The Magic Wand is predictable: re-applied results equal fresh clicks at the committed tolerance in every mode, nothing accumulates, and stale results are discarded. Screenshots, technical graphics, 12-megapixel photographs and 4K images respond in about 120 ms or less, and memory stays bounded across selections, re-applies and image replacements. Two defects were found and fixed. What remains is the main-thread time near the 50-megapixel limit (0.15–0.4 s per operation), awaiting the owner decision below. Phase 2 is ready for the owner's final manual review; it is not approved until then.
 
@@ -237,6 +239,8 @@ Decisions remaining for the project owner:
 2. Size the canvas backing stores from `ResizeObserver`'s `devicePixelContentBoxSize` to keep both canvases pixel-exact at fractional scaling (open since Step 8). It touches Phase 1 image rendering, so it would be its own small, separately reviewed change.
 3. Whether to commit the benchmark and browser-check scripts (M6). They would need to become dependency-free scripts under `scripts/`; Chrome and Firefox are driven over their own protocols.
 4. Optional: keep a just-opened image fitted on every window resize until the user zooms or pans, instead of only for the options row's resize. Recommendation: keep the current, narrower rule.
+
+After the merge: decision 1 carries into Phase 3 as P3-D11 (pixel edits stay synchronous until measured). Decisions 2 and 3 remain open.
 
 Recommended final manual QA (Linux Mint, Chrome and Firefox, real display):
 
@@ -304,6 +308,49 @@ Open
 → Trim
 → Export
 ```
+
+### Phase 3 Approved Decisions and Steps
+
+Decisions approved by the project owner after review of the Phase 3 architecture proposal. They are recorded in `FEATURE_SPEC.md` (§1, §7–10, §21), `IMAGE_PROCESSING_SPEC.md` (Internal Pixel Representation, Pixel Buffers and Revisions, Delete Selection to History / Undo, Performance), `UI_UX_SPEC.md` (Undo / Redo, Keyboard Shortcuts, Destructive Operations), `ARCHITECTURE.md` (Phase 3 Modules, Web Workers) and `PROJECT_BRIEF.md` (Edge Cleanup).
+
+- P3-D1: Copy-on-write pixel buffers. An edit writes a copy and becomes a new document revision; buffers are never written once they belong to a document.
+- P3-D2: Delete sets alpha to 0 and keeps the RGB values internally, hidden, for compact Undo. Hidden colour never becomes visible again, and export (Phase 6) writes fully transparent pixels as 0, 0, 0, 0.
+- P3-D3: Delete needs a selection and clears it; Undo restores it.
+- P3-D4: Edge cleanup and feathering default to 0 px, to protect fine 2D technical graphics. Whether they run as part of Delete or as a separate action is decided with P3-D5.
+- P3-D5: The cleanup algorithm stays undecided until the prototype comparison (Step 7).
+- P3-D6: Auto Trim uses alpha-based visible bounds and adjustable padding. The threshold, padding at the image edge, and the effect on the selection and the view are confirmed in Step 10.
+- P3-D7: Undo / Redo covers image edits, not individual selection changes.
+- P3-D8: History limits: 25 entries and 256 MB, always keeping the newest entry even if it alone exceeds the budget.
+- P3-D9: Shortcuts: Delete, Ctrl + Z, Ctrl + Y and Ctrl + Shift + Z.
+- P3-D10: The display-image creation strategy is verified in Step 4.
+- P3-D11: Large-image edits stay synchronous initially, pending measurements.
+- P3-D12: Warn before replacing an image that has unsaved pixel edits. Implemented at a later checkpoint, to be agreed.
+- Revision model (correction to the proposal): document revisions are never reused within the session. Every pixel edit, Undo and Redo gets a new revision. Undo still restores the earlier pixels, the selection and the Magic Wand click that can be re-applied; the click is rebound to the new document version rather than restoring a stale version identifier, so stale results can never be accepted.
+
+Phase 3 is implemented in twelve reviewed steps, each stopping for review:
+
+1. Record decisions; pixel buffer and revision model. (Implemented; awaiting review.)
+2. Delete algorithm (pure).
+3. History building blocks: pixel patches, crop patches, selection encoding, byte accounting.
+4. Display image for edited pixels and render invalidation (verifies P3-D10).
+5. Edit history in the editor state.
+6. Delete Selection, Undo and Redo (first manual checkpoint).
+7. Edge cleanup prototype and visual comparison (owner decision P3-D5).
+8. Edge cleanup and feathering.
+9. Optional, depending on P3-D4 and P3-D5: re-apply the last Delete when cleanup or feathering changes.
+10. Auto Trim algorithm.
+11. Auto Trim tool (second manual checkpoint).
+12. Final quality assurance, performance, memory and Phase 3 readiness.
+
+The unsaved-edits warning (P3-D12) needs Undo / Redo (Step 6) to know whether edits exist; its checkpoint is still to be agreed.
+
+#### Step 1: Pixel Buffers and Revisions (implemented; awaiting review)
+
+- `ImageDocument.pixels` is a `PixelBuffer`: width, height and read-only RGBA bytes. Decoded `ImageData` already has this shape and is stored as it is; the Magic Wand and selection commands take any `PixelBuffer`.
+- `image/pixelBuffer.ts`: `validatePixelBuffer` (whole dimensions of at least 1, exact length, 4-byte alignment), `createPixelBuffer` (wraps without copying), `copyPixelData` (the copy-on-write starting point), `sharesPixelMemory`.
+- `createEditedDocument` (`editor/imageDocument.ts`) keeps the document's id, name, format, source and file size, takes its dimensions from the new pixels, rejects pixels sharing memory with the current ones, and gives a revision from a session-wide counter: never reused and always increasing. Imported documents keep revision 0. Imports and edits share the same buffer validation.
+- `canvas/imageData.ts`: `toImageData` hands a `PixelBuffer` to canvas APIs without copying. The import's display bitmap uses it; for imported pixels it returns the decoded `ImageData` itself, so import behaviour is unchanged.
+- Nothing calls `createEditedDocument` yet: the application looks and behaves exactly as at the end of Phase 2.
 
 ---
 

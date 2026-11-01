@@ -374,9 +374,12 @@ Shortcuts:
 ```text
 Ctrl + Z
 Ctrl + Y
+Ctrl + Shift + Z   (Redo, alternative)
 ```
 
 Disabled state should be clear when history is unavailable.
+
+Approved for Phase 3 (P3-D9): Ctrl + Z undoes, and Ctrl + Y or Ctrl + Shift + Z redoes, wherever keyboard focus is except in text fields and editable content, where they keep their text-editing meaning. Undo and Redo cover image edits; undoing an edit also brings back the selection from just before it (P3-D3, P3-D7).
 
 ---
 
@@ -389,6 +392,7 @@ Ctrl + O       Open
 Ctrl + S       Export / Save As where appropriate
 Ctrl + Z       Undo
 Ctrl + Y       Redo
+Ctrl+Shift+Z   Redo (alternative)
 Ctrl + A       Select All
 Ctrl + V       Paste Image
 Delete         Delete Selection
@@ -401,6 +405,8 @@ Ctrl + Wheel   Zoom
 Shortcuts must not interfere with text entry controls.
 
 Selection shortcuts in Phase 2 are limited to Ctrl + A and Escape, plus Shift + Click and Ctrl + Click with the Magic Wand. Additional selection hotkeys are deferred to the planned shortcut work.
+
+Approved for Phase 3 (P3-D9): Delete (Delete Selection; ignored while held down, so it never repeats), Ctrl + Z (Undo), Ctrl + Y and Ctrl + Shift + Z (Redo). Backspace is not a Delete shortcut. None of them act while a text field has focus.
 
 ---
 
@@ -468,6 +474,12 @@ Avoid exposing raw internal errors unless useful for development.
 Actions that change pixels should normally be undoable.
 
 The original imported file should not be automatically overwritten.
+
+Approved for Phase 3:
+
+- Delete Selection needs a selection and clears it afterwards; Undo brings back the pixels and the selection (P3-D3).
+- Edge cleanup and feathering default to 0 px, so Delete alone never alters fine lines or anti-aliasing outside the selection (P3-D4).
+- Before an image with unsaved pixel edits is replaced (by Open, drop or paste), the user is warned (P3-D12). The checkpoint that implements the warning, and its wording, are still to be agreed.
 
 ---
 

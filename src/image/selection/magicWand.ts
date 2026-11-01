@@ -1,4 +1,4 @@
-import type { FloodMode, PixelCoordinate, SelectionMask } from '../../editor/types'
+import type { FloodMode, PixelBuffer, PixelCoordinate, SelectionMask } from '../../editor/types'
 import { colourDistanceSquared, toleranceThreshold } from './colourDistance'
 
 export interface MagicWandOptions {
@@ -16,11 +16,11 @@ export interface MagicWandOptions {
  * never empty, because the seed always matches itself. `pixels` is never modified.
  *
  * Throws a RangeError for a malformed pixel buffer (including one that does not start on a
- * 4-byte boundary, which ImageData from a canvas always does), a seed outside the image or an
+ * 4-byte boundary, which decoded and edited pixels always do), a seed outside the image or an
  * invalid tolerance. Callers ignore clicks outside the image before getting here.
  */
 export function createMagicWandSelection(
-  pixels: ImageData,
+  pixels: PixelBuffer,
   seed: PixelCoordinate,
   options: MagicWandOptions,
 ): SelectionMask {
@@ -55,7 +55,7 @@ export function createMagicWandSelection(
  * object fields read once per pixel, and closures are slower still in both browsers.
  */
 function matchesSeed(
-  data: Uint8ClampedArray,
+  data: Readonly<Uint8ClampedArray>,
   words: Uint32Array,
   index: number,
   seedWord: number,
@@ -71,7 +71,7 @@ function matchesSeed(
 }
 
 /** One pass over the image; count and bounds are tracked as matches are found. */
-function selectGlobal(pixels: ImageData, words: Uint32Array, seed: PixelCoordinate, threshold: number): SelectionMask {
+function selectGlobal(pixels: PixelBuffer, words: Uint32Array, seed: PixelCoordinate, threshold: number): SelectionMask {
   const { width, height, data } = pixels
   const seedIndex = seed.y * width + seed.x
   const seedWord = words[seedIndex]
@@ -124,7 +124,7 @@ const INITIAL_REQUESTS = 1024
  * Pixels are compared only when the fill reaches them, and at most once, so the work is
  * proportional to the selected region and its outline rather than to the image.
  */
-function selectContiguous(pixels: ImageData, words: Uint32Array, seed: PixelCoordinate, threshold: number): SelectionMask {
+function selectContiguous(pixels: PixelBuffer, words: Uint32Array, seed: PixelCoordinate, threshold: number): SelectionMask {
   const { width, height, data } = pixels
   const seedIndex = seed.y * width + seed.x
   const seedWord = words[seedIndex]

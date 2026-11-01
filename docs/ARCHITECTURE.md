@@ -208,6 +208,34 @@ Everything is synchronous on the main thread; no Web Workers (see Web Workers).
 
 Vitest, Node environment, 706 tests in 39 files. Pixel algorithms are tested against character-map fixtures (`image/selection/testFixtures.ts`) and brute-force references: colour distance boundaries; Contiguous and Global wands (four-connectivity, narrow and winding one-pixel corridors, large images without recursion, a breadth-first reference on random images); combine, invert, grow and shrink; the mask builder. Editor state, commands and tolerance input are tested as pure reducers and functions, including stale-version, replay and placement cases. The overlay rasteriser is compared with a per-pixel reference rasteriser over a range of zoom levels, line widths and tiles, at every marching-ants phase, and both renderers run against fake canvases that count drawing calls. Components are rendered to static markup. Browser behaviour (hit-testing against what the browser draws, the overlay against a fresh render, timing, memory) is checked with headless Chrome and Firefox scripts kept outside the repository (see `IMAGE_PROCESSING_SPEC.md`, Final Phase 2 Measurements).
 
+### Phase 3 Modules
+
+Phase 3 adds pixel edits (Delete Selection, edge cleanup, Auto Trim) with Undo / Redo. Decisions P3-D1–D12 are recorded in `IMPLEMENTATION_PLAN.md` (Phase 3) and the feature and processing specifications.
+
+Step 1 (pixel buffers and revisions):
+
+```text
+src/
+├── editor/types.ts        PixelBuffer (width, height, read-only RGBA bytes); ImageDocument.pixels
+│                          is a PixelBuffer, and `revision` identifies its pixel content
+├── image/pixelBuffer.ts   validatePixelBuffer, createPixelBuffer, copyPixelData,
+│                          sharesPixelMemory (pure; no canvas, no ImageData)
+├── editor/imageDocument.ts  createImageDocument (revision 0), createEditedDocument (same id,
+│                          new pixels, new revision; rejects pixels sharing the current memory)
+└── canvas/imageData.ts    toImageData: a PixelBuffer as ImageData for canvas APIs, without
+                           copying (decoded ImageData is passed through)
+```
+
+Planned for later steps (subject to review at each step): `image/edit/` (Delete, edge band, cleanup, feather), `image/trim/autoTrim.ts`, `editor/history/` (pixel and crop patches, mask codec, bounded history), `editor/editCommands.ts`, `canvas/displayImage.ts` (the display image for an edited revision) and edit shortcuts.
+
+Key rules:
+
+- Copy-on-write: a document's pixel buffer is never written. An edit writes a copy, and `createEditedDocument` makes a new document from it; the previous document is unchanged. Pixel work (copying, editing, building history patches) runs in commands outside the reducer, as selection work does; the reducer only accepts or discards a finished result. Creating a document is constant time.
+- `ImageDocument.revision` comes from one session-wide counter: an opened image is revision 0, and every later content state, including an Undo or Redo, gets a revision never given out before. Results computed outside the reducer are tagged with `documentVersion()` and discarded for any other version, so work computed before an edit, Undo or Redo is never applied after it.
+- Undo restores earlier pixels as a new revision. The selection and the Magic Wand click recorded before the edit are restored with it, and the click's `version` is rebound to the new revision; a stale version is never restored.
+- Pixels become `ImageData` only at the canvas boundary (`toImageData`). Pixel algorithms take and return `PixelBuffer`s, so they run in Node tests and could move to a Web Worker unchanged.
+- The display bitmap is still created once per import. Edited pixels must reach the screen through a new display image and an explicit renderer invalidation (Step 4): writing pixel memory or changing the revision alone never redraws the canvas, because `workspaceRenderer` draws from its own bitmap copy and skips frames whose bitmap and plan are unchanged.
+
 ---
 
 ## React Responsibilities
@@ -430,6 +458,8 @@ When large image operations begin causing noticeable UI stalls, evaluate moving 
 The architecture should make that migration possible by keeping image algorithms independent of React.
 
 Phase 2 selection algorithms start synchronous on the main thread. Performance is measured early in production browser builds; significant UI freezes are not acceptable. Workers are introduced only when profiling demonstrates the need and the project owner approves.
+
+Phase 3 pixel edits also start synchronous (P3-D11) and are measured at 4K and 50 MP. Copy-on-write buffers are what a later move to a Worker would need: a Worker can receive a copy of the pixels and return a new buffer without touching the document.
 
 ---
 

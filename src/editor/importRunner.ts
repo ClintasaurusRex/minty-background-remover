@@ -11,7 +11,7 @@ export interface ImportOptions {
   readonly ignoredFileCount?: number
 }
 
-/** Creates the drawable bitmap for a document, e.g. createImageBitmap(document.pixels). */
+/** Creates the drawable bitmap for a document, e.g. createImageBitmap(toImageData(document.pixels)). */
 export type PrepareDisplay = (document: ImageDocument) => Promise<ImageBitmap>
 
 /**

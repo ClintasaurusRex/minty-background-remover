@@ -16,21 +16,56 @@ export type ImageFormat = 'png' | 'jpeg' | 'webp' | 'svg'
 /** How an image entered the application. */
 export type ImageSource = 'file-picker' | 'drop' | 'paste'
 
-/** The open image. Its pixels are the source of truth; viewing never changes them. */
+/**
+ * Straight (non-premultiplied) 8-bit sRGB RGBA pixels, row-major, 4 bytes per pixel.
+ * ImageData has this shape, so decoded pixels are used as they are; edits produce plain
+ * buffers (image/pixelBuffer.ts), which need no canvas and can be tested in Node.
+ *
+ * Copy-on-write: a buffer is never written once it belongs to a document. An edit writes
+ * new memory and becomes a new document revision, so the pixels of every earlier revision,
+ * and anything computed from them, stay valid. `Readonly` blocks indexed writes; mutating
+ * methods such as `set` and `fill`, and other views of `data.buffer`, must not be used on
+ * a document's pixels either.
+ */
+export interface PixelBuffer {
+  /** A whole number, at least 1. */
+  readonly width: number
+  /** A whole number, at least 1. */
+  readonly height: number
+  /**
+   * Exactly width × height × 4 bytes, starting on a 4-byte boundary so that pixels can be
+   * read as 32-bit values.
+   */
+  readonly data: Readonly<Uint8ClampedArray<ArrayBuffer>>
+}
+
+/**
+ * The open image. Its pixels are the source of truth; viewing never changes them.
+ *
+ * Documents are immutable. A pixel edit makes a new document with the same id and a new
+ * revision (createEditedDocument); the previous document is left as it was.
+ */
 export interface ImageDocument {
-  /** Unique per import; keys caches derived from the pixels. */
+  /** Unique per opened image, never reused, and kept by edits. */
   readonly id: number
   /** Display name, e.g. the original file name. */
   readonly name: string
   readonly format: ImageFormat
   readonly source: ImageSource
+  /** Size of the opened file. Describes the source; edits do not change it. */
   readonly fileSizeBytes: number
-  /** Always equal to pixels.width / pixels.height. */
+  /** Always equal to pixels.width / pixels.height. Auto Trim (Phase 3) changes them. */
   readonly width: number
   readonly height: number
-  /** Non-premultiplied 8-bit RGBA, row-major, at full original resolution. */
-  readonly pixels: ImageData
-  /** Increases whenever pixels change. Always 0 in Phase 1. */
+  /** At full resolution; never resampled. */
+  readonly pixels: PixelBuffer
+  /**
+   * Identifies the pixel content within the document: 0 when opened, and for every later
+   * content state (an edit, Undo or Redo) a number never used before in the session and
+   * larger than any earlier one. Undo and Redo restore earlier pixels as a new revision.
+   * With `id` it forms the DocumentVersion that work computed from the pixels is tagged
+   * with, so a result computed for any other content state is never accepted.
+   */
   readonly revision: number
 }
 

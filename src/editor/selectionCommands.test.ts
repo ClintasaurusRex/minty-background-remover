@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { imageToViewport } from '../canvas/coordinates'
 import { planFrame } from '../canvas/rendering'
 import { boundaryLineWidth, rasteriseSelectionOverlay, selectionStates } from '../canvas/selectionOverlay'
+import { copyPixelData, createPixelBuffer } from '../image/pixelBuffer'
 import { createSelectionMask } from '../image/selection/selectionMask'
 import { imageFromRows, maskRows } from '../image/selection/testFixtures'
 import {
@@ -14,7 +15,7 @@ import {
   initialEditorState,
 } from './editorState'
 import { describeSelection, formatSelection } from './documentInfo'
-import { createImageDocument } from './imageDocument'
+import { createEditedDocument, createImageDocument } from './imageDocument'
 import {
   type PointerPress,
   type ShortcutKey,
@@ -1112,5 +1113,75 @@ describe('re-applying on a 4K image', () => {
       expect(new Set(counts).size).toBe(3)
       expect(sameMask(state.selection, freshClick(before, 3000, 2000, mode, 12).selection)).toBe(true)
     }
+  })
+})
+
+describe('Magic Wand on edited pixels (new document revisions)', () => {
+  /** `state` after a pixel edit made the copy-on-write way: `change` writes to a copy of the pixels. */
+  function edited(state: EditorState, change: (data: Uint8ClampedArray, width: number) => void = () => {}): EditorState {
+    const document = state.document!
+    const data = copyPixelData(document.pixels)
+    change(data, document.width)
+    return { ...state, document: createEditedDocument(document, createPixelBuffer(document.width, document.height, data)) }
+  }
+
+  /** Paints column 2 white, removing WALLED's wall. */
+  function removeWall(data: Uint8ClampedArray, width: number) {
+    for (let i = 2 * 4; i < data.length; i += width * 4) data.set(PALETTE.w, i)
+  }
+
+  it('selects from the edited pixels, tagged with the new revision, leaving the earlier pixels unchanged', () => {
+    const state = open(WALLED())
+    const bytes = Array.from(state.document!.pixels.data)
+    expect(maskRows(click(state, 0, 0).selection!)).toEqual(['##...', '##...', '.....'])
+
+    const unwalled = edited(state, removeWall)
+    const action = magicWandClick(unwalled, centreOf(unwalled, 0, 0), 'new')!
+    expect(action).toMatchObject({ operation: { version: documentVersion(unwalled) } })
+    expect(maskRows(editorReducer(unwalled, action).selection!)).toEqual(['#####', '#####', '..###'])
+    expect(Array.from(state.document!.pixels.data)).toEqual(bytes)
+  })
+
+  it('discards a click or re-apply computed before an edit, and never re-applies across one', () => {
+    const clicked = click(open(STAIRS()), 0, 0, 'new')
+    const lateClick = magicWandClick(clicked, centreOf(clicked, 9, 0), 'new')!
+    const lateReapply = reapplyMagicWandCommand(clicked, 60)!
+    // The edit left the content as it was; the new revision alone is enough to discard.
+    const revised = edited(clicked)
+    expect(editorReducer(revised, lateClick)).toBe(revised)
+    expect(editorReducer(revised, lateReapply)).toBe(revised)
+    expect(reapplyMagicWandCommand(withUnreadablePixels(revised), 60)).toBeNull()
+    expect(commit(revised, 60).selection).toBe(revised.selection)
+  })
+
+  it('never accepts work for earlier pixels restored as a new revision, until the click is rebound to it', () => {
+    const clicked = click(open(STAIRS()), 0, 0, 'new')
+    const original = clicked.document!
+    const changed = edited(clicked, (data) => data.fill(0))
+    // The original pixels back, the way Undo will restore them: a copy, as a new revision.
+    const restoredDocument = createEditedDocument(
+      changed.document!,
+      createPixelBuffer(original.width, original.height, copyPixelData(original.pixels)),
+    )
+    const restored: EditorState = { ...changed, document: restoredDocument }
+    expect(restoredDocument.revision).toBeGreaterThan(changed.document!.revision)
+    expect(reapplyMagicWandCommand(restored, 60)).toBeNull()
+    expect(editorReducer(restored, reapplyMagicWandCommand(clicked, 60)!)).toBe(restored)
+
+    const rebound: EditorState = {
+      ...restored,
+      lastMagicWandOperation: { ...clicked.lastMagicWandOperation!, version: documentVersion(restored)! },
+    }
+    for (const tolerance of [60, 5, 100]) expectSameSelection(commit(rebound, tolerance), commit(clicked, tolerance))
+  })
+
+  it('selects the same from an unchanged copy of a 4K image, tagged with the new revision', () => {
+    const opened = open(screenshot4K())
+    const revised = edited(opened)
+    const before = click(opened, 3000, 2000, 'new')
+    const after = click(revised, 3000, 2000, 'new')
+    expect(sameMask(after.selection, before.selection)).toBe(true)
+    expect(after.lastMagicWandOperation!.version).toEqual(documentVersion(revised))
+    expect(revised.document!.pixels.data.buffer).not.toBe(opened.document!.pixels.data.buffer)
   })
 })
