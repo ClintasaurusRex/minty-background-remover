@@ -330,8 +330,8 @@ Decisions approved by the project owner after review of the Phase 3 architecture
 Phase 3 is implemented in twelve reviewed steps, each stopping for review:
 
 1. Record decisions; pixel buffer and revision model. Done.
-2. Delete algorithm (pure). (Implemented; awaiting review.)
-3. History building blocks: pixel patches, crop patches, selection encoding, byte accounting.
+2. Delete algorithm (pure). Done.
+3. History building blocks: pixel patches, crop patches, selection encoding, byte accounting. (Implemented; awaiting review.)
 4. Display image for edited pixels and render invalidation (verifies P3-D10).
 5. Edit history in the editor state.
 6. Delete Selection, Undo and Redo (first manual checkpoint).
@@ -352,7 +352,7 @@ The unsaved-edits warning (P3-D12) needs Undo / Redo (Step 6) to know whether ed
 - `canvas/imageData.ts`: `toImageData` hands a `PixelBuffer` to canvas APIs without copying. The import's display bitmap uses it; for imported pixels it returns the decoded `ImageData` itself, so import behaviour is unchanged.
 - Nothing calls `createEditedDocument` yet: the application looks and behaves exactly as at the end of Phase 2.
 
-#### Step 2: Delete Selection Algorithm (implemented; awaiting review)
+#### Step 2: Delete Selection Algorithm (done; approved)
 
 - `image/edit/deleteSelection.ts`: `deleteSelectedPixels(pixels, selection)` returns `{ pixels, count, bounds }` (the edited image, the number of pixels made transparent, and the smallest rectangle containing them), or null when nothing would change. Pure: no DOM, no canvas, no `ImageData`.
 - Every selected pixel gets alpha 0; only its alpha byte is written, so its colour stays hidden (P3-D2). Unselected pixels, and selected pixels that are already fully transparent, keep every byte; the latter are neither counted nor bounded.
@@ -377,6 +377,40 @@ Known limitations (Step 2):
 - The copy is the floor: even a small selection costs a whole-image copy (78 ms of the 84 ms at 50 MP). That is the approved copy-on-write trade-off (P3-D1).
 - Copying row by row and deleting while each row is still in cache measured about 10% faster at 50 MP (about 145 ms instead of 162 ms). It was not adopted, to keep `copyPixelData` as the single copy-on-write path; it remains an option if Step 6 browser measurements call for it.
 - While the edited image exists, the previous one is kept as well (one more image-sized buffer) until the editor lets go of it; Step 5 and Step 6 decide when that happens.
+
+#### Step 3: History Building Blocks (implemented; awaiting review)
+
+Pure modules in `editor/history/`, not yet used by the application (the production bundle does not include them):
+
+- `wordRuns.ts`: run-length encoding of 32-bit pixel values, shared by both patch kinds. Tokens SKIP (zeros), FILL (one repeated value) and LITERAL (values stored one by one); runs shorter than 3 are stored as literals, so an encoding never exceeds 4 bytes per value plus 4. Literal values keep only their alpha byte while every literal is alpha-only (always so for Delete): one byte per value, also while encoding. A validator checks the token structure, and the decoder also throws, rather than looping or reading past the end, on malformed input.
+- `pixelPatch.ts`: `createPixelPatch(before, after, region?)` stores old XOR new over a region (the Delete result's bounds, or the whole image), or returns null when nothing differs. `applyPixelPatch(pixels, patch)` returns a new buffer (one copy plus the changes); because XOR is its own inverse, the same patch turns the edited pixels back into the original and the original into the edited pixels, byte for byte, hidden colour included.
+- `cropPatch.ts`: `cropPixels(pixels, kept)`, `createCropPatch(original, kept)` (null when nothing is removed) and `restoreCroppedPixels(cropped, patch)`. The patch keeps the original size, the kept rectangle and every removed pixel once, in row order (rows above, each kept row's left and right parts, rows below), run-length encoded as raw RGBA. Not the Auto Trim algorithm: that finds the rectangle (Step 10).
+- `selectionCodec.ts`: `encodeSelection(mask | null)` stores only the bounds, as varint row runs or packed bits, whichever is smaller (never more than an eighth of the bounds' area in bytes); `decodeSelection` returns a new mask the caller owns and checks its count and bounds.
+- `historyBytes.ts`: `retainedBytes(payloads)` sums each distinct ArrayBuffer's full size plus estimated object overhead (256 bytes per payload and per array), counting shared buffers and repeated payloads once.
+- Patches and encoded selections refer to no document, revision or bitmap. Step 5 applies them to the current pixels and makes a new revision (`createEditedDocument`).
+- 53 tests: round trips in both directions on random images and edits (alpha only, colour only, all channels), hidden colour, single pixels, full images, scattered and contiguous changes, every edge and corner, regions of full rows and narrower ones, crops removing any combination of sides including 1-pixel images, sparse, dense, noisy, empty and full selections, ownership and immutability, malformed input of every kind, byte accounting with shared buffers and views, size bounds, and 4K and 50 MP cases. Twelve deliberately introduced defects were each caught.
+
+Measurements (Node 24, x64; each case in its own process; browser timings come with Undo / Redo in Step 6):
+
+| 50 MP (8660 × 5773) case | Stored | Create | Apply / restore | Peak above inputs |
+| --- | --- | --- | --- | --- |
+| Delete, background around an object, opaque photo or flat colour | 35 KB | 150 ms (88 ms in isolation) | 110 ms | none measurable |
+| Delete, same, anti-aliased (partly transparent) edge | 97 KB | 152 ms | 113 ms | none measurable |
+| Delete, every pixel a different alpha (worst Delete) | 47.7 MB (1 byte per pixel) | 444 ms | 142 ms | 149 MB |
+| Any edit changing every pixel differently (worst case) | 190.7 MB (4 bytes per pixel) | about 490 ms | 138 ms | 324 MB |
+| Crop removing 18 M pixels of transparent black or one colour | 0.8 KB | 27–35 ms | 56–76 ms | none measurable |
+| Crop removing 18 M pixels of a deleted photo background | 68.7 MB (4 bytes per pixel) | 170 ms | 80 ms | 170 MB |
+| Selection: background of an ellipse, full, sparse dots | 0–62 KB (runs) | 97 ms | 4–19 ms | none measurable |
+| Selection: text-like or noise | 6.0 MB (bits) | 116–135 ms | 107–114 ms | 17 MB |
+
+At 4K (3840 × 2400) the same cases take about a fifth of the time: a background Delete patch is 15–42 KB, created in 30 ms and applied in 25 ms; a selection encodes in 20–31 ms.
+
+Known limitations (Step 3):
+
+- An edit that changes many pixels in different ways costs up to 4 bytes per changed pixel: a whole 50 MP image changed arbitrarily makes a 191 MB entry, and creating it briefly needs about 1.7 times that. Delete costs at most 1 byte per deleted pixel (48 MB at 50 MP, when every alpha differs), and a crop of a varied (for example photographic) background 4 bytes per removed pixel. Typical Delete and Auto Trim entries are kilobytes. Such large entries are what the 256 MB budget and the "keep the newest entry" rule (P3-D8, Step 5) are for.
+- Patches hold pixel values in the platform's byte order. History lives only in memory, so this never matters; it would if history were ever saved.
+- At 50 MP a Delete with Undo will cost about 0.15 s for the patch and 0.1 s to encode the selection, on top of the Delete itself (Node). Reading the mask four bytes at a time measured about a third faster, and a Delete patch could be built from the selection instead of comparing whole images; both are left for the Step 12 performance review, if browser measurements call for them.
+- Undo of a Magic Wand Add or Subtract click must also keep the selection from before that click (`MagicWandOperation.base`); Step 5 stores it as an encoded selection too.
 
 ---
 

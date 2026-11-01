@@ -236,7 +236,28 @@ src/
                                    (pure; not yet called by the application)
 ```
 
-Planned for later steps (subject to review at each step): `image/edit/` (edge band, cleanup, feather), `image/trim/autoTrim.ts`, `editor/history/` (pixel and crop patches, mask codec, bounded history), `editor/editCommands.ts`, `canvas/displayImage.ts` (the display image for an edited revision) and edit shortcuts.
+Step 3 (history building blocks):
+
+```text
+src/editor/history/
+├── wordRuns.ts        run-length encoding of 32-bit pixel values (SKIP / FILL / LITERAL tokens;
+│                      alpha-only literals kept as one byte), validation, decoder
+├── pixelPatch.ts      createPixelPatch (old XOR new over a region, or null), applyPixelPatch
+│                      (the same patch undoes and redoes)
+├── cropPatch.ts       cropPixels, createCropPatch (removed pixels in row order), restoreCroppedPixels
+├── selectionCodec.ts  encodeSelection / decodeSelection (varint row runs or packed bits)
+├── historyBytes.ts    retainedBytes: distinct buffers plus object estimates
+└── geometry.ts        rectangle and dimension validation
+```
+
+Contract for the Undo / Redo history (Step 5), which builds on these without changing them:
+
+- An entry holds one patch (`PixelPatch` for same-size edits, `CropPatch` for crops), the selection from before the edit (`EncodedSelection | null`, plus the recorded Magic Wand click with its own `base` mask encoded) and the selection after it. It never holds a pixel buffer, a document, a revision number or an `ImageBitmap`.
+- Undo of a pixel patch: `applyPixelPatch(current.pixels, patch)`; Redo: the same call on the pixels Undo produced. Undo of a crop: `restoreCroppedPixels(current.pixels, patch)`; Redo: `cropPixels(current.pixels, patch.kept)`. Each result becomes a new revision through `createEditedDocument`, the selection comes back through `decodeSelection`, and the restored Magic Wand click is rebound to the new version.
+- All of this is pixel work, done in commands outside the reducer. The reducer only checks the version and that the entry is the one on top.
+- The history's size is `retainedBytes` over the payloads of all its entries, so anything shared between entries is counted once.
+
+Planned for later steps (subject to review at each step): `image/edit/` (edge band, cleanup, feather), `image/trim/autoTrim.ts`, `editor/history/` (bounded history), `editor/editCommands.ts`, `canvas/displayImage.ts` (the display image for an edited revision) and edit shortcuts.
 
 Key rules:
 

@@ -740,7 +740,11 @@ Approved for Phase 3:
 - History covers image edits, not individual selection changes (P3-D7).
 - At most 25 entries and 256 MB of history data; oldest entries are dropped first, and the newest entry is always kept even if it alone exceeds the budget (P3-D8).
 - Undo and Redo produce new revisions (see Pixel Buffers and Revisions); they never reuse a revision number.
-- History never holds full-image snapshots or display bitmaps. The planned representation (Phase 3 Step 3) is a compact patch per edit: which pixels changed and their old XOR new values, run-length encoded, so one patch serves Undo and Redo; a size change such as Auto Trim keeps the kept rectangle and the removed borders exactly; selections are stored as row runs or packed bits.
+- History never holds full-image snapshots or display bitmaps. Each edit is a compact patch (implemented in Phase 3 Step 3, `editor/history/`):
+  - Same-size edits (Delete Selection, later cleanup and colour tools): old XOR new for every pixel of the changed region, run-length encoded. Unchanged pixels and pixels changed the same way form runs; other values are stored one by one, with only their alpha byte when only alpha changed. XOR is its own inverse, so one patch serves Undo and Redo, and every byte is restored exactly, hidden colour included.
+  - Size changes (Auto Trim): the original size, the kept rectangle and every removed pixel once, in row order, run-length encoded as raw RGBA, hidden colour included.
+  - Selections: only their bounds, as varint row runs or packed bits, whichever is smaller.
+  - Size: a typical background Delete patch is tens of kilobytes even at 50 MP, and a crop of a transparent or single-colour border under a kilobyte. The worst cases are 1 byte per deleted pixel (every alpha different), 4 bytes per changed pixel for arbitrary edits, and 4 bytes per removed pixel for a crop of a varied background: up to about 191 MB for a whole 50 MP image. Measurements are in `IMPLEMENTATION_PLAN.md` (Phase 3 Step 3).
 
 ---
 
