@@ -214,7 +214,7 @@ As implemented (Step 8):
 - At 100% zoom and above, the tint and boundary follow exactly the image pixels as drawn, and the pixels a click would pick. Zoomed out, where one screen pixel covers several image pixels, a screen pixel shows the selection when any pixel it covers is selected, so even a single selected pixel stays visible.
 - The overlay lets every pointer event through to the image, and is hidden from assistive technology; the status bar describes the selection in words.
 
-As implemented (Step 11, awaiting manual review):
+As implemented (Step 11):
 
 - Marching ants: the boundary is drawn with diagonal black and white stripes, four CSS pixels wide, which step about one CSS pixel every 150 ms. Along horizontal and vertical edges they form four-pixel dashes that move steadily right or down, without changing shape; a full cycle takes 1.2 seconds. As with the static pattern, the two sides of an edge take opposite colours and both colours run along every edge, so the boundary stays visible on white, black, transparent and detailed images.
 - Only the boundary moves. The tint, which pixels are boundary, and the selection itself never change from step to step, and the pattern stays anchored to the image while zooming and panning.

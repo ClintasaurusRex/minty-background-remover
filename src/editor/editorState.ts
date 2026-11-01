@@ -48,6 +48,14 @@ export interface EditorState {
   readonly viewport: ViewportState | null
   /** Null until the workspace has been measured. */
   readonly workspace: WorkspaceMetrics | null
+  /**
+   * Whether the next workspace resize places the image again, as when it was opened,
+   * instead of keeping its centre. Set by the import that first makes a tool active:
+   * that tool's options row then appears above the workspace and makes it smaller, and
+   * an image fitted to the workspace without the row would be too large for it (or
+   * overflow it where the row wraps). Cleared by that resize and by any change of view.
+   */
+  readonly placeOnNextResize: boolean
   /** The most recent import still in progress. Results of any other import are stale. */
   readonly pendingImportId: number | null
   /** The last import failure, shown until dismissed or the next import starts. */
@@ -208,6 +216,7 @@ export const initialEditorState: EditorState = {
   documentBitmap: null,
   viewport: null,
   workspace: null,
+  placeOnNextResize: false,
   pendingImportId: null,
   importError: null,
   pan: null,
@@ -250,6 +259,9 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         document: result.document,
         documentBitmap: result.bitmap,
         viewport: initialViewport(result.document, state.workspace),
+        // The first image makes the Magic Wand active, and its options row is about to
+        // take room from the workspace.
+        placeOnNextResize: state.activeTool === null,
         pendingImportId: null,
         importError: null,
         pan: null,
@@ -296,7 +308,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'pan-drag-started':
       if (!state.viewport || !state.document) return state
-      return { ...state, pan: { origin: state.viewport, delta: { x: 0, y: 0 } } }
+      return { ...state, pan: { origin: state.viewport, delta: { x: 0, y: 0 } }, placeOnNextResize: false }
 
     case 'pan-dragged': {
       const { pan } = state
@@ -432,7 +444,7 @@ function withViewport(
   if (next.zoom === viewport.zoom && next.offset.x === viewport.offset.x && next.offset.y === viewport.offset.y) {
     return state
   }
-  return { ...state, viewport: next, pan: rebasePan(state.pan, next) }
+  return { ...state, viewport: next, pan: rebasePan(state.pan, next), placeOnNextResize: false }
 }
 
 /**
@@ -456,13 +468,14 @@ function resizeWorkspace(state: EditorState, workspace: WorkspaceMetrics): Edito
   }
 
   let viewport = state.viewport
-  if (viewport && previous && state.document) {
+  if (viewport && previous && state.document && !state.placeOnNextResize) {
     viewport = keepImageReachable(resizeViewport(viewport, previous.size, workspace.size), state.document, workspace.size)
   } else if (state.document) {
-    // The image arrived before the workspace had a usable size.
+    // The image arrived before the workspace had a usable size, or was placed for the
+    // workspace as it was before the first tool's options row appeared.
     viewport = initialViewport(state.document, workspace)
   }
-  return { ...state, workspace, viewport, pan: rebasePan(state.pan, viewport) }
+  return { ...state, workspace, viewport, pan: rebasePan(state.pan, viewport), placeOnNextResize: false }
 }
 
 /** Initial placement: fit larger images, show smaller ones at 100%, centred. */

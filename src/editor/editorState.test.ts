@@ -54,6 +54,7 @@ describe('editorReducer: imports', () => {
       documentBitmap: null,
       viewport: null,
       workspace: null,
+      placeOnNextResize: false,
       pendingImportId: null,
       importError: null,
       pan: null,
@@ -192,14 +193,84 @@ describe('editorReducer: workspace size', () => {
       measured,
       { type: 'import-started', importId: 1 },
       { type: 'import-finished', importId: 1, result: succeeded(3840, 2160) },
+      // The Magic Wand options row appears.
+      { type: 'workspace-resized', workspace: { size: { width: 1000, height: 561 }, devicePixelRatio: 1 } },
     )
     const state = reduce(opened, {
       type: 'workspace-resized',
-      workspace: { size: { width: 1200, height: 700 }, devicePixelRatio: 1 },
+      workspace: { size: { width: 1200, height: 661 }, devicePixelRatio: 1 },
     })
     expect(state.viewport!.zoom).toBe(opened.viewport!.zoom)
     expect(state.viewport!.offset.x).toBeCloseTo(opened.viewport!.offset.x + 100, 9)
     expect(state.viewport!.offset.y).toBeCloseTo(opened.viewport!.offset.y + 50, 9)
+  })
+
+  describe('when the first image makes the options row appear', () => {
+    // The Magic Wand options row takes 39 CSS px from the workspace, or 75 px where it wraps.
+    const withRow = (height: number): EditorAction => ({
+      type: 'workspace-resized',
+      workspace: { size: { width: WORKSPACE.size.width, height }, devicePixelRatio: 1 },
+    })
+    const firstImage = (width: number, height: number, from: EditorState = measured) =>
+      reduce(from, { type: 'import-started', importId: 1 }, { type: 'import-finished', importId: 1, result: succeeded(width, height) })
+    const fitted = (state: EditorState) => reduce(state, { type: 'zoom-fitted' }).viewport
+
+    it('places the image again for the smaller workspace, exactly as Fit does', () => {
+      for (const rowHeight of [39, 75]) {
+        const opened = firstImage(3840, 2400)
+        expect(opened.placeOnNextResize).toBe(true)
+        const state = reduce(opened, withRow(600 - rowHeight))
+        expect(state.placeOnNextResize).toBe(false)
+        expect(state.viewport).toEqual(fitted(state))
+        // Fitted with the 24 px margin, so it never overflows the workspace.
+        const { zoom, offset } = state.viewport!
+        expect(offset.y).toBe(24)
+        expect(offset.y + 2400 * zoom).toBeLessThanOrEqual(600 - rowHeight - 24 + 1e-9)
+      }
+    })
+
+    it('centres an image shown at 100% exactly as Fit does, with no half-pixel shift', () => {
+      // A 39 px row would shift a centred image by 19.5 px, rounded once on import and once on display.
+      const opened = firstImage(400, 201, reduce(initialEditorState, withRow(601)))
+      const state = reduce(opened, withRow(562))
+      expect(state.viewport).toEqual(fitted(state))
+      expect(displayViewport(state)).toEqual(state.viewport)
+    })
+
+    it('keeps the centre on later resizes', () => {
+      const state = reduce(firstImage(3840, 2400), withRow(561))
+      const resized = reduce(state, withRow(461))
+      expect(resized.viewport!.zoom).toBe(state.viewport!.zoom)
+      expect(resized.viewport!.offset.y).toBeCloseTo(state.viewport!.offset.y - 50, 9)
+    })
+
+    it('keeps the centre for later images, as the row is already shown', () => {
+      let state = reduce(firstImage(400, 200), withRow(561))
+      state = reduce(state, { type: 'import-started', importId: 2 }, { type: 'import-finished', importId: 2, result: succeeded(3840, 2400) })
+      expect(state.placeOnNextResize).toBe(false)
+      const resized = reduce(state, withRow(461))
+      expect(resized.viewport!.zoom).toBe(state.viewport!.zoom)
+      expect(resized.viewport!.offset.y).toBeCloseTo(state.viewport!.offset.y - 50, 9)
+    })
+
+    it('keeps a view changed before the resize', () => {
+      for (const change of [
+        { type: 'zoom-stepped', direction: 1 },
+        { type: 'wheel-panned', delta: { x: 0, y: 30 } },
+        { type: 'pan-drag-started' },
+      ] satisfies EditorAction[]) {
+        const state = reduce(firstImage(3840, 2400), change)
+        expect(state.placeOnNextResize).toBe(false)
+        const resized = reduce(state, withRow(561))
+        expect(resized.viewport!.zoom).toBe(state.viewport!.zoom)
+        expect(resized.viewport!.offset.y).toBeCloseTo(state.viewport!.offset.y - 19.5, 9)
+      }
+    })
+
+    it('is not set by a failed import', () => {
+      const state = reduce(measured, { type: 'import-started', importId: 1 }, { type: 'import-finished', importId: 1, result: failed })
+      expect(state.placeOnNextResize).toBe(false)
+    })
   })
 
   it('returns the same state when nothing changed', () => {
@@ -252,13 +323,15 @@ describe('displayViewport', () => {
       { type: 'workspace-resized', workspace: { size: { width: 1000, height: 600 }, devicePixelRatio: 1.5 } },
       { type: 'import-started', importId: 1 },
       { type: 'import-finished', importId: 1, result: succeeded(401, 201) },
+      // The Magic Wand options row appears.
+      { type: 'workspace-resized', workspace: { size: { width: 1000, height: 561 }, devicePixelRatio: 1.5 } },
     )
     const start = state.viewport!
     for (let i = 0; i < 50; i++) {
       const width = i % 2 === 0 ? 1000.4 : 1000
       state = reduce(state, {
         type: 'workspace-resized',
-        workspace: { size: { width, height: 600 }, devicePixelRatio: 1.5 },
+        workspace: { size: { width, height: 561 }, devicePixelRatio: 1.5 },
       })
     }
     expect(state.viewport!.offset.x).toBeCloseTo(start.offset.x, 9)

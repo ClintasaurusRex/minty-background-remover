@@ -185,6 +185,28 @@ Later Phase 2 steps add colour distance, the Magic Wand, combine / invert / grow
 - Marching ants (Step 11) run outside React: no state changes, renders or effects per step. `canvas/marchingAnts.ts` decides when a step is due (a timer, then one animation frame) and calls the renderer's `setPattern`; the component only creates both, feeds them the `prefers-reduced-motion` media query and `visibilitychange`, and disposes them on unmount, so a remount (React Strict Mode) never leaves a second loop running.
 - A boundary pattern change never rasterises again or reads the selection. When a tile is rasterised it keeps where its boundary is (`OverlayBoundary`: one bit per device pixel for "boundary" and one for "selected", only for the rows and 32-pixel columns holding boundary pixels, at most 16 KB a tile). A step repaints only the boundary area of the visible tiles that have one: once a tile's area pixels are kept, a step flips the quarter of its boundary pixels where the stripes move, uploads the area to the tile canvas (`putImageData` with a dirty rectangle) and copies just that area to the overlay canvas. Tiles without boundary (inside or outside the selection) and the tint are never touched, and the number of canvas calls per step is three per visible boundary tile, however many edges the selection has.
 - Tiles kept out of view are brought up to date when they come back into view; new tiles are rasterised in the current phase.
+- Both canvases skip a frame identical to the last one they drew (Step 12). The overlay renderer compares the selection and the tile placement; `workspaceRenderer` compares the bitmap and the frame plan (`sameFramePlan` in `canvas/rendering.ts`). React renders that do not move the view (a click, a selection action, an option, every tolerance slider movement) therefore never draw the image again.
+- The first image of a session makes the Magic Wand active, so the options row appears above the workspace in the same commit and the workspace shrinks just after the image was placed. That import sets `placeOnNextResize`, and the resize it causes places the image again (`initialViewport`) instead of keeping its centre; any change of view clears it. Later images find the row already shown (Step 12).
+
+#### Final Phase 2 data flow
+
+```text
+pointer / key / button
+  → selectionCommands (pure; Magic Wand, combine, grow / shrink / invert computed here,
+    tagged with the document version)
+  → editorReducer (accepts or discards: version, size, recorded operation, Add / Subtract base)
+  → App render
+      → ImageCanvas → workspaceRenderer (skips unchanged frames)
+      → SelectionOverlayCanvas → planSelectionOverlay → selectionOverlayRenderer (tiles,
+        boundary geometry) ← marchingAnts (timer → frame → setPattern, outside React)
+      → StatusBar (count, bounds, announcement), ToolOptions (availability, tolerance)
+```
+
+Everything is synchronous on the main thread; no Web Workers (see Web Workers).
+
+#### Test coverage (end of Phase 2)
+
+Vitest, Node environment, 706 tests in 39 files. Pixel algorithms are tested against character-map fixtures (`image/selection/testFixtures.ts`) and brute-force references: colour distance boundaries; Contiguous and Global wands (four-connectivity, narrow and winding one-pixel corridors, large images without recursion, a breadth-first reference on random images); combine, invert, grow and shrink; the mask builder. Editor state, commands and tolerance input are tested as pure reducers and functions, including stale-version, replay and placement cases. The overlay rasteriser is compared with a per-pixel reference rasteriser over a range of zoom levels, line widths and tiles, at every marching-ants phase, and both renderers run against fake canvases that count drawing calls. Components are rendered to static markup. Browser behaviour (hit-testing against what the browser draws, the overlay against a fresh render, timing, memory) is checked with headless Chrome and Firefox scripts kept outside the repository (see `IMAGE_PROCESSING_SPEC.md`, Final Phase 2 Measurements).
 
 ---
 

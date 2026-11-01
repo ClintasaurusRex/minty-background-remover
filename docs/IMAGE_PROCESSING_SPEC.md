@@ -248,7 +248,7 @@ Step 7 browser measurements (whole pointer-down handling: Magic Wand, combine an
 - 4K noisy image where one click selects all 8.3 million pixels: about 55–70 ms in both browsers.
 - Each mask is one byte per pixel (8.3 MB at 4K). A New click replaces the selection with the Magic Wand result; Add and Subtract briefly hold that result and the combined mask alongside the current selection.
 
-Near the 50-megapixel limit the main thread can block noticeably. How to respond (time-slicing on the main thread or a Web Worker) is an open owner decision, to be made with real images at the Step 7 checkpoint.
+Near the 50-megapixel limit the main thread can block noticeably. How to respond (time-slicing on the main thread or a Web Worker) is an open owner decision, to be made with real images at the Step 7 checkpoint. Step 12 measured 0.15–0.4 s per operation at 50 megapixels (Final Phase 2 Measurements, below) and recommends keeping the work synchronous for Phase 2 and re-evaluating in Phase 3 (`IMPLEMENTATION_PLAN.md`, Phase 2 Step 12).
 
 ### Tolerance Re-apply
 
@@ -326,6 +326,89 @@ Cost of one step (JavaScript time of the renderer, overlay pipeline alone):
 - Firefox: 3–7 ms and 6–10 ms for screenshot-like selections, 8–11 ms and 18–25 ms for noise-like ones. Firefox has a floor of about 2–3 ms at ratio 1 and 6 ms at ratio 2 even for a single selected pixel (apparently the copy of the whole overlay canvas after the compositor has shown it; its pan frames show the same floor since Step 8). Steps over 7.5 ms are spaced out by the budget, so in Firefox at ratio 2 noise-like boundaries step every 360–500 ms instead of 150 ms.
 
 Effect on the rest of the overlay (Step 10 → Step 11, Chrome software rendering, which varies least between runs): a selection change or zoom step costs about the same for screenshot-like and large connected selections (0–3 ms, up to about 10% more), and 5–20% more for noise-like ones (for example 18.6 → 21.9 ms at ratio 1 and 57.8 → 66.3 ms at ratio 2 for 50% noise at 100%), mainly because tiles are now rasterised in two passes (boundary geometry, then colours) so that the geometry can be kept; Firefox is similar. Pan frames are unchanged.
+
+### Final Phase 2 Measurements (Step 12)
+
+Production build with the Step 12 fixes, headless Chrome 156 (default software rendering and `--enable-gpu`) and Firefox 158, i7-14700HX (the machine of Steps 3–8 and 11), device pixel ratio 1, 1920 × 1200 window, image fitted unless stated. Times are whole interactions as in Steps 7 and 8: from the event to the end of its handling, including the selection work, the React commit and the overlay drawing, excluding paint. Medians (maximum in brackets where it differs noticeably). Firefox reports whole milliseconds.
+
+| Image (selection) | Operation | Chrome | Chrome GPU | Firefox |
+| --- | --- | --- | --- | --- |
+| Technical graphic 800 × 600, transparent background (0.35 MP) | Contiguous click | 2.2 ms | 2.2 ms | 4 ms |
+| | Global click | 6.7 ms | 7.2 ms | 9 ms |
+| | Re-apply (New / Add) | 4.6 / 6.0 ms | 4.6 / 5.2 ms | 9 / 8 ms |
+| | Grow, Shrink, Invert | 8–17 ms | 7–13 ms | 5–8 ms |
+| Screenshot 1280 × 800 (0.70 MP background) | Contiguous click | 2.1 ms | 2.6 ms | 4 ms |
+| | Re-apply (New / Add) | 8.2 / 6.6 ms | 8.2 / 6.3 ms | 17 / 10 ms |
+| | Grow, Shrink, Invert | 11–22 ms | 10–15 ms | 7–11 ms |
+| Photograph 4032 × 3024 JPEG (4.7 MP sky) | Contiguous click | 49 ms | 46 ms | 55 ms |
+| | Global click | 109 ms (180) | 82 ms (152) | 76 ms |
+| | Re-apply (New / Add, 10 MP) | 52 / 90 ms | 51 / 117 ms (194) | 59 / 72 ms |
+| | Grow, Shrink, Invert | 25–102 ms | 25–53 ms | 23–30 ms |
+| 4K screenshot 3840 × 2400 | Contiguous click (0.05–6.3 MP) | 4.5 ms (37) | 4.8 ms (36) | 6 ms (45) |
+| | Global click (2.5 MP) | 58 ms | 61 ms | 56 ms |
+| | Invert, Select All (9.2 MP) | 18–27 ms | 15–26 ms | 19–26 ms |
+| 4K noisy image 3840 × 2160 (all 8.3 MP) | Contiguous click | 66 ms | 66 ms | 70 ms |
+| | Global click, tolerance 2 (1.5 MP fragmented) | 89 ms | 88 ms | 91 ms |
+| | Re-apply | 65–66 ms | 65 ms | 63–68 ms |
+| 50 MP 8660 × 5773, background with 1 million dots as holes (36 MP) | Contiguous click | 230 ms | 232 ms | 254 ms |
+| | Global click | 199 ms | 211 ms | 201 ms |
+| | Re-apply (New / Add, 49 MP) | 227 / 202 ms (293) | 226 / 182 ms | 253 / 161 ms (188) |
+| | Grow, Shrink | 181–182 ms | 179–181 ms | 135–137 ms |
+| | Invert, Select All | 46–238 ms | 46–281 ms | 51–103 ms |
+| 50 MP at the side limit 16384 × 3051 (15 MP) | Contiguous click | 56 ms | 48 ms | 57 ms |
+| | Global click (35 MP) | 197 ms | 201 ms | 185 ms |
+| | Invert (35 MP / 15 MP) | 164 / 271 ms | 200 / 382 ms | 76 / 91 ms |
+
+Navigation with a selection on screen (same cases):
+
+- Zoom In / Out buttons: 1–13 ms up to 4K in Chrome (12–21 ms in Firefox), 21–23 ms at 50 MP (39 ms in Firefox).
+- Main-thread time per wheel event (Chrome): panning 2.6–4.4 ms with software rendering and 1.3–2.3 ms with GPU rendering, whatever the image size; Ctrl + wheel zoom, which rasterises the visible overlay tiles again, 4–15 ms up to 4K and 11–23 ms at 50 MP.
+
+Comparison with earlier steps (same machine and browsers, where the cases match):
+
+- 4K screenshot clicks: 2–7 ms (Chrome) and 7–16 ms (Firefox) in Step 7, 4.5 ms and 6 ms (medians) now. Clicks selecting all 8.3 million pixels of the noisy 4K image: 55–70 ms in Step 7, plus 12–14 ms for the overlay in Step 8; 66–70 ms now.
+- 50 MP background clicks: 210–430 ms in Step 8 (with the overlay); 230–254 ms now.
+- Grow and Shrink at 50 MP: 90–125 ms for the algorithm in Step 5 (126 ms in Node now, unchanged); 135–182 ms as whole interactions including the overlay.
+- Step 10's re-apply figures were measured on a slower cloud machine and cannot be compared directly; on this machine a re-apply costs the same as the click it repeats, as designed.
+- The marching ants (idle overhead below) and Step 12 changed none of the selection algorithms.
+
+What is slow at 50 megapixels: in Node the algorithms alone take 210 ms (Contiguous or Global over 50 MP), 126 ms (Grow, Shrink), 53 ms (Add, Invert) and 16 ms (Select All). In the browser, rasterising the overlay for a large new selection adds 40–50 ms (Step 8), and allocating 50 MB masks sometimes triggers a garbage collection, which is why the same Invert takes 140 ms once and 240–380 ms another time in Chrome. No measured interaction exceeded 0.4 s; the Step 3 synthetic worst cases (random noise and one-pixel mazes filling 50 MP) reach about 0.9 s. Up to 12-megapixel photographs and 4K screenshots, interaction medians stay at or below about 120 ms; single slower runs on the photograph reached 150–194 ms.
+
+Redundant image redraws (fixed in Step 12): before Step 12 every React render drew the whole image again, although only the view changes it. Since Phase 2 that includes every click, selection action, option change and tolerance slider movement. Skipping frames identical to the last one (`ARCHITECTURE.md`, Phase 2 Modules) leaves main-thread time unchanged in Chrome, which rasterises canvases elsewhere, but removes that raster work from the input path. Measured with 20 tolerance slider steps (nothing to re-apply) and the image fitted, keydown to keyup:
+
+| | Before | After |
+| --- | --- | --- |
+| Chrome software rendering, ratio 1 (4K / 50 MP) | 19 / 19 ms | 3.0 / 3.1 ms |
+| Chrome software rendering, ratio 2 | 43 / 62 ms | 5.4 / 5.3 ms |
+| Chrome GPU rendering, ratio 1 | 2.1 / 2.5 ms | 2.3 / 3.1 ms |
+| Firefox, ratio 1 | 14 / 13 ms | 6 / 5 ms |
+| Firefox, ratio 2 | 24 / 28 ms | 4 / 5 ms |
+
+In Firefox the redraw also ran inside the event: a 4K Magic Wand click took 27 → 20 ms (ratio 1) and 46 → 29 ms (ratio 2).
+
+Memory (Chrome, JavaScript heap plus array buffers after garbage collection, measured after two further renders so that React no longer holds the state of its previous render; one mask is 9.2 MB for the 3840 × 2400 screenshot):
+
+- An image open with nothing selected is the baseline. A New click adds 1.4 masks: the mask, its zoomed-out packed copy (one eighth) and the visible tiles' boundary-area pixels kept for the ants.
+- Ten re-applies of a New click: still 1.4 masks. An Add click and ten re-applies: 2.5 masks (the selection and the base it was added to). A Subtract that removed nothing returns the existing mask, so nothing is added. Grow, Shrink and Invert end re-applying and the base is dropped: 1.4 masks.
+- Escape: back to the baseline (+0.1 mask). Six image replacements, each with Add clicks and re-applies, then the first image again: back to the baseline (+0.1 mask). Previous documents, bitmaps, masks and tile caches are released.
+- Without the extra renders, React keeps the selection (and after an import, the previous image) of its previous render until it renders again: one more of each at most, never accumulating.
+- At 50 megapixels (8660 × 5773, one mask 50 MB, pixels 200 MB) the same sequence gives the same picture: a background click adds 1.2 masks (the mask, its 6.25 MB packed copy, the ants' areas), ten re-applies add nothing, and after six replacements by 50-megapixel images with clicks and re-applies the memory is back at the baseline (+1 MB).
+
+Main-thread time while idle with a selection on screen and the marching ants running (Chrome `TaskDuration` over 6 s, 1920 × 1080 window, the Step 11 method and cases plus the photograph):
+
+| Selection (view) | Software, DPR 1 | Software, DPR 2 | GPU, DPR 1 | GPU, DPR 2 |
+| --- | --- | --- | --- | --- |
+| 1280 × 800 screenshot background (Fit) | 18 ms/s | 39 ms/s | 9 ms/s | 15 ms/s |
+| Same, 200% | 19 ms/s | 31 ms/s | 7 ms/s | 11 ms/s |
+| 3840 × 2400 screenshot background (Fit) | 22 ms/s | 39 ms/s | 9 ms/s | 12 ms/s |
+| Photograph 4032 × 3024, sky (Fit) | 15 ms/s | 35 ms/s | 8 ms/s | 11 ms/s |
+| Same, 100% | 16 ms/s | 40 ms/s | 6 ms/s | 13 ms/s |
+| 4K noisy image, everything selected (Fit) | 18 ms/s | 35 ms/s | 9 ms/s | 13 ms/s |
+| 4K noisy image, fragmented Global selection (100%) | 48 ms/s | 71 ms/s | 32 ms/s | 48 ms/s |
+| 50 MP, background with a million dots as holes (Fit) | 20 ms/s | 37 ms/s | 9 ms/s | 16 ms/s |
+| Same, 100% inside an unselected area (no boundary in view) | 0.1 ms/s | 0.1 ms/s | 0.1 ms/s | 0.1 ms/s |
+
+With reduced motion, or without a selection, every case measured 0.0–1.1 ms/s: nothing runs. The ants take about 1.5–2% of the main thread for ordinary selections with software rendering at ratio 1, 3–4% at ratio 2, and under 1–1.5% with GPU rendering; fragmented selections stay within the 5% step budget for script time (29–46 ms/s), plus compositing. These values are lower than the Step 11 table, but the Step 11 build measured now with the same script gives the same values as Step 12 (software 15–23 ms/s and GPU 7–11 ms/s at ratio 1 for the same cases), so the difference comes from the measuring conditions of that session, not from a change in the app. Interaction latency while the ants run, timer counts and memory were checked as well: at most one step is ever pending, none after Escape, after image replacements or while the page is hidden (including a real tab switch in Chrome), and steps continue every 150 ms after rapid clicks, zoom changes and re-applies.
 
 ---
 

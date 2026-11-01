@@ -96,6 +96,7 @@ The workspace should:
 - Display transparency using a checkerboard pattern.
 - Centre images initially.
 - Initially fit images larger than the viewport; show smaller images at 100%.
+- Place every image, including the first one of a session, exactly as Fit would: the first image makes the Magic Wand options row appear above the workspace, and the image is placed again for the smaller workspace that leaves (Phase 2 Step 12). Later window resizes keep the image's centre and zoom.
 - Support zooming.
 - Support panning.
 - Handle images larger than the viewport.
@@ -224,7 +225,7 @@ Visual selection effects must not modify the image pixels themselves.
 
 The overlay shows the current selection however it was made (Contiguous or Global; New, Add or Subtract; Select All) and disappears when the selection is cleared. Separate regions and holes each get their own boundary. Zoom, pan, window resizing and changes of display scaling redraw it in place; they never change the selection. Its appearance is specified in `UI_UX_SPEC.md` (Selection UX).
 
-Marching ants (Step 11, implemented, awaiting manual review): the boundary's black and white pattern moves slowly along it, while the tint and the selection stay still. It is static when reduced motion is requested, and pauses when nothing is selected, no boundary is in view, the page is hidden, or the boundary in view is too large to repaint cheaply (`UI_UX_SPEC.md`, Selection UX). There is no user setting for it.
+Marching ants (Step 11): the boundary's black and white pattern moves slowly along it, while the tint and the selection stay still. It is static when reduced motion is requested, and pauses when nothing is selected, no boundary is in view, the page is hidden, or the boundary in view is too large to repaint cheaply (`UI_UX_SPEC.md`, Selection UX). There is no user setting for it.
 
 ---
 
