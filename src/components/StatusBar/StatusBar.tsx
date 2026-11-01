@@ -1,21 +1,50 @@
+import { useSyncExternalStore } from 'react'
+import type { PointerPositionStore } from '../../app/pointerPosition'
+import { pixelUnderPointer } from '../../canvas/coordinates'
 import { MAX_ZOOM, MIN_ZOOM } from '../../canvas/viewport'
-import { formatDimensions, formatFileSize, formatLabel, formatZoom } from '../../editor/documentInfo'
-import type { ImageDocument } from '../../editor/types'
+import {
+  describeSelection,
+  formatDimensions,
+  formatFileSize,
+  formatLabel,
+  formatPixelPosition,
+  formatSelection,
+  formatZoom,
+} from '../../editor/documentInfo'
+import { TOOLS } from '../../editor/tools'
+import type { ImageDocument, SelectionMask, ToolId, ViewportState } from '../../editor/types'
 import { FitIcon, ZoomInIcon, ZoomOutIcon } from '../icons/icons'
 import './StatusBar.css'
 
 interface StatusBarProps {
   document: ImageDocument | null
-  /** Current zoom (1 = 100%), or null when no image is shown. Zoom controls are disabled then. */
-  zoom: number | null
+  /** The display (snapped) viewport, or null when no image is shown. Zoom controls are disabled then. */
+  viewport: ViewportState | null
+  devicePixelRatio: number
+  activeTool: ToolId | null
+  selection: SelectionMask | null
+  pointer: PointerPositionStore
   onZoomIn: () => void
   onZoomOut: () => void
   onFit: () => void
   onActualSize: () => void
 }
 
-export function StatusBar({ document, zoom, onZoomIn, onZoomOut, onFit, onActualSize }: StatusBarProps) {
+export function StatusBar({
+  document,
+  viewport,
+  devicePixelRatio,
+  activeTool,
+  selection,
+  pointer,
+  onZoomIn,
+  onZoomOut,
+  onFit,
+  onActualSize,
+}: StatusBarProps) {
+  const zoom = viewport?.zoom ?? null
   const zoomText = zoom === null ? null : formatZoom(zoom)
+  const toolLabel = TOOLS.find((tool) => tool.id === activeTool)?.label ?? 'None'
 
   return (
     <footer className="status-bar">
@@ -27,16 +56,29 @@ export function StatusBar({ document, zoom, onZoomIn, onZoomOut, onFit, onActual
             </span>
             <span className="status-bar__divider" aria-hidden="true" />
             <span>{formatDimensions(document.width, document.height)}</span>
-            <span className="status-bar__divider" aria-hidden="true" />
-            <span>{formatLabel(document.format)}</span>
-            <span className="status-bar__divider" aria-hidden="true" />
-            <span>{formatFileSize(document.fileSizeBytes)}</span>
+            <span className="status-bar__divider status-bar__secondary" aria-hidden="true" />
+            <span className="status-bar__secondary">{formatLabel(document.format)}</span>
+            <span className="status-bar__divider status-bar__secondary" aria-hidden="true" />
+            <span className="status-bar__secondary">{formatFileSize(document.fileSizeBytes)}</span>
           </>
         ) : (
           <span>No image</span>
         )}
-        <span className="status-bar__divider" aria-hidden="true" />
-        <span>Tool: None</span>
+        <span className="status-bar__divider status-bar__tool" aria-hidden="true" />
+        <span className="status-bar__tool">Tool: {toolLabel}</span>
+        {document && (
+          <>
+            <span className="status-bar__divider" aria-hidden="true" />
+            {/* Announced when the selection changes, since it is not otherwise visible yet. */}
+            <span role="status" title={describeSelection(selection)}>
+              <span aria-hidden="true">{selection ? `Selection: ${formatSelection(selection)}` : 'No selection'}</span>
+              <span className="visually-hidden">{describeSelection(selection)}</span>
+            </span>
+            <span className="status-bar__divider" aria-hidden="true" />
+            {/* Last, so its changing width never moves the other items. */}
+            <PointerPixel pointer={pointer} viewport={viewport} devicePixelRatio={devicePixelRatio} document={document} />
+          </>
+        )}
       </div>
 
       <div className="status-bar__zoom" role="group" aria-label="Zoom">
@@ -82,5 +124,30 @@ export function StatusBar({ document, zoom, onZoomIn, onZoomOut, onFit, onActual
         </button>
       </div>
     </footer>
+  )
+}
+
+/**
+ * The image pixel under the pointer. It subscribes to the pointer position itself, so
+ * pointer movement re-renders only this readout. Not announced to assistive technology,
+ * which would be overwhelming.
+ */
+function PointerPixel({
+  pointer,
+  viewport,
+  devicePixelRatio,
+  document,
+}: {
+  pointer: PointerPositionStore
+  viewport: ViewportState | null
+  devicePixelRatio: number
+  document: ImageDocument
+}) {
+  const point = useSyncExternalStore(pointer.subscribe, pointer.get)
+  const pixel = point && viewport ? pixelUnderPointer(viewport, point, document, devicePixelRatio) : null
+  return (
+    <span className="status-bar__pointer" title="Image pixel under the pointer (x, y)">
+      Pixel: <span className="status-bar__pointer-value">{pixel ? formatPixelPosition(pixel) : '—'}</span>
+    </span>
   )
 }

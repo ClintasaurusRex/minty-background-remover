@@ -1,4 +1,4 @@
-import type { ImageFormat } from './types'
+import type { ImageFormat, PixelCoordinate, SelectionMask } from './types'
 
 /*
  * Text shown in the status bar.
@@ -40,4 +40,23 @@ function roundForDisplay(value: number): string {
 export function formatZoom(zoom: number): string {
   const percent = zoom * 100
   return percent < 10 ? `${roundForDisplay(percent)}%` : `${Math.round(percent)}%`
+}
+
+/** "120, 45": the image pixel under the pointer, column then row. */
+export function formatPixelPosition(pixel: PixelCoordinate): string {
+  return `${pixel.x.toLocaleString('en-CA')}, ${pixel.y.toLocaleString('en-CA')}`
+}
+
+/** "9,600 px · 120 × 80": the selected-pixel count and the size of the area containing them. */
+export function formatSelection(selection: SelectionMask): string {
+  const { count, bounds } = selection
+  return `${count.toLocaleString('en-CA')} px · ${bounds.width.toLocaleString('en-CA')} × ${bounds.height.toLocaleString('en-CA')}`
+}
+
+/** The same as formatSelection, in words for assistive technology and tooltips. */
+export function describeSelection(selection: SelectionMask | null): string {
+  if (!selection) return 'No selection'
+  const { count, bounds } = selection
+  const pixels = count === 1 ? 'pixel' : 'pixels'
+  return `${count.toLocaleString('en-CA')} ${pixels} selected, within ${formatDimensions(bounds.width, bounds.height)}`
 }

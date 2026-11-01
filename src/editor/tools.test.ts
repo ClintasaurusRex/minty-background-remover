@@ -13,4 +13,9 @@ describe('TOOLS', () => {
       expect(tool.description.trim()).not.toBe('')
     }
   })
+
+  it('makes the Magic Wand the first and only available tool in Phase 2', () => {
+    expect(TOOLS[0]).toMatchObject({ id: 'magic-wand', available: true })
+    expect(TOOLS.filter((tool) => tool.available).map((tool) => tool.id)).toEqual(['magic-wand'])
+  })
 })

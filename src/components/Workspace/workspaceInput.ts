@@ -13,6 +13,7 @@ import {
   type PanGestureEffect,
   type PanGestureEvent,
   idlePanGesture,
+  panOwnsPointerDown,
   updatePanGesture,
 } from '../../editor/panGesture'
 import type { Point } from '../../editor/types'
@@ -101,11 +102,16 @@ const IDLE: SpacePanState = { ready: false, dragging: false }
  * uses pointer capture, so it continues outside the workspace, and ends when Space
  * or the button is released, on cancellation, loss of capture, window blur, the
  * image closing or unmount.
+ *
+ * Panning has priority over tools: every other pointer press in the workspace (any
+ * button, outside controls) goes to `onToolPress`, but never one made while Space is
+ * held or a drag is in progress.
  */
 export function useSpacePan(
   workspaceRef: RefObject<HTMLElement | null>,
   enabled: boolean,
   onPanGesture: (effect: PanGestureEffect) => void,
+  onToolPress: (event: PointerEvent) => void,
 ): SpacePanState {
   const [state, setState] = useState<SpacePanState>(IDLE)
 
@@ -142,6 +148,8 @@ export function useSpacePan(
     }
     const onPointerDown = (event: PointerEvent) => {
       if (isInteractiveTarget(event.target)) return
+      // Decided before the press is applied, since the press itself may start a drag.
+      const forPanning = panOwnsPointerDown(gesture)
       const effect = apply({
         type: 'pointer-down',
         pointerId: event.pointerId,
@@ -151,6 +159,8 @@ export function useSpacePan(
       if (effect?.type === 'drag-started') {
         event.preventDefault()
         workspace.setPointerCapture(event.pointerId)
+      } else if (!forPanning) {
+        onToolPress(event)
       }
     }
     const onPointerMove = (event: PointerEvent) => {
@@ -186,9 +196,46 @@ export function useSpacePan(
       reset()
       setState(IDLE)
     }
-  }, [workspaceRef, enabled, onPanGesture])
+  }, [workspaceRef, enabled, onPanGesture, onToolPress])
 
   return enabled ? state : IDLE
+}
+
+/**
+ * Reports where the pointer is over the canvas (canvas CSS px), or null when it is
+ * outside the canvas or no image is shown. Moves during a Space + drag pan, which has
+ * pointer capture, are reported too.
+ */
+export function usePointerPosition(
+  workspaceRef: RefObject<HTMLElement | null>,
+  canvasRef: RefObject<HTMLCanvasElement | null>,
+  enabled: boolean,
+  onPointerPosition: (point: Point | null) => void,
+) {
+  useEffect(() => {
+    const workspace = workspaceRef.current
+    if (!workspace || !enabled) return
+
+    const onPointerMove = (event: PointerEvent) => {
+      const canvas = canvasRef.current
+      if (!canvas) return
+      const rect = canvas.getBoundingClientRect()
+      const point = clientToViewport({ x: event.clientX, y: event.clientY }, rect)
+      const inside = point.x >= 0 && point.y >= 0 && point.x < rect.width && point.y < rect.height
+      onPointerPosition(inside ? point : null)
+    }
+    const onPointerLeave = () => onPointerPosition(null)
+
+    workspace.addEventListener('pointerdown', onPointerMove)
+    workspace.addEventListener('pointermove', onPointerMove)
+    workspace.addEventListener('pointerleave', onPointerLeave)
+    return () => {
+      workspace.removeEventListener('pointerdown', onPointerMove)
+      workspace.removeEventListener('pointermove', onPointerMove)
+      workspace.removeEventListener('pointerleave', onPointerLeave)
+      onPointerPosition(null)
+    }
+  }, [workspaceRef, canvasRef, enabled, onPointerPosition])
 }
 
 /**

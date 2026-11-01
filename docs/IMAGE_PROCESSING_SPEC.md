@@ -76,62 +76,78 @@ PNG export should not intentionally degrade the image.
 
 Select pixels sufficiently similar to the clicked source pixel.
 
+Every candidate is compared with the clicked pixel's colour, never with its neighbour.
+
 ### Contiguous Mode
 
-Recommended algorithm family:
+A four-connected (edge neighbours only) flood fill from the clicked pixel, implemented in `src/image/selection/magicWand.ts` as a scanline fill:
 
-```text
-Flood Fill
-```
+- An explicit stack of row-segment scan requests replaces recursion, so no image is too large for the call stack.
+- Each run of matching pixels is selected whole. The row beyond it is queued in full; the row it came from only where the run reaches past the request.
+- Pixels are compared only when the fill reaches them, and at most once: a rejected pixel is remembered until the fill ends. The work follows the selected region and its outline, not the image, so a small region in a 50-megapixel image takes under a millisecond.
+- Pixels with exactly the clicked pixel's RGBA skip the distance calculation.
+- The selection's count and bounds are tracked during the fill, so no further pass over the mask is needed.
 
-Potential implementation approaches include:
-
-- Queue-based breadth-first traversal
-- Stack-based traversal
-- Scanline flood fill
-
-Avoid deeply recursive implementations because large images may overflow the JavaScript call stack.
+The clicked pixel always matches itself, so a result is never empty. A seed outside the image is rejected with a `RangeError`; the editor ignores clicks outside the image before calling the wand.
 
 ### Selection Mask
 
-Selections should be represented independently from pixel colour data.
-
-A practical representation may be:
+Selections are represented independently from pixel colour data, as a `SelectionMask` (`src/editor/types.ts`, built by `src/image/selection/selectionMask.ts`):
 
 ```text
-Uint8Array
+width, height   always the image's dimensions
+data            Uint8Array, row-major, one entry per pixel: 0 = not selected, 1 = selected
+count           number of selected pixels, always at least 1
+bounds          smallest rectangle containing every selected pixel
 ```
 
-where each entry represents whether the corresponding pixel is selected.
+Rules:
 
-Example:
+- An empty selection is `null`, never a mask with no selected pixels.
+- Masks are immutable. Every operation produces a new mask and never writes to its inputs, so masks can be shared (renderer caches, a future undo history).
+- The builder takes ownership of the buffer it is given, without copying it. It rejects invalid dimensions, a length other than width × height, and values other than 0 or 1 with a `RangeError`.
+- The selection model keeps no persistent full-image buffers other than masks: the current selection and, for tolerance re-apply, the selection as it was before the last Magic Wand operation (only for Add and Subtract, whose result depends on it; shared, never copied).
+- At the 50-megapixel import limit a mask uses 50 MB.
 
-```text
-0 = not selected
-1 = selected
-```
-
-Alternative efficient representations may be considered if justified.
+Alternative efficient representations (bit packing, run-length encoding for history) may be considered if justified.
 
 ---
 
 ## Colour Distance
 
-The user-facing tolerance should be intuitive.
+The user-facing tolerance is a whole number from 0 to 100, default 20.
 
-An initial implementation may compare channels using RGB/RGBA distance.
-
-Example concept:
+The initial formula is an alpha-aware RGB distance between the clicked colour A and a candidate colour B, with channels 0–255:
 
 ```text
-distance = difference between clicked colour and candidate colour
+w   = min(alphaA, alphaB) / 255
+D²  = ( w × (ΔR² + ΔG² + ΔB²) / 3  +  ΔA² ) / 255²
+select when D ≤ tolerance / 100
 ```
 
-The exact formula should be documented in code and covered by tests.
+- D lies between 0 and 1. Opaque black against opaque white is 1; fully transparent against any opaque colour is also 1.
+- Colour differences count in proportion to the less opaque pixel's alpha, so the hidden RGB values of fully transparent pixels never matter: all fully transparent pixels are the same colour and match each other even at tolerance 0.
+- Alpha differences always count in full. Transparent never matches opaque below tolerance 100; at 100 every colour matches.
+- Raising the tolerance never removes a match.
 
-A later implementation may use a perceptual colour space if testing demonstrates significant benefit.
+`src/image/selection/colourDistance.ts` computes this with exact whole numbers and no square roots, so boundary cases are deterministic:
 
-Do not prematurely complicate the first implementation.
+```text
+distance  = min(alphaA, alphaB) × (ΔR² + ΔG² + ΔB²) + 765 × ΔA²     (= D² × 3 × 255³, from 0 to 49,744,125)
+threshold = floor(49,744,125 × tolerance² / 100²)
+select when distance ≤ threshold
+```
+
+Tolerance must be a whole number from 0 to 100; any other value is rejected with a `RangeError`. The editor clamps and rounds user input before it reaches the algorithm.
+
+Boundaries at the default tolerance of 20 (D = 0.2):
+
+- Opaque white selects `#CCCCCC` (51 levels on every channel) but not `#CBCBCB`.
+- Opaque red selects rgb(255, 88, 0) but not rgb(255, 89, 0).
+- Opaque white selects white at alpha 204 but not at alpha 203.
+- Fully transparent selects any colour at alpha 51 but not at alpha 52.
+
+This is an initial choice, subject to automated and real-image testing. A perceptual colour space may be considered later if testing demonstrates significant benefit.
 
 ---
 
@@ -139,19 +155,18 @@ Do not prematurely complicate the first implementation.
 
 Alpha differences should be considered carefully.
 
-Transparent pixels should not unexpectedly match opaque colours simply because RGB channels happen to contain similar values.
+Transparent pixels must not match opaque colours simply because RGB channels happen to contain similar values, and fully transparent pixels must not be distinguished by their hidden RGB values (see Colour Distance).
 
 ---
 
 ## Global Colour Selection
 
-Global mode evaluates all pixels rather than only connected neighbours.
-
-For each pixel:
+Global mode evaluates all pixels rather than only connected neighbours, in one pass that also tracks the selection's count and bounds:
 
 ```text
-if colourDistance(pixel, target) <= tolerance
-    select pixel
+for each pixel:
+    if colourDistanceSquared(pixel, clicked) <= toleranceThreshold(tolerance)
+        select pixel
 ```
 
 Performance must be considered for large images.
@@ -174,6 +189,15 @@ existing AND NOT newSelection
 
 These operations should not modify image pixels until an edit action is applied.
 
+Implemented in `src/image/selection/selectionOperations.ts` (`combineSelections` with mode New, Add or Subtract; `selectAll`; `invertSelection`):
+
+- New returns the incoming selection; an empty incoming selection (`null`) clears the selection.
+- Add with nothing selected returns the other selection; Subtract from nothing is nothing; a result with no pixels is `null`.
+- Masks of different dimensions are rejected with a `RangeError`.
+- Inputs are never written. When nothing changes, the existing mask itself is returned (for example adding a region already inside the selection), so no-op operations allocate nothing. Otherwise the result is a new mask: one copy of the existing data, then work only inside the incoming mask's bounds.
+- Count and bounds are derived from the inputs where possible and otherwise found by scanning inwards from the edges of the old bounds.
+- Masks are processed a byte at a time, so they need no particular buffer alignment.
+
 ---
 
 ## Invert Selection
@@ -185,36 +209,206 @@ For each selection mask value:
 1 → 0
 ```
 
+Inverting no selection selects the whole image; inverting a full selection gives `null`. Pixels outside the old bounds all become selected, so only the old bounds need flipping one by one.
+
 ---
 
 ## Grow Selection
 
-Grow expands selection outward by a specified radius.
-
-Possible implementation:
-
-- Morphological dilation
-- Neighbour-based expansion
-
-Initial radius may be:
-
-```text
-1 px
-```
-
-with repeated application or adjustable control.
+Grow expands the selection by one pixel per action, including diagonal neighbours (a 3 × 3 neighbourhood dilation). Repeated actions grow further.
 
 ---
 
 ## Shrink Selection
 
-Shrink removes boundary pixels.
+Shrink removes, per action, every selected pixel that has an unselected pixel among its eight neighbours (a 3 × 3 erosion).
 
-Possible implementation:
+Pixels outside the image bounds count as selected, so a selection touching the image edge stays attached to it. A shrink that leaves nothing selected produces `null`.
 
-- Morphological erosion
+Grow and Shrink are implemented in `src/image/selection/growShrink.ts` as a separable 3 × 3 operation: each row is first combined with its left and right neighbours, then each output row combines three such rows. Only three rows of scratch space are used, and only the old bounds (plus one pixel for Grow) are visited. Growing or shrinking nothing gives `null`; a full selection is returned unchanged by both. Any other selection always changes, so the result is a new mask with its count and bounds tracked as it is built.
 
-Care must be taken around image edges.
+---
+
+## Selection Performance
+
+- Begin with synchronous pure algorithms on the main thread.
+- Algorithms stay independent of React, the DOM and Canvas, so they can move to a Web Worker unchanged.
+- Measure early with production browser builds (`npm run build` and `npm run preview`), not only Node benchmarks. Benchmarks may be manually run scripts without additional dependencies.
+- Significant UI freezes are not acceptable. Web Workers are introduced only when profiling shows the need and the project owner approves.
+
+Magic Wand measurements at Step 3 (whole calls including the mask, production builds in headless Chrome 156 and Firefox 158 on an i7-14700HX):
+
+- Screenshots up to 4K: about 5–40 ms per click. The first few clicks of a session are up to twice as slow while the browser optimises the code.
+- 4K, whole-image selection on a noisy, photo-like background: about 45–90 ms.
+- 50 megapixels: about 100–300 ms on flat backgrounds; 250–520 ms for whole-image selections on noisy backgrounds; up to about 0.9 s on synthetic worst cases (random noise, one-pixel mazes).
+
+Step 7 browser measurements (whole pointer-down handling: Magic Wand, combine and React commit, excluding paint; production build, headless Chrome 156 and Firefox 158, device pixel ratios 1–1.5):
+
+- 4K screenshot-like image (3840 × 2400): typically 2–7 ms in Chrome and 7–16 ms in Firefox; about 20–40 ms when the click selects most of the image (7 million pixels).
+- 4K noisy image where one click selects all 8.3 million pixels: about 55–70 ms in both browsers.
+- Each mask is one byte per pixel (8.3 MB at 4K). A New click replaces the selection with the Magic Wand result; Add and Subtract briefly hold that result and the combined mask alongside the current selection.
+
+Near the 50-megapixel limit the main thread can block noticeably. How to respond (time-slicing on the main thread or a Web Worker) is an open owner decision, to be made with real images at the Step 7 checkpoint. Step 12 measured 0.15–0.4 s per operation at 50 megapixels (Final Phase 2 Measurements, below) and recommends keeping the work synchronous for Phase 2 and re-evaluating in Phase 3 (`IMPLEMENTATION_PLAN.md`, Phase 2 Step 12).
+
+### Tolerance Re-apply
+
+A committed tolerance change (Step 10) re-applies the last Magic Wand click as `combineSelections(before, createMagicWandSelection(pixels, seed, { tolerance, floodMode }), mode)`, where `before` is the selection from before the click. It is the same formula, and the same work, as the click itself: one Magic Wand pass and one combine, computed outside the reducer. Nothing is computed while the tolerance is being adjusted, when the committed tolerance is the one the selection was made with, or for a Subtract made with nothing selected (whose result is always nothing).
+
+Memory: the editor state holds the current selection and, for Add and Subtract, the mask from before the click: at most two full-image masks. During a re-apply the new Magic Wand result and, for Add and Subtract, the combined mask are briefly held as well: four masks for Add or Subtract (33 MB at 4K, 200 MB at 50 megapixels) and two for New. React keeps the selection of its previous render until it renders again, at most one more mask. Heap snapshots in Chromium after ten re-applies of each mode found exactly the masks above (one for New, two for Add and Subtract, plus React's previous one until the next render): the number of live masks never grows with the number of re-applies.
+
+Step 10 measurements (production build, headless Chromium 153, device pixel ratio 1, 1280 × 800 window, on a 4-core 2.1 GHz Xeon cloud container that is markedly slower than the machine used for Steps 3–8; whole event handling including the React commit and overlay drawing, excluding paint):
+
+- 4K screenshot-like image (3840 × 2160, 3–5 million pixels selected): a click 100–170 ms; a re-apply 55–80 ms (median) when the slider is released or Enter is pressed, up to about 240 ms.
+- 50 megapixels (8192 × 6100, 18–34 million pixels selected): a click 460–1040 ms; a re-apply 290–420 ms (median), up to about 1 s.
+- Slider movements, typing, a commit of the same tolerance and Escape in the text field: under 2 ms, with no pixel work.
+
+### Selection Overlay
+
+The overlay (Step 8; see `ARCHITECTURE.md`, Phase 2 Modules) reads only the selection mask, never writes it, and never touches image pixels.
+
+Memory follows the screen, not the image:
+
+- The overlay canvas has the workspace's backing store while something is selected (8 MB at 1920 × 1080 device pixels, 33 MB at 3840 × 2160) and none otherwise.
+- Tiles of at most 256 × 256 device pixels (256 KB) are created only where the selection's bounds are visible, and kept only within one tile of the view: at most about 20 MB at 1920 × 1080 and 55 MB at 3840 × 2160, usually much less.
+- Zoomed out, a copy of the mask packed one bit per pixel (one eighth of the mask, 6.25 MB at 50 megapixels) is built once per selection and freed with it.
+- No full-resolution RGBA overlay is ever allocated.
+
+Complexity budget: a frame is one `clearRect` and one `drawImage` per visible tile (about 40 tiles at 1920 × 1080, 140 at 3840 × 2160), whatever the selection's shape. Boundaries are found with bit operations, 32 device pixels at a time, so a million holes or a random-noise selection never becomes a million drawing operations; their cost is bounded by the visible area. Areas entirely inside or outside the selection are filled without per-pixel work. Panning reuses tiles; a selection, zoom or display-scaling change rasterises the visible tiles again.
+
+Step 8 measurements (production builds, headless Chrome 156 and Firefox 158, i7-14700HX). Overlay drawing alone, 1920 × 1080 CSS workspace at device pixel ratio 1:
+
+- 4K screenshot-like background selection: about 9–25 ms after a selection change, 6–17 ms per zoom step, under 0.2 ms (Chrome) or about 3 ms (Firefox) per pan frame.
+- Pathological 4K selections (50% random noise): 15–37 ms per full redraw.
+- 50 megapixels, fitted: 37–45 ms after a large selection change (including the packed copy), 14–18 ms per zoom step; 53–70 ms and 43–60 ms for a million scattered pixels. A single selected pixel: under 4 ms.
+- At device pixel ratio 2 (3840 × 2160 device pixels) costs are about 2–3 times higher: 10–64 ms for a 4K screenshot-like selection, up to about 180 ms for the 50-megapixel scattered-pixel worst case.
+
+Added to whole interactions (pointer-down or button click including the React commit, median, compared with the same build without the overlay, device pixel ratio 1):
+
+- Magic Wand click on a 4K screenshot: +2 ms (Chrome) and +3 ms (Firefox); a click selecting all 8.3 million pixels of a 4K image: +12 to +14 ms.
+- 50-megapixel clicks, which already take 210–430 ms: +19 to +47 ms.
+- Zoom In / Out, Fit and 100% with a selection: 15–42 ms instead of under 13 ms.
+
+#### Marching Ants (Step 11)
+
+The boundary pattern moves without touching the selection: which pixels are boundary, tint or transparent is decided once per tile, and a step only changes black and white boundary pixels (see `ARCHITECTURE.md`, Phase 2 Modules, and `UI_UX_SPEC.md`, Selection UX).
+
+What a step costs:
+
+- No mask reads, no Magic Wand or selection work, no rasterising and no React work. The steps run on timers (one every 150 ms at most) followed by one animation frame, never on every frame, and none at all with reduced motion, while the page is hidden, or when no boundary is in view.
+- Pixel work: in each visible tile with boundary, the quarter of its boundary pixels where the stripes move are flipped between black and white, found 32 at a time with bit masks. Tiles without boundary are skipped.
+- Canvas work: per visible tile with boundary, one `putImageData` of its boundary area (a dirty rectangle, usually much smaller than the tile), one `clearRect` and one `drawImage` of that area onto the overlay. A selection with a million disconnected pixels is still at most one set of three calls per visible tile (about 40 at 1920 × 1080, 140 at 3840 × 2160 device pixels).
+- Budget: steps are timed, and when they take longer than 7.5 ms the next one waits 20 times as long, so steps never take more than about a twentieth of the main thread. The ants pause while the boundary areas in view exceed 10 million device pixels.
+
+Memory, in addition to Step 8 (all of it freed with the selection):
+
+- Boundary geometry: two bits per device pixel for the rows and 32-pixel columns of each tile that hold boundary, at most 16 KB a tile; 0.04–0.85 MB in the cases below, 2.3 MB for noise filling a 3840 × 2160 view.
+- Once the pattern changes (the first step, or reduced motion being switched on or off), each visible tile with boundary keeps its boundary area's pixels (4 bytes per device pixel of that area), so a step only changes the pixels that move: 0.5–4.6 MB at 1920 × 1080 and 0.9–13 MB at 3840 × 2160 device pixels for the screenshot-like and large connected selections below, 6–11 MB and 25–36 MB for noise-like ones. Tiles out of view drop theirs; with reduced motion from the start none are kept.
+
+Step 11 measurements (production builds, i7-14700HX, headless Chrome 156 and Firefox 158, 1920 × 1080 CSS workspace; medians). Chrome was measured both with GPU-accelerated canvas and compositing (`--enable-gpu`, closest to a desktop browser) and with its default headless software rendering; Firefox headless renders canvases in software.
+
+Main-thread time while idle with a selection on screen (Chrome `TaskDuration` over 6 s; Step 10, and Step 11 with reduced motion or without a selection: 0.1–2 ms/s in every case):
+
+| Selection (view) | GPU, DPR 1 | GPU, DPR 2 | Software, DPR 1 | Software, DPR 2 |
+| --- | --- | --- | --- | --- |
+| 1280 × 800 screenshot background (Fit) | 15 ms/s | 26 ms/s | 37 ms/s | 63 ms/s |
+| Same, 200% | 11 ms/s | 17 ms/s | 29 ms/s | 59 ms/s |
+| 3840 × 2400 screenshot background (Fit) | 17 ms/s | 27 ms/s | 38 ms/s | 65 ms/s |
+| 4K noisy image, everything selected (Fit) | 14 ms/s | 24 ms/s | 31 ms/s | 60 ms/s |
+| 4K noisy image, fragmented Global selection (100%) | 48 ms/s | 48 ms/s | 65 ms/s | 65 ms/s |
+| 50 MP, background with a million dots as holes (Fit) | 19 ms/s | 24 ms/s | 41 ms/s | 62 ms/s |
+| Same, 100% inside an unselected area (no boundary in view) | 0.3 ms/s | 0.3 ms/s | 1.2 ms/s | 1.3 ms/s |
+
+With GPU rendering that is about 1–3% of one core for screenshot-like and large connected selections, and about 5% (the step budget) for fragmented ones. With software rendering it is 3–6.5%: presenting the changed overlay canvas then costs more than the step itself (the difference between the main-thread and script times), as the whole canvas is composited again on the CPU. Desktop browsers usually composite on the GPU, but this has not been measured on real displays.
+
+Cost of one step (JavaScript time of the renderer, overlay pipeline alone):
+
+- Chrome (GPU): 1–4 ms for screenshot-like and large connected selections at device pixel ratio 1, 1–6 ms at ratio 2; 4–8 ms and 9–12 ms for noise-like ones. A single selected pixel: 0.1 ms.
+- Firefox: 3–7 ms and 6–10 ms for screenshot-like selections, 8–11 ms and 18–25 ms for noise-like ones. Firefox has a floor of about 2–3 ms at ratio 1 and 6 ms at ratio 2 even for a single selected pixel (apparently the copy of the whole overlay canvas after the compositor has shown it; its pan frames show the same floor since Step 8). Steps over 7.5 ms are spaced out by the budget, so in Firefox at ratio 2 noise-like boundaries step every 360–500 ms instead of 150 ms.
+
+Effect on the rest of the overlay (Step 10 → Step 11, Chrome software rendering, which varies least between runs): a selection change or zoom step costs about the same for screenshot-like and large connected selections (0–3 ms, up to about 10% more), and 5–20% more for noise-like ones (for example 18.6 → 21.9 ms at ratio 1 and 57.8 → 66.3 ms at ratio 2 for 50% noise at 100%), mainly because tiles are now rasterised in two passes (boundary geometry, then colours) so that the geometry can be kept; Firefox is similar. Pan frames are unchanged.
+
+### Final Phase 2 Measurements (Step 12)
+
+Production build with the Step 12 fixes, headless Chrome 156 (default software rendering and `--enable-gpu`) and Firefox 158, i7-14700HX (the machine of Steps 3–8 and 11), device pixel ratio 1, 1920 × 1200 window, image fitted unless stated. Times are whole interactions as in Steps 7 and 8: from the event to the end of its handling, including the selection work, the React commit and the overlay drawing, excluding paint. Medians (maximum in brackets where it differs noticeably). Firefox reports whole milliseconds.
+
+| Image (selection) | Operation | Chrome | Chrome GPU | Firefox |
+| --- | --- | --- | --- | --- |
+| Technical graphic 800 × 600, transparent background (0.35 MP) | Contiguous click | 2.2 ms | 2.2 ms | 4 ms |
+| | Global click | 6.7 ms | 7.2 ms | 9 ms |
+| | Re-apply (New / Add) | 4.6 / 6.0 ms | 4.6 / 5.2 ms | 9 / 8 ms |
+| | Grow, Shrink, Invert | 8–17 ms | 7–13 ms | 5–8 ms |
+| Screenshot 1280 × 800 (0.70 MP background) | Contiguous click | 2.1 ms | 2.6 ms | 4 ms |
+| | Re-apply (New / Add) | 8.2 / 6.6 ms | 8.2 / 6.3 ms | 17 / 10 ms |
+| | Grow, Shrink, Invert | 11–22 ms | 10–15 ms | 7–11 ms |
+| Photograph 4032 × 3024 JPEG (4.7 MP sky) | Contiguous click | 49 ms | 46 ms | 55 ms |
+| | Global click | 109 ms (180) | 82 ms (152) | 76 ms |
+| | Re-apply (New / Add, 10 MP) | 52 / 90 ms | 51 / 117 ms (194) | 59 / 72 ms |
+| | Grow, Shrink, Invert | 25–102 ms | 25–53 ms | 23–30 ms |
+| 4K screenshot 3840 × 2400 | Contiguous click (0.05–6.3 MP) | 4.5 ms (37) | 4.8 ms (36) | 6 ms (45) |
+| | Global click (2.5 MP) | 58 ms | 61 ms | 56 ms |
+| | Invert, Select All (9.2 MP) | 18–27 ms | 15–26 ms | 19–26 ms |
+| 4K noisy image 3840 × 2160 (all 8.3 MP) | Contiguous click | 66 ms | 66 ms | 70 ms |
+| | Global click, tolerance 2 (1.5 MP fragmented) | 89 ms | 88 ms | 91 ms |
+| | Re-apply | 65–66 ms | 65 ms | 63–68 ms |
+| 50 MP 8660 × 5773, background with 1 million dots as holes (36 MP) | Contiguous click | 230 ms | 232 ms | 254 ms |
+| | Global click | 199 ms | 211 ms | 201 ms |
+| | Re-apply (New / Add, 49 MP) | 227 / 202 ms (293) | 226 / 182 ms | 253 / 161 ms (188) |
+| | Grow, Shrink | 181–182 ms | 179–181 ms | 135–137 ms |
+| | Invert, Select All | 46–238 ms | 46–281 ms | 51–103 ms |
+| 50 MP at the side limit 16384 × 3051 (15 MP) | Contiguous click | 56 ms | 48 ms | 57 ms |
+| | Global click (35 MP) | 197 ms | 201 ms | 185 ms |
+| | Invert (35 MP / 15 MP) | 164 / 271 ms | 200 / 382 ms | 76 / 91 ms |
+
+Navigation with a selection on screen (same cases):
+
+- Zoom In / Out buttons: 1–13 ms up to 4K in Chrome (12–21 ms in Firefox), 21–23 ms at 50 MP (39 ms in Firefox).
+- Main-thread time per wheel event (Chrome): panning 2.6–4.4 ms with software rendering and 1.3–2.3 ms with GPU rendering, whatever the image size; Ctrl + wheel zoom, which rasterises the visible overlay tiles again, 4–15 ms up to 4K and 11–23 ms at 50 MP.
+
+Comparison with earlier steps (same machine and browsers, where the cases match):
+
+- 4K screenshot clicks: 2–7 ms (Chrome) and 7–16 ms (Firefox) in Step 7, 4.5 ms and 6 ms (medians) now. Clicks selecting all 8.3 million pixels of the noisy 4K image: 55–70 ms in Step 7, plus 12–14 ms for the overlay in Step 8; 66–70 ms now.
+- 50 MP background clicks: 210–430 ms in Step 8 (with the overlay); 230–254 ms now.
+- Grow and Shrink at 50 MP: 90–125 ms for the algorithm in Step 5 (126 ms in Node now, unchanged); 135–182 ms as whole interactions including the overlay.
+- Step 10's re-apply figures were measured on a slower cloud machine and cannot be compared directly; on this machine a re-apply costs the same as the click it repeats, as designed.
+- The marching ants (idle overhead below) and Step 12 changed none of the selection algorithms.
+
+What is slow at 50 megapixels: in Node the algorithms alone take 210 ms (Contiguous or Global over 50 MP), 126 ms (Grow, Shrink), 53 ms (Add, Invert) and 16 ms (Select All). In the browser, rasterising the overlay for a large new selection adds 40–50 ms (Step 8), and allocating 50 MB masks sometimes triggers a garbage collection, which is why the same Invert takes 140 ms once and 240–380 ms another time in Chrome. No measured interaction exceeded 0.4 s; the Step 3 synthetic worst cases (random noise and one-pixel mazes filling 50 MP) reach about 0.9 s. Up to 12-megapixel photographs and 4K screenshots, interaction medians stay at or below about 120 ms; single slower runs on the photograph reached 150–194 ms.
+
+Redundant image redraws (fixed in Step 12): before Step 12 every React render drew the whole image again, although only the view changes it. Since Phase 2 that includes every click, selection action, option change and tolerance slider movement. Skipping frames identical to the last one (`ARCHITECTURE.md`, Phase 2 Modules) leaves main-thread time unchanged in Chrome, which rasterises canvases elsewhere, but removes that raster work from the input path. Measured with 20 tolerance slider steps (nothing to re-apply) and the image fitted, keydown to keyup:
+
+| | Before | After |
+| --- | --- | --- |
+| Chrome software rendering, ratio 1 (4K / 50 MP) | 19 / 19 ms | 3.0 / 3.1 ms |
+| Chrome software rendering, ratio 2 | 43 / 62 ms | 5.4 / 5.3 ms |
+| Chrome GPU rendering, ratio 1 | 2.1 / 2.5 ms | 2.3 / 3.1 ms |
+| Firefox, ratio 1 | 14 / 13 ms | 6 / 5 ms |
+| Firefox, ratio 2 | 24 / 28 ms | 4 / 5 ms |
+
+In Firefox the redraw also ran inside the event: a 4K Magic Wand click took 27 → 20 ms (ratio 1) and 46 → 29 ms (ratio 2).
+
+Memory (Chrome, JavaScript heap plus array buffers after garbage collection, measured after two further renders so that React no longer holds the state of its previous render; one mask is 9.2 MB for the 3840 × 2400 screenshot):
+
+- An image open with nothing selected is the baseline. A New click adds 1.4 masks: the mask, its zoomed-out packed copy (one eighth) and the visible tiles' boundary-area pixels kept for the ants.
+- Ten re-applies of a New click: still 1.4 masks. An Add click and ten re-applies: 2.5 masks (the selection and the base it was added to). A Subtract that removed nothing returns the existing mask, so nothing is added. Grow, Shrink and Invert end re-applying and the base is dropped: 1.4 masks.
+- Escape: back to the baseline (+0.1 mask). Six image replacements, each with Add clicks and re-applies, then the first image again: back to the baseline (+0.1 mask). Previous documents, bitmaps, masks and tile caches are released.
+- Without the extra renders, React keeps the selection (and after an import, the previous image) of its previous render until it renders again: one more of each at most, never accumulating.
+- At 50 megapixels (8660 × 5773, one mask 50 MB, pixels 200 MB) the same sequence gives the same picture: a background click adds 1.2 masks (the mask, its 6.25 MB packed copy, the ants' areas), ten re-applies add nothing, and after six replacements by 50-megapixel images with clicks and re-applies the memory is back at the baseline (+1 MB).
+
+Main-thread time while idle with a selection on screen and the marching ants running (Chrome `TaskDuration` over 6 s, 1920 × 1080 window, the Step 11 method and cases plus the photograph):
+
+| Selection (view) | Software, DPR 1 | Software, DPR 2 | GPU, DPR 1 | GPU, DPR 2 |
+| --- | --- | --- | --- | --- |
+| 1280 × 800 screenshot background (Fit) | 18 ms/s | 39 ms/s | 9 ms/s | 15 ms/s |
+| Same, 200% | 19 ms/s | 31 ms/s | 7 ms/s | 11 ms/s |
+| 3840 × 2400 screenshot background (Fit) | 22 ms/s | 39 ms/s | 9 ms/s | 12 ms/s |
+| Photograph 4032 × 3024, sky (Fit) | 15 ms/s | 35 ms/s | 8 ms/s | 11 ms/s |
+| Same, 100% | 16 ms/s | 40 ms/s | 6 ms/s | 13 ms/s |
+| 4K noisy image, everything selected (Fit) | 18 ms/s | 35 ms/s | 9 ms/s | 13 ms/s |
+| 4K noisy image, fragmented Global selection (100%) | 48 ms/s | 71 ms/s | 32 ms/s | 48 ms/s |
+| 50 MP, background with a million dots as holes (Fit) | 20 ms/s | 37 ms/s | 9 ms/s | 16 ms/s |
+| Same, 100% inside an unselected area (no boundary in view) | 0.1 ms/s | 0.1 ms/s | 0.1 ms/s | 0.1 ms/s |
+
+With reduced motion, or without a selection, every case measured 0.0–1.1 ms/s: nothing runs. The ants take about 1.5–2% of the main thread for ordinary selections with software rendering at ratio 1, 3–4% at ratio 2, and under 1–1.5% with GPU rendering; fragmented selections stay within the 5% step budget for script time (29–46 ms/s), plus compositing. These values are lower than the Step 11 table, but the Step 11 build measured now with the same script gives the same values as Step 12 (software 15–23 ms/s and GPU 7–11 ms/s at ratio 1 for the same cases), so the difference comes from the measuring conditions of that session, not from a change in the app. Interaction latency while the ants run, timer counts and memory were checked as well: at most one step is ever pending, none after Escape, after image replacements or while the page is hidden (including a real tab switch in Chrome), and steps continue every 150 ms after rapid clicks, zoom changes and re-applies.
 
 ---
 

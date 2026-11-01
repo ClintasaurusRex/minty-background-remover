@@ -1,4 +1,4 @@
-import { CHECKER_COLOURS, type FramePlan } from './rendering'
+import { CHECKER_COLOURS, type FramePlan, sameFramePlan } from './rendering'
 
 /*
  * Draws frame plans onto the workspace canvas. The only module that touches the
@@ -6,10 +6,14 @@ import { CHECKER_COLOURS, type FramePlan } from './rendering'
  *
  * The image is drawn from an ImageBitmap copy of the document's pixels, so rendering
  * never reads from or writes to the document's ImageData after the copy is made.
+ *
+ * A frame identical to the last one drawn (same image, same plan) is skipped: the canvas
+ * already shows it. Renders that do not move the view, such as selection changes and
+ * tolerance adjustments, therefore cost nothing here.
  */
 
 export interface WorkspaceRenderer {
-  /** Draws a frame. With no image, the canvas is cleared. */
+  /** Draws a frame, unless it is the frame last drawn. With no image, the canvas is cleared. */
   render(plan: FramePlan, image: ImageBitmap | null): void
   /** Releases the canvas backing store. */
   dispose(): void
@@ -20,6 +24,8 @@ export function createWorkspaceRenderer(canvas: HTMLCanvasElement): WorkspaceRen
   if (!context) return null
 
   let checker: { squareSize: number; pattern: CanvasPattern } | null = null
+  // The frame the canvas shows.
+  let drawn: { plan: FramePlan; image: ImageBitmap | null } | null = null
 
   const checkerPattern = (squareSize: number): CanvasPattern | null => {
     if (checker?.squareSize === squareSize) return checker.pattern
@@ -42,6 +48,8 @@ export function createWorkspaceRenderer(canvas: HTMLCanvasElement): WorkspaceRen
 
   return {
     render(plan, image) {
+      if (drawn && drawn.image === image && sameFramePlan(drawn.plan, plan)) return
+      drawn = { plan, image }
       const { backingStore } = plan
       // Resizing the backing store clears it, so only do it when the size changes.
       if (canvas.width !== backingStore.width) canvas.width = backingStore.width
@@ -68,6 +76,7 @@ export function createWorkspaceRenderer(canvas: HTMLCanvasElement): WorkspaceRen
 
     dispose() {
       checker = null
+      drawn = null
       canvas.width = canvas.height = 0
     },
   }

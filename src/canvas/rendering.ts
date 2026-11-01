@@ -82,6 +82,42 @@ export function planFrame({ imageSize, viewport, viewportSize, devicePixelRatio 
   }
 }
 
+/**
+ * Whether two plans draw exactly the same frame of the same image: same backing store,
+ * checkerboard and image placement. The renderer skips such frames, so renders that do not
+ * change the view (selection changes, Magic Wand options, the tolerance) never draw the image
+ * again.
+ */
+export function sameFramePlan(a: FramePlan, b: FramePlan): boolean {
+  if (a.backingStore.width !== b.backingStore.width || a.backingStore.height !== b.backingStore.height) return false
+  if (a.checker === null || b.checker === null) {
+    if (a.checker !== b.checker) return false
+  } else if (
+    !sameRectangle(a.checker.rect, b.checker.rect) ||
+    a.checker.origin.x !== b.checker.origin.x ||
+    a.checker.origin.y !== b.checker.origin.y ||
+    a.checker.squareSize !== b.checker.squareSize
+  ) {
+    return false
+  }
+  if (a.image === null || b.image === null) return a.image === b.image
+  const [s, t] = [a.image.transform, b.image.transform]
+  return (
+    s.a === t.a &&
+    s.b === t.b &&
+    s.c === t.c &&
+    s.d === t.d &&
+    s.e === t.e &&
+    s.f === t.f &&
+    sameRectangle(a.image.source, b.image.source) &&
+    a.image.smoothing === b.image.smoothing
+  )
+}
+
+function sameRectangle(a: Rectangle, b: Rectangle): boolean {
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+}
+
 export function usesSmoothing(zoom: number): boolean {
   return zoom < 1
 }

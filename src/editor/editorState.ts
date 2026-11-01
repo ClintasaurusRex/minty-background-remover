@@ -2,7 +2,20 @@ import { snapToDevicePixels } from '../canvas/devicePixels'
 import { keepImageReachable, limitPan } from '../canvas/pan'
 import { clampZoom, fitViewport, nextZoomStep, panBy, resizeViewport, zoomAt } from '../canvas/viewport'
 import type { ImportError } from '../image/import/errors'
-import type { ImageDocument, Point, Size, ViewportState } from './types'
+import type { MagicWandOptions } from '../image/selection/magicWand'
+import { clampTolerance } from './toleranceInput'
+import { TOOLS } from './tools'
+import type {
+  FloodMode,
+  ImageDocument,
+  PixelCoordinate,
+  Point,
+  SelectionMask,
+  SelectionMode,
+  Size,
+  ToolId,
+  ViewportState,
+} from './types'
 
 /** The workspace area the image is shown in, in CSS pixels. */
 export interface WorkspaceMetrics {
@@ -35,6 +48,14 @@ export interface EditorState {
   readonly viewport: ViewportState | null
   /** Null until the workspace has been measured. */
   readonly workspace: WorkspaceMetrics | null
+  /**
+   * Whether the next workspace resize places the image again, as when it was opened,
+   * instead of keeping its centre. Set by the import that first makes a tool active:
+   * that tool's options row then appears above the workspace and makes it smaller, and
+   * an image fitted to the workspace without the row would be too large for it (or
+   * overflow it where the row wraps). Cleared by that resize and by any change of view.
+   */
+  readonly placeOnNextResize: boolean
   /** The most recent import still in progress. Results of any other import are stale. */
   readonly pendingImportId: number | null
   /** The last import failure, shown until dismissed or the next import starts. */
@@ -43,6 +64,73 @@ export interface EditorState {
   readonly pan: PanDrag | null
   /** An informational message about the latest import, shown until dismissed or the next import starts. */
   readonly importNotice: ImportNotice | null
+  /** The tool used by clicks on the image. Null until an image is open. */
+  readonly activeTool: ToolId | null
+  /** Magic Wand options. Kept for the session, across image imports and tool changes. */
+  readonly magicWand: MagicWandSettings
+  /**
+   * The selected pixels of the open document, or null for no selection. Always the
+   * document's size. Cleared when another image is opened; kept on tool changes.
+   */
+  readonly selection: SelectionMask | null
+  /**
+   * The most recent Magic Wand click, for re-applying it when a tolerance change is
+   * committed. Whenever it is set, `selection` is exactly its result at its tolerance.
+   * Null when there is nothing to re-apply: before the first click, after the selection
+   * was changed in any other way (Select All, Clear, Invert, Grow, Shrink) and after
+   * another image opened.
+   */
+  readonly lastMagicWandOperation: MagicWandOperation | null
+}
+
+/** The Magic Wand's options as chosen in the editor. */
+export interface MagicWandSettings extends MagicWandOptions {
+  /** How a Magic Wand result combines with the current selection. */
+  readonly selectionMode: SelectionMode
+}
+
+export const DEFAULT_MAGIC_WAND_SETTINGS: MagicWandSettings = {
+  tolerance: 20,
+  floodMode: 'contiguous',
+  selectionMode: 'new',
+}
+
+/**
+ * The document version a selection was computed from. Selections are computed outside
+ * the reducer, so by the time a result arrives another image may be open or the pixels
+ * may have changed; a result for any other version is discarded.
+ */
+export interface DocumentVersion {
+  readonly documentId: number
+  readonly revision: number
+}
+
+/**
+ * A Magic Wand click as made, kept so it can be re-applied with another tolerance. Its
+ * result is always `combineSelections(base, createMagicWandSelection(pixels, seed,
+ * { tolerance, floodMode }), selectionMode)`, for the click and for every re-apply, so
+ * re-applying never builds on an earlier re-applied result.
+ *
+ * Everything is captured when the click is made: later changes to the chosen options do
+ * not alter the click being re-applied.
+ */
+export interface MagicWandOperation {
+  /** The document version clicked; the click is never re-applied to any other. */
+  readonly version: DocumentVersion
+  /** The clicked image pixel. */
+  readonly seed: PixelCoordinate
+  /** Contiguous or Global, as chosen when clicking. */
+  readonly floodMode: FloodMode
+  /** New, Add or Subtract as actually used, including a Shift or Ctrl override. */
+  readonly selectionMode: SelectionMode
+  /**
+   * The selection immediately before the click, shared rather than copied (masks are
+   * immutable). Null for New: its result does not depend on the previous selection, so
+   * that mask is not kept alive.
+   */
+  readonly base: SelectionMask | null
+  /** The tolerance that produced the current selection. */
+  readonly tolerance: number
 }
 
 /** Informational import messages, less serious than an ImportError. */
@@ -88,17 +176,59 @@ export type EditorAction =
   | { readonly type: 'pan-drag-ended' }
   /** Moves the image by `delta` CSS px (wheel and trackpad scrolling). */
   | { readonly type: 'wheel-panned'; readonly delta: Point }
+  /** Ignored until an image is open, and for tools that are not available yet. */
+  | { readonly type: 'tool-selected'; readonly tool: ToolId }
+  /** Rounded to a whole number and clamped to 0–100; values that are not finite are ignored. */
+  | { readonly type: 'magic-wand-tolerance-changed'; readonly tolerance: number }
+  | { readonly type: 'magic-wand-flood-mode-changed'; readonly floodMode: FloodMode }
+  | { readonly type: 'magic-wand-selection-mode-changed'; readonly selectionMode: SelectionMode }
+  /**
+   * Replaces the selection with one computed for `version` of the open document (null
+   * selects nothing). Ignored unless `version` is the open document's current version
+   * and the mask is the document's size. The state keeps the mask itself, without
+   * copying, and never modifies it. Used for every change other than a Magic Wand
+   * click, so a change forgets the last Magic Wand operation.
+   */
+  | { readonly type: 'selection-applied'; readonly version: DocumentVersion; readonly selection: SelectionMask | null }
+  /** Clears the selection and forgets the last Magic Wand operation. */
+  | { readonly type: 'selection-cleared' }
+  /**
+   * A Magic Wand click: replaces the selection with its result and records the click as
+   * the operation a committed tolerance change re-applies, even when the selection does
+   * not change. Ignored for any other document version, a mask of another size, or an
+   * Add or Subtract whose base is no longer the current selection.
+   */
+  | { readonly type: 'magic-wand-applied'; readonly operation: MagicWandOperation; readonly selection: SelectionMask | null }
+  /**
+   * `operation` re-applied with `tolerance`. Ignored unless `operation` is still the last
+   * Magic Wand operation (so nothing has changed the selection since) and the result fits
+   * the open document.
+   */
+  | {
+      readonly type: 'magic-wand-reapplied'
+      readonly operation: MagicWandOperation
+      readonly tolerance: number
+      readonly selection: SelectionMask | null
+    }
 
 export const initialEditorState: EditorState = {
   document: null,
   documentBitmap: null,
   viewport: null,
   workspace: null,
+  placeOnNextResize: false,
   pendingImportId: null,
   importError: null,
   pan: null,
   importNotice: null,
+  activeTool: null,
+  magicWand: DEFAULT_MAGIC_WAND_SETTINGS,
+  selection: null,
+  lastMagicWandOperation: null,
 }
+
+const FLOOD_MODES: readonly FloodMode[] = ['contiguous', 'global']
+const SELECTION_MODES: readonly SelectionMode[] = ['new', 'add', 'subtract']
 
 export function editorReducer(state: EditorState, action: EditorAction): EditorState {
   switch (action.type) {
@@ -121,7 +251,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (action.importId !== state.pendingImportId) return state
       const { result } = action
       if (!result.ok) {
-        // The current document and viewport are kept.
+        // The current document, viewport, tool and selection are kept.
         return { ...state, pendingImportId: null, importError: result.error }
       }
       return {
@@ -129,9 +259,17 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         document: result.document,
         documentBitmap: result.bitmap,
         viewport: initialViewport(result.document, state.workspace),
+        // The first image makes the Magic Wand active, and its options row is about to
+        // take room from the workspace.
+        placeOnNextResize: state.activeTool === null,
         pendingImportId: null,
         importError: null,
         pan: null,
+        // The selection and the click that made it belonged to the previous image.
+        // Magic Wand options are kept.
+        activeTool: 'magic-wand',
+        selection: null,
+        lastMagicWandOperation: null,
       }
     }
 
@@ -170,7 +308,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'pan-drag-started':
       if (!state.viewport || !state.document) return state
-      return { ...state, pan: { origin: state.viewport, delta: { x: 0, y: 0 } } }
+      return { ...state, pan: { origin: state.viewport, delta: { x: 0, y: 0 } }, placeOnNextResize: false }
 
     case 'pan-dragged': {
       const { pan } = state
@@ -197,7 +335,84 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           ? limitPan(panBy(viewport, action.delta), viewport, document, workspace.size)
           : viewport,
       )
+
+    case 'tool-selected':
+      if (!state.document || action.tool === state.activeTool) return state
+      return isAvailableTool(action.tool) ? { ...state, activeTool: action.tool } : state
+
+    case 'magic-wand-tolerance-changed': {
+      if (!Number.isFinite(action.tolerance)) return state
+      return withMagicWand(state, { tolerance: clampTolerance(action.tolerance) })
+    }
+
+    case 'magic-wand-flood-mode-changed':
+      return FLOOD_MODES.includes(action.floodMode) ? withMagicWand(state, { floodMode: action.floodMode }) : state
+
+    case 'magic-wand-selection-mode-changed':
+      return SELECTION_MODES.includes(action.selectionMode)
+        ? withMagicWand(state, { selectionMode: action.selectionMode })
+        : state
+
+    case 'selection-applied': {
+      const { version, selection } = action
+      if (!fitsDocument(state, version, selection) || selection === state.selection) return state
+      // The selection is no longer a Magic Wand result, so a tolerance change must not
+      // re-apply a click over it.
+      return { ...state, selection, lastMagicWandOperation: null }
+    }
+
+    case 'selection-cleared':
+      return state.selection === null ? state : { ...state, selection: null, lastMagicWandOperation: null }
+
+    case 'magic-wand-applied': {
+      const { operation, selection } = action
+      if (!fitsDocument(state, operation.version, selection)) return state
+      // Add and Subtract were combined with `base`; if the selection has changed since,
+      // the result (and the recorded base) would be stale. New does not depend on it.
+      if (operation.selectionMode !== 'new' && operation.base !== state.selection) return state
+      return { ...state, selection, lastMagicWandOperation: operation }
+    }
+
+    case 'magic-wand-reapplied': {
+      const { operation, tolerance, selection } = action
+      if (operation !== state.lastMagicWandOperation || !fitsDocument(state, operation.version, selection)) return state
+      return { ...state, selection, lastMagicWandOperation: { ...operation, tolerance } }
+    }
   }
+}
+
+/**
+ * Whether a selection computed for `version` can be applied: it is the open document's
+ * current version and the mask (if any) is the document's size.
+ */
+function fitsDocument(state: EditorState, version: DocumentVersion, selection: SelectionMask | null): boolean {
+  const { document } = state
+  if (!document || version.documentId !== document.id || version.revision !== document.revision) return false
+  return !selection || (selection.width === document.width && selection.height === document.height)
+}
+
+/** The open document's current version, for tagging a selection computed from it. Null without a document. */
+export function documentVersion(state: EditorState): DocumentVersion | null {
+  const { document } = state
+  return document ? { documentId: document.id, revision: document.revision } : null
+}
+
+function isAvailableTool(id: ToolId): boolean {
+  return TOOLS.some((tool) => tool.id === id && tool.available)
+}
+
+/** Changes Magic Wand options, returning the state unchanged when nothing differs. */
+function withMagicWand(state: EditorState, change: Partial<MagicWandSettings>): EditorState {
+  const current = state.magicWand
+  const next = { ...current, ...change }
+  if (
+    next.tolerance === current.tolerance &&
+    next.floodMode === current.floodMode &&
+    next.selectionMode === current.selectionMode
+  ) {
+    return state
+  }
+  return { ...state, magicWand: next }
 }
 
 /**
@@ -229,7 +444,7 @@ function withViewport(
   if (next.zoom === viewport.zoom && next.offset.x === viewport.offset.x && next.offset.y === viewport.offset.y) {
     return state
   }
-  return { ...state, viewport: next, pan: rebasePan(state.pan, next) }
+  return { ...state, viewport: next, pan: rebasePan(state.pan, next), placeOnNextResize: false }
 }
 
 /**
@@ -253,13 +468,14 @@ function resizeWorkspace(state: EditorState, workspace: WorkspaceMetrics): Edito
   }
 
   let viewport = state.viewport
-  if (viewport && previous && state.document) {
+  if (viewport && previous && state.document && !state.placeOnNextResize) {
     viewport = keepImageReachable(resizeViewport(viewport, previous.size, workspace.size), state.document, workspace.size)
   } else if (state.document) {
-    // The image arrived before the workspace had a usable size.
+    // The image arrived before the workspace had a usable size, or was placed for the
+    // workspace as it was before the first tool's options row appeared.
     viewport = initialViewport(state.document, workspace)
   }
-  return { ...state, workspace, viewport, pan: rebasePan(state.pan, viewport) }
+  return { ...state, workspace, viewport, pan: rebasePan(state.pan, viewport), placeOnNextResize: false }
 }
 
 /** Initial placement: fit larger images, show smaller ones at 100%, centred. */

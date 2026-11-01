@@ -11,6 +11,8 @@
 }
 
 .status-bar__info {
+  /* Contains the visually hidden live text, so it is clipped with the row and never widens the page. */
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -30,6 +32,24 @@
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--color-text);
+}
+
+.status-bar__pointer-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Narrower windows keep the selection and pointer readouts visible ahead of secondary details. */
+@media (max-width: 1200px) {
+  .status-bar__secondary {
+    display: none;
+  }
+}
+
+/* The toolbar already shows the active tool. */
+@media (max-width: 900px) {
+  .status-bar__tool {
+    display: none;
+  }
 }
 
 .status-bar__divider {

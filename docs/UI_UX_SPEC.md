@@ -33,7 +33,7 @@ Preferred general layout:
 ├──────────────────────────────────────────────────────┤
 │                                                      │
 │                    TOOLBAR                           │
-│                                                      │
+│        contextual tool options (second row)          │
 ├──────────────────────────────────────────────────────┤
 │                                                      │
 │                                                      │
@@ -42,11 +42,13 @@ Preferred general layout:
 │                                                      │
 │                                                      │
 ├──────────────────────────────────────────────────────┤
-│ Tool options / image info / zoom                     │
+│ Status: image info / pointer / selection / zoom      │
 └──────────────────────────────────────────────────────┘
 ```
 
 The exact final composition may evolve during implementation.
+
+Tool options appear in a compact contextual second row of the toolbar while the tool is active. The bottom bar is a compact status bar.
 
 ---
 
@@ -72,6 +74,8 @@ Flip
 ```
 
 Tool names should remain visible rather than relying exclusively on icons.
+
+Tools work on the open image, so available tools are disabled until an image is open. Tools that are not available yet stay disabled with a "coming soon" tooltip. The active tool is shown pressed (`aria-pressed`), with a tinted background and border so the state is not colour-only. In Phase 2 the Magic Wand is the only available tool; while it is active over an image, the pointer is a crosshair.
 
 ---
 
@@ -143,17 +147,45 @@ Keyboard focus
 
 ## Magic Wand UX
 
-When active, users should have access to settings such as:
+The Magic Wand becomes the active tool when an image is successfully opened.
+
+While it is active, a compact second toolbar row shows its options:
 
 ```text
-Tolerance
+New / Add / Subtract
 Contiguous / Global
-Add
-Subtract
+Tolerance (slider and number, 0–100, default 20)
 Grow
 Shrink
 Invert
 ```
+
+- The row preserves the approved dark layout, sizing, styling and responsive behaviour, and wraps on narrow windows.
+- New / Add / Subtract are visible controls, so modifier keys are optional: Shift + Click adds, Ctrl + Click subtracts. Alt is not used.
+- Contiguous / Global is its own visible toggle.
+- Changing the tolerance re-applies the most recent Magic Wand operation when the slider is released or a typed value is committed.
+
+As implemented (Step 9):
+
+- The row appears below the primary toolbar whenever the Magic Wand is the active tool (so only with an image open), in this order: New / Add / Subtract, Contiguous / Global, Tolerance (slider and text field), then Select All, Clear, Invert, Grow and Shrink. Groups wrap as whole units on narrow windows; there is no horizontal scrolling.
+- New / Add / Subtract and Contiguous / Global are framed rows of toggle buttons. The chosen one is pressed (`aria-pressed`) with the same tinted background and border as the active tool. Shift + Click and Ctrl + Click override the chosen mode for that click only; the pressed button does not change.
+- Options apply to the next Magic Wand click. Changing them never changes the image or the view, and only a committed tolerance changes the current selection (Step 10, below).
+- The slider applies every movement. The text field applies a whole number from 0 to 100 as it is typed, so the slider follows; anything else waits until Enter or leaving the field, when a number is rounded and clamped to 0–100 and other text (including an empty field) restores the current value. Up / Down arrows step by 1 and Page Up / Page Down by 10 in the text field, as on the slider. Escape in the text field restores the tolerance from before the unfinished entry (refined in Step 10, below).
+- Select All, Clear, Invert, Grow and Shrink act at once. An action that would change nothing (Select All with everything selected; Clear, Grow or Shrink with nothing selected; Grow or Shrink with everything selected) is shown disabled with `aria-disabled`, which keeps keyboard focus on a button that becomes unavailable when pressed. Visible labels are short (Clear, Invert…) and accessible names full (Clear Selection, Invert Selection…); tooltips name the Ctrl + A and Esc shortcuts.
+- Ctrl + A and Escape keep working while the tolerance slider has focus; only the text field keeps their text-editing meaning.
+
+As implemented (Step 10):
+
+- A finished tolerance adjustment re-applies the most recent Magic Wand click with the new tolerance. While the adjustment is in progress (dragging the slider, holding a key, typing) the slider and the number follow it, but the selection does not change.
+- An adjustment is finished (committed) when:
+  - the slider thumb is released after dragging or clicking the track;
+  - the last held arrow, Page Up / Page Down, Home or End key is released on the slider, or the last held arrow or Page key in the text field (holding a key re-applies once, at the end);
+  - Enter is pressed in the text field;
+  - focus leaves the slider or the text field.
+- Escape in the text field cancels the unfinished entry: it restores the tolerance from before that entry, re-applies nothing and does not clear the selection. After Enter or a finished arrow step there is nothing left to cancel, so Escape changes nothing. Enter or leaving the field with text that is not a number commits the tolerance the slider shows: the last whole number typed in that entry, or otherwise the tolerance from before it.
+- What is re-applied is the click as it was made: its pixel, Contiguous or Global, and New, Add or Subtract including a Shift or Ctrl override, combined with the selection from before the click. Choosing other options afterwards affects only the next click. Re-applying never builds on an earlier re-applied result, so moving the tolerance up and down never adds or removes more than one click at the final tolerance would.
+- Nothing is re-applied before the first click, after Select All, Clear, Invert, Grow or Shrink, or after another image opens; committing then only sets the tolerance for the next click. A failed import keeps the selection and what can be re-applied. Committing the tolerance the selection was made with does nothing.
+- The status bar's selection readout and its announcement update after each re-apply, as after a click.
 
 The interface should not expose unnecessary technical terminology.
 
@@ -163,15 +195,48 @@ The interface should not expose unnecessary technical terminology.
 
 Selected pixels should be clearly visible.
 
-Preferred combination:
+Approved combination:
 
-- Transparent overlay
-- Clear perimeter
-- Optional marching-ants animation
+- Mint-coloured tint, initially about 35% opacity, adjusted after visual testing if necessary
+- High-contrast two-tone perimeter, visible over light and dark images
+- Optional marching-ants animation, static when reduced motion is requested
+
+The overlay is a separate canvas layer aligned exactly with the image renderer. Avoid unnecessary full-resolution RGBA overlay allocations; evaluate viewport-sized or tiled rendering before implementing it.
 
 Selection visuals should remain understandable when zoomed in.
 
 Reduced-motion users must still have a clear non-animated selection indicator.
+
+As implemented (Step 8):
+
+- Tint: the mint accent (`#6ee7b7`) at 35% opacity over every selected pixel.
+- Boundary: wherever selected and unselected pixels meet, including the image edge, a black-and-white line about one CSS pixel wide on each side of the edge. With reduced motion requested its colours follow a static checkerboard of four-CSS-pixel squares anchored to the image: within a square the two sides of the edge take opposite colours, and the colours swap from square to square. Both colours therefore run along every edge, on both sides, so the boundary shows on white, black, transparent and detailed images. Otherwise the boundary is animated (Step 11, below).
+- At 100% zoom and above, the tint and boundary follow exactly the image pixels as drawn, and the pixels a click would pick. Zoomed out, where one screen pixel covers several image pixels, a screen pixel shows the selection when any pixel it covers is selected, so even a single selected pixel stays visible.
+- The overlay lets every pointer event through to the image, and is hidden from assistive technology; the status bar describes the selection in words.
+
+As implemented (Step 11):
+
+- Marching ants: the boundary is drawn with diagonal black and white stripes, four CSS pixels wide, which step about one CSS pixel every 150 ms. Along horizontal and vertical edges they form four-pixel dashes that move steadily right or down, without changing shape; a full cycle takes 1.2 seconds. As with the static pattern, the two sides of an edge take opposite colours and both colours run along every edge, so the boundary stays visible on white, black, transparent and detailed images.
+- Only the boundary moves. The tint, which pixels are boundary, and the selection itself never change from step to step, and the pattern stays anchored to the image while zooming and panning.
+- Reduced motion: when the system or browser asks for reduced motion (`prefers-reduced-motion: reduce`), nothing moves and the boundary is the static checkerboard of Step 8. The preference is followed live: switching it on stops the ants at once, switching it off starts them. There is no separate setting in the app.
+- The ants do not run when nothing is selected, when no part of the boundary is in view (for example zoomed into the middle of a selection), while the page is hidden (another tab, a minimised window), or while the boundary in view covers more than 10 million device pixels (more than a whole 4K screen of complex boundary); they continue from where they stopped.
+- Steps are kept light: when a step takes longer than usual (very complex boundaries, high-DPI screens, slower computers) the next one waits longer, so the animation never takes more than about a twentieth of the main thread. The ants then move more slowly; the rest of the app does not.
+- Selection state is never communicated by motion alone: the tint, the boundary and the status bar show it whether or not the ants move.
+
+---
+
+## Status Bar
+
+The status bar stays compact and responsive. It shows:
+
+- Image information and zoom
+- The active tool
+- Selection information: the number of selected pixels and the width × height of the area containing them (for example `Selection: 31,428 px · 200 × 200`), or `No selection`
+- The image pixel under the pointer, as `x, y`
+
+Selection state is therefore never communicated by colour or motion alone. Selection changes are announced to assistive technology in words; the pointer readout is not announced.
+
+On narrower windows the selection and pointer readouts keep priority: the image format and file size are hidden below 1200 px wide, and the active tool (already shown in the toolbar) below 900 px.
 
 ---
 
@@ -334,6 +399,8 @@ Ctrl + Wheel   Zoom
 ```
 
 Shortcuts must not interfere with text entry controls.
+
+Selection shortcuts in Phase 2 are limited to Ctrl + A and Escape, plus Shift + Click and Ctrl + Click with the Magic Wand. Additional selection hotkeys are deferred to the planned shortcut work.
 
 ---
 

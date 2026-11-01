@@ -16,6 +16,17 @@ describe('isEditableTarget', () => {
     expect(isEditableTarget(element([], true))).toBe(true)
   })
 
+  it('treats text-entry inputs as editable and sliders, checkboxes and buttons as not', () => {
+    const input = (type: string): EventTarget =>
+      ({ closest: (selector: string) => (selector === 'input' ? { type } : null) }) as unknown as EventTarget
+    for (const type of ['text', 'number', 'search', 'email', 'url', 'password', 'tel']) {
+      expect(isEditableTarget(input(type))).toBe(true)
+    }
+    for (const type of ['range', 'RANGE', 'checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'color', 'image', 'hidden']) {
+      expect(isEditableTarget(input(type))).toBe(false)
+    }
+  })
+
   it('treats buttons, the workspace and non-elements as not editable', () => {
     expect(isEditableTarget(element(['button']))).toBe(false)
     expect(isEditableTarget(element([]))).toBe(false)

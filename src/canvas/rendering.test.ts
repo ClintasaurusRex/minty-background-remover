@@ -6,6 +6,7 @@ import {
   checkerSquareSize,
   intersect,
   planFrame,
+  sameFramePlan,
   usesSmoothing,
   visibleSourceRect,
 } from './rendering'
@@ -162,5 +163,34 @@ describe('rendering helpers', () => {
       height: 5,
     })
     expect(intersect({ x: 0, y: 0, width: 10, height: 10 }, { x: 10, y: 0, width: 5, height: 5 })).toBeNull()
+  })
+})
+
+describe('sameFramePlan', () => {
+  const plan = (zoom: number, x: number, y: number, devicePixelRatio = 1, viewportSize = VIEWPORT_SIZE) =>
+    planFrame({ imageSize: { width: 400, height: 200 }, viewport: { zoom, offset: { x, y } }, viewportSize, devicePixelRatio })
+
+  it('matches plans for the same view, however they were made', () => {
+    expect(sameFramePlan(plan(0.5, 10, 20), plan(0.5, 10, 20))).toBe(true)
+    expect(sameFramePlan(plan(2, -100, 3, 1.5), plan(2, -100, 3, 1.5))).toBe(true)
+    // Nothing of the image in view, both times.
+    expect(sameFramePlan(plan(1, 5000, 0), plan(1, 6000, 0))).toBe(true)
+  })
+
+  it('tells apart any change of view, size or scaling', () => {
+    const base = plan(0.5, 10, 20)
+    expect(sameFramePlan(base, plan(0.5, 11, 20))).toBe(false) // panned one pixel
+    expect(sameFramePlan(base, plan(0.5, 10, 19))).toBe(false)
+    expect(sameFramePlan(base, plan(0.51, 10, 20))).toBe(false) // zoomed
+    expect(sameFramePlan(base, plan(0.5, 10, 20, 1.25))).toBe(false) // display scaling
+    expect(sameFramePlan(base, plan(0.5, 10, 20, 1, { width: 1001, height: 600 }))).toBe(false) // workspace size
+    expect(sameFramePlan(base, plan(1, 5000, 0))).toBe(false) // image out of view
+    expect(sameFramePlan(plan(1, 5000, 0), base)).toBe(false)
+  })
+
+  it('tells apart smoothing, which changes at 100%', () => {
+    const a = plan(1, 0, 0)
+    const b = { ...a, image: { ...a.image!, smoothing: !a.image!.smoothing } }
+    expect(sameFramePlan(a, b)).toBe(false)
   })
 })
