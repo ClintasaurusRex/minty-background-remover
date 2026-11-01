@@ -12,6 +12,7 @@ import {
   type EditorAction,
   type EditorImportResult,
   type EditorState,
+  type MagicWandOperation,
   type WorkspaceMetrics,
   displayViewport,
   documentVersion,
@@ -1097,5 +1098,163 @@ describe('editorReducer: selection', () => {
     const state = reduce(initialEditorState, { type: 'magic-wand-tolerance-changed', tolerance: 90 })
     expect(state.magicWand).not.toBe(initialEditorState.magicWand)
     expect(initialEditorState.magicWand.tolerance).toBe(20)
+  })
+})
+
+describe('editorReducer: Magic Wand operations', () => {
+  function opened(width = 4, height = 3, importId = 1, state: EditorState = measured) {
+    return reduce(
+      state,
+      { type: 'import-started', importId },
+      { type: 'import-finished', importId, result: succeeded(width, height) },
+    )
+  }
+
+  function mask(...rows: string[]): SelectionMask {
+    const { width, height, data } = maskBytes(...rows)
+    const selection = createSelectionMask(width, height, data)
+    if (!selection) throw new Error('Test mask selects nothing')
+    return selection
+  }
+
+  /** A recorded click on `state`'s document, as magicWandClick builds it. */
+  function operation(state: EditorState, change: Partial<MagicWandOperation> = {}): MagicWandOperation {
+    return {
+      version: documentVersion(state)!,
+      seed: { x: 0, y: 0 },
+      floodMode: 'contiguous',
+      selectionMode: 'new',
+      base: null,
+      tolerance: 20,
+      ...change,
+    }
+  }
+
+  function applied(state: EditorState, op: MagicWandOperation, selection: SelectionMask | null) {
+    return reduce(state, { type: 'magic-wand-applied', operation: op, selection })
+  }
+
+  const corner = () => mask('##..', '#...', '....')
+  const side = () => mask('...#', '...#', '...#')
+
+  it('records a click with its result, even when the selection does not change', () => {
+    const state = opened()
+    const op = operation(state)
+    const selection = corner()
+    const clicked = applied(state, op, selection)
+    expect(clicked.selection).toBe(selection)
+    expect(clicked.lastMagicWandOperation).toBe(op)
+
+    // Adding a region already selected: same mask, but this click is now the one re-applied.
+    const again = operation(clicked, { selectionMode: 'add', base: clicked.selection, seed: { x: 1, y: 0 } })
+    const unchanged = applied(clicked, again, clicked.selection)
+    expect(unchanged.selection).toBe(selection)
+    expect(unchanged.lastMagicWandOperation).toBe(again)
+  })
+
+  it('rejects an Add or Subtract click whose base is no longer the selection', () => {
+    const before = opened()
+    const state = applied(before, operation(before), corner())
+    const stale = operation(state, { selectionMode: 'add', base: side() })
+    expect(applied(state, stale, side())).toBe(state)
+    expect(applied(state, { ...stale, selectionMode: 'subtract' }, null)).toBe(state)
+    // New does not depend on the selection before it.
+    expect(applied(state, operation(state), side()).selection).toBeTruthy()
+  })
+
+  it('rejects a click for another document version or a mask of another size', () => {
+    const first = opened(4, 3, 1)
+    const op = operation(first)
+    const second = opened(4, 3, 2, first)
+    expect(applied(second, op, corner())).toBe(second)
+    expect(applied(second, operation(second, { version: { ...documentVersion(second)!, revision: 1 } }), corner())).toBe(second)
+    expect(applied(second, operation(second), mask('##.', '#..', '...'))).toBe(second)
+  })
+
+  it('re-applies only the latest operation, keeping everything but the tolerance', () => {
+    const state = opened()
+    const op = operation(state, { selectionMode: 'add', base: null, seed: { x: 3, y: 2 }, floodMode: 'global' })
+    const clicked = applied(state, op, corner())
+    const reapplied = reduce(clicked, { type: 'magic-wand-reapplied', operation: op, tolerance: 55, selection: side() })
+    expect(reapplied.selection).toEqual(side())
+    expect(reapplied.lastMagicWandOperation).toEqual({ ...op, tolerance: 55 })
+    expect(reapplied.lastMagicWandOperation!.base).toBe(op.base)
+
+    // A result computed from the previous operation arrives after this re-apply.
+    expect(reduce(reapplied, { type: 'magic-wand-reapplied', operation: op, tolerance: 70, selection: corner() })).toBe(reapplied)
+  })
+
+  it('rejects a re-applied result once the operation is forgotten, the image changed or the mask does not fit', () => {
+    const state = opened()
+    const op = operation(state)
+    const clicked = applied(state, op, corner())
+    const action = (selection: SelectionMask | null): EditorAction => ({ type: 'magic-wand-reapplied', operation: op, tolerance: 60, selection })
+
+    const cleared = reduce(clicked, { type: 'selection-cleared' })
+    expect(reduce(cleared, action(side()))).toBe(cleared)
+    const replaced = opened(4, 3, 2, clicked)
+    expect(reduce(replaced, action(side()))).toBe(replaced)
+    expect(reduce(clicked, action(mask('###', '...', '...')))).toBe(clicked)
+    const revised: EditorState = { ...clicked, document: { ...clicked.document!, revision: 1 } }
+    expect(reduce(revised, action(side()))).toBe(revised)
+  })
+
+  it('forgets the operation when another change replaces the selection, or another image opens', () => {
+    const state = opened()
+    const clicked = applied(state, operation(state), corner())
+    const version = documentVersion(state)!
+    expect(reduce(clicked, { type: 'selection-applied', version, selection: side() }).lastMagicWandOperation).toBeNull()
+    expect(reduce(clicked, { type: 'selection-applied', version, selection: null }).lastMagicWandOperation).toBeNull()
+    expect(reduce(clicked, { type: 'selection-cleared' }).lastMagicWandOperation).toBeNull()
+    expect(opened(4, 3, 2, clicked).lastMagicWandOperation).toBeNull()
+
+    // A change that changes nothing keeps it.
+    expect(reduce(clicked, { type: 'selection-applied', version, selection: clicked.selection })).toBe(clicked)
+    // As does a result for another image, which is ignored.
+    expect(reduce(clicked, { type: 'selection-applied', version: { ...version, documentId: 999 }, selection: side() })).toBe(clicked)
+  })
+
+  it('keeps the operation when an import fails, is rejected, is superseded or is still running', () => {
+    const state = opened()
+    const clicked = applied(state, operation(state), corner())
+    const op = clicked.lastMagicWandOperation
+    const outcomes = [
+      reduce(clicked, { type: 'import-started', importId: 2 }, { type: 'import-finished', importId: 2, result: failed }),
+      reduce(clicked, { type: 'import-rejected', error: createImportError('unsupported-format', 'folder') }),
+      reduce(
+        clicked,
+        { type: 'import-started', importId: 2 },
+        { type: 'import-started', importId: 3 },
+        { type: 'import-finished', importId: 2, result: succeeded(8, 8) },
+        { type: 'import-finished', importId: 3, result: failed },
+      ),
+      reduce(clicked, { type: 'import-started', importId: 2 }),
+    ]
+    for (const outcome of outcomes) {
+      expect(outcome.lastMagicWandOperation).toBe(op)
+      expect(outcome.selection).toBe(clicked.selection)
+    }
+  })
+
+  it('keeps the operation through tolerance and option changes, tools, zoom, panning and resizing', () => {
+    const state = opened(400, 200)
+    const clicked = applied(state, operation(state), selectAll(400, 200))
+    const moved = reduce(
+      { ...clicked, activeTool: 'crop' },
+      { type: 'tool-selected', tool: 'magic-wand' },
+      { type: 'magic-wand-tolerance-changed', tolerance: 70 },
+      { type: 'magic-wand-tolerance-changed', tolerance: 3 },
+      { type: 'magic-wand-flood-mode-changed', floodMode: 'global' },
+      { type: 'magic-wand-selection-mode-changed', selectionMode: 'subtract' },
+      { type: 'zoom-scaled', anchor: { x: 100, y: 100 }, factor: 3 },
+      { type: 'zoom-fitted' },
+      { type: 'wheel-panned', delta: { x: 30, y: -20 } },
+      { type: 'pan-drag-started' },
+      { type: 'pan-dragged', delta: { x: 15, y: 5 } },
+      { type: 'pan-drag-ended' },
+      { type: 'workspace-resized', workspace: { size: { width: 700, height: 500 }, devicePixelRatio: 1.25 } },
+    )
+    expect(moved.lastMagicWandOperation).toBe(clicked.lastMagicWandOperation)
+    expect(moved.selection).toBe(clicked.selection)
   })
 })

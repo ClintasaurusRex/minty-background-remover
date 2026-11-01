@@ -169,8 +169,8 @@ Phase 2 is implemented in twelve reviewed steps, each stopping for review:
 6. Editor state for the active tool, Magic Wand options and selection. Done.
 7. Magic Wand click, Ctrl + A / Esc and status bar (first manual checkpoint). Done.
 8. Selection overlay. Done.
-9. Magic Wand options row. (Implemented; awaiting review.)
-10. Re-apply on tolerance change.
+9. Magic Wand options row. Done.
+10. Re-apply on tolerance change. (Implemented; awaiting review.)
 11. Marching ants (optional).
 12. Browser performance measurement, hardening and docs.
 
@@ -183,6 +183,14 @@ Known limitations (Step 8):
 - Zoomed out, a screen pixel shows the selection when any image pixel it covers is selected: the selection can look up to one screen pixel larger, and holes smaller than a screen pixel are not shown.
 - The boundary is about one CSS pixel on each side of an edge, so near 100% it covers one- or two-pixel features; a selection with many tiny holes looks speckled with black and white until zoomed in.
 - Overlay tiles are rasterised synchronously on the main thread when the selection, zoom or display scaling changes (measurements in `IMAGE_PROCESSING_SPEC.md`, Selection Overlay). On large displays with very complex selections a zoom step can take over 100 ms.
+
+Known limitations (Step 10):
+
+- A re-apply runs on the main thread, like a click: about 55–80 ms for a 4K screenshot and 0.3–1 s near the 50-megapixel limit in the Step 10 measurements (`IMAGE_PROCESSING_SPEC.md`, Selection Performance). The time-slicing or Web Worker decision from Step 7 applies to both.
+- While an Add or Subtract click can be re-applied, the selection from before it is kept: one more full-image mask (8.3 MB at 4K, 50 MB at 50 megapixels) until the next click, another selection change or another image.
+- Clear and Escape do nothing when nothing is selected, so after a Subtract that removed everything they do not end re-applying: lowering the tolerance afterwards gives back the pixels that Subtract no longer reaches.
+- A click on the image while a typed tolerance is not yet committed uses the typed value. The click is handled before the text field loses focus, so the earlier click is not re-applied with that value first; the click becomes the one re-applied.
+- Firefox was not available in the cloud session used for Step 10; its tolerance interactions await manual testing.
 
 Out of Phase 2: deleting selected pixels, edge cleanup, Auto Trim (Phase 3) and selection Undo / Redo.
 

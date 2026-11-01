@@ -186,6 +186,8 @@ The colour-distance formula is defined in `IMAGE_PROCESSING_SPEC.md` (Colour Dis
 
 Changing the tolerance re-applies the most recent Magic Wand operation with the new value, including its New / Add / Subtract mode, against the selection as it was before that operation. The recalculation happens when the slider interaction finishes or a typed value is committed, not on every slider movement.
 
+The operation is re-applied as it was made: the clicked pixel, Contiguous or Global, and the mode actually used (including a Shift or Ctrl override), whatever options are chosen later. Every re-apply starts again from the selection before that click, so repeated changes never add or subtract cumulatively: the result is always what one click at the latest tolerance would have produced. There is nothing to re-apply before the first click, after Select All, Clear, Invert, Grow or Shrink, or after another image is opened; a failed import keeps it. The details of when an adjustment counts as finished are in `UI_UX_SPEC.md` (Magic Wand UX).
+
 The tolerance is not remembered between application sessions.
 
 ### Global Mode

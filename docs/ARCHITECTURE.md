@@ -140,13 +140,16 @@ Key rules:
 ```text
 src/
 ├── editor/types.ts        SelectionMask (empty selection = null), FloodMode, SelectionMode
-├── editor/editorState.ts  active tool, Magic Wand settings and the current selection
-├── editor/selectionCommands.ts  click modifier policy, Magic Wand click, selection actions
-│                          (Select All, Clear, Invert, Grow, Shrink) and their availability,
-│                          Ctrl + A / Esc recognition (pure; pixel work outside the reducer)
+├── editor/editorState.ts  active tool, Magic Wand settings, the current selection and the last
+│                          Magic Wand operation (for tolerance re-apply)
+├── editor/selectionCommands.ts  click modifier policy, Magic Wand click and its re-apply on a
+│                          committed tolerance, selection actions (Select All, Clear, Invert,
+│                          Grow, Shrink) and their availability, Ctrl + A / Esc recognition
+│                          (pure; pixel work outside the reducer)
 ├── app/useSelectionShortcuts.ts, app/pointerPosition.ts (pointer readout store)
 ├── editor/toleranceInput.ts     typed tolerance: exact (applied while typing), committed (rounded,
-│                          clamped), keyboard steps; the clamp the reducer also uses
+│                          clamped), keyboard steps; the clamp the reducer also uses; when a
+│                          slider or text field adjustment is finished (pure event handling)
 ├── components/Toolbar/ToolOptions.tsx, MagicWandOptions.tsx  contextual second toolbar row
 ├── canvas/selectionOverlay.ts  overlay tile plans and rasterising (pure; typed arrays only)
 ├── canvas/selectionOverlayRenderer.ts  the only overlay drawing code (tile cache, canvas)
@@ -165,6 +168,8 @@ Later Phase 2 steps add colour distance, the Magic Wand, combine / invert / grow
 - Masks are immutable; the editor state holds one reference to the current mask.
 - Selections are computed outside the reducer and applied with `selection-applied`, tagged with the document version (`documentVersion()`: document id and revision) they were computed from. The reducer discards a result for any other version, or one whose size differs from the document's, so a late result can never land on a different image.
 - A successful import clears the selection and activates the Magic Wand; a failed, rejected or superseded import changes neither. Magic Wand settings last for the session. Zoom, pan and workspace resizing never touch the selection.
+- A Magic Wand click is applied with `magic-wand-applied`, which also records it as `lastMagicWandOperation`: the document version, the clicked pixel, Contiguous or Global, the New / Add / Subtract mode actually used, the selection from before the click (null for New) and the tolerance of the current result. A committed tolerance re-applies it with `magic-wand-reapplied`, computed in `selectionCommands` from the recorded operation, never from the current selection, so re-applies never accumulate. The reducer accepts a re-applied result only while its operation is still the recorded one and its version is the open document's; an Add or Subtract click only while its recorded selection is still the current one. Every other selection change (`selection-applied`, `selection-cleared`) and a successful import forget the operation.
+- The tolerance controls change the tolerance on every movement but commit it only when an adjustment is finished (`toleranceInput.ts`); only a commit re-applies. The slider's commit is the native `change` event (React's `onChange` reports every movement), key releases and leaving the slider.
 - Magic Wand clicks are computed synchronously in the pointer-down handler from the latest committed state, then dispatched. Panning takes priority: `useSpacePan` passes a press to the tool only when Space is not held and no drag is in progress. Only presses directly on the canvas count.
 - The pointer position for the status bar lives in a small external store read with `useSyncExternalStore`, so pointer movement re-renders only the readout, never the image canvas.
 - The selection overlay is a separate canvas layer aligned with the image renderer, using the same transform. `workspaceRenderer` remains the only image drawing code; the overlay gets its own renderer.

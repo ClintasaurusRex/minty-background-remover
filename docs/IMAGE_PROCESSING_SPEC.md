@@ -106,7 +106,7 @@ Rules:
 - An empty selection is `null`, never a mask with no selected pixels.
 - Masks are immutable. Every operation produces a new mask and never writes to its inputs, so masks can be shared (renderer caches, a future undo history).
 - The builder takes ownership of the buffer it is given, without copying it. It rejects invalid dimensions, a length other than width × height, and values other than 0 or 1 with a `RangeError`.
-- The selection model keeps no persistent full-image buffers other than masks: the current selection and, for tolerance re-apply, the selection as it was before the last Magic Wand operation.
+- The selection model keeps no persistent full-image buffers other than masks: the current selection and, for tolerance re-apply, the selection as it was before the last Magic Wand operation (only for Add and Subtract, whose result depends on it; shared, never copied).
 - At the 50-megapixel import limit a mask uses 50 MB.
 
 Alternative efficient representations (bit packing, run-length encoding for history) may be considered if justified.
@@ -249,6 +249,18 @@ Step 7 browser measurements (whole pointer-down handling: Magic Wand, combine an
 - Each mask is one byte per pixel (8.3 MB at 4K). A New click replaces the selection with the Magic Wand result; Add and Subtract briefly hold that result and the combined mask alongside the current selection.
 
 Near the 50-megapixel limit the main thread can block noticeably. How to respond (time-slicing on the main thread or a Web Worker) is an open owner decision, to be made with real images at the Step 7 checkpoint.
+
+### Tolerance Re-apply
+
+A committed tolerance change (Step 10) re-applies the last Magic Wand click as `combineSelections(before, createMagicWandSelection(pixels, seed, { tolerance, floodMode }), mode)`, where `before` is the selection from before the click. It is the same formula, and the same work, as the click itself: one Magic Wand pass and one combine, computed outside the reducer. Nothing is computed while the tolerance is being adjusted, when the committed tolerance is the one the selection was made with, or for a Subtract made with nothing selected (whose result is always nothing).
+
+Memory: the editor state holds the current selection and, for Add and Subtract, the mask from before the click: at most two full-image masks. During a re-apply the new Magic Wand result and, for Add and Subtract, the combined mask are briefly held as well: four masks for Add or Subtract (33 MB at 4K, 200 MB at 50 megapixels) and two for New. React keeps the selection of its previous render until it renders again, at most one more mask. Heap snapshots in Chromium after ten re-applies of each mode found exactly the masks above (one for New, two for Add and Subtract, plus React's previous one until the next render): the number of live masks never grows with the number of re-applies.
+
+Step 10 measurements (production build, headless Chromium 153, device pixel ratio 1, 1280 × 800 window, on a 4-core 2.1 GHz Xeon cloud container that is markedly slower than the machine used for Steps 3–8; whole event handling including the React commit and overlay drawing, excluding paint):
+
+- 4K screenshot-like image (3840 × 2160, 3–5 million pixels selected): a click 100–170 ms; a re-apply 55–80 ms (median) when the slider is released or Enter is pressed, up to about 240 ms.
+- 50 megapixels (8192 × 6100, 18–34 million pixels selected): a click 460–1040 ms; a re-apply 290–420 ms (median), up to about 1 s.
+- Slider movements, typing, a commit of the same tolerance and Escape in the text field: under 2 ms, with no pixel work.
 
 ### Selection Overlay
 

@@ -89,6 +89,8 @@ export function magicWandClick(state: EditorState, point: Point, mode: Selection
  * re-apply, so re-applying always equals clicking once at the latest tolerance.
  */
 function operationResult(pixels: ImageData, operation: MagicWandOperation, tolerance: number): SelectionMask | null {
+  // Subtracting from nothing leaves nothing at any tolerance, so the Magic Wand need not run.
+  if (operation.selectionMode === 'subtract' && !operation.base) return null
   const found = createMagicWandSelection(pixels, operation.seed, { tolerance, floodMode: operation.floodMode })
   return combineSelections(operation.base, found, operation.selectionMode)
 }

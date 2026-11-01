@@ -153,6 +153,7 @@ interface ToleranceControlProps {
  *
  * Finished adjustments are committed (see toleranceInput.ts): releasing the slider,
  * releasing the last arrow or Page key on either control, Enter or leaving either control.
+ * Only a commit re-applies the last Magic Wand click, so dragging or typing never does.
  */
 function ToleranceControl({ tolerance, onChange, onCommit }: ToleranceControlProps) {
   const labelId = useId()
@@ -206,6 +207,7 @@ function ToleranceControl({ tolerance, onChange, onCommit }: ToleranceControlPro
         aria-labelledby={labelId}
         title="How different a colour can be and still be selected (0–100)"
         onChange={(event) => onChange(Number(event.currentTarget.value))}
+        onPointerDown={(event) => handleSlider({ type: 'pointer-down' }, Number(event.currentTarget.value))}
         onKeyDown={(event) => handleSlider({ type: 'key-down', key: event.key }, Number(event.currentTarget.value))}
         onKeyUp={(event) => handleSlider({ type: 'key-up', key: event.key }, Number(event.currentTarget.value))}
         onBlur={(event) => handleSlider({ type: 'blur' }, Number(event.currentTarget.value))}

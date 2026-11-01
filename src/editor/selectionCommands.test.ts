@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { imageToViewport } from '../canvas/coordinates'
 import { planFrame } from '../canvas/rendering'
+import { boundaryLineWidth, rasteriseSelectionOverlay, selectionStates } from '../canvas/selectionOverlay'
 import { createSelectionMask } from '../image/selection/selectionMask'
 import { imageFromRows, maskRows } from '../image/selection/testFixtures'
 import {
@@ -12,6 +13,7 @@ import {
   editorReducer,
   initialEditorState,
 } from './editorState'
+import { describeSelection, formatSelection } from './documentInfo'
 import { createImageDocument } from './imageDocument'
 import {
   type PointerPress,
@@ -27,7 +29,7 @@ import {
   selectionShortcut,
 } from './selectionCommands'
 import type { SelectionAction } from './selectionCommands'
-import type { PixelCoordinate, Point, SelectionMode } from './types'
+import type { PixelCoordinate, Point, SelectionMask, SelectionMode } from './types'
 
 const WORKSPACE: WorkspaceMetrics = { size: { width: 1000, height: 600 }, devicePixelRatio: 1 }
 
@@ -881,5 +883,234 @@ describe('re-applying the last Magic Wand click on a committed tolerance', () =>
     expect(before.selection!.data).toEqual(baseBytes)
     results.forEach((mask, i) => expect(mask.data).toEqual(snapshots[i]))
     expect(before.document!.pixels.data).toEqual(pixels)
+  })
+})
+
+/** `state` with image pixels that throw when read, so a test can tell whether the Magic Wand ran. */
+function withUnreadablePixels(state: EditorState): EditorState {
+  const pixels = new Proxy({} as ImageData, {
+    get() {
+      throw new Error('The Magic Wand ran')
+    },
+  })
+  return { ...state, document: { ...state.document!, pixels } }
+}
+
+describe('re-applying: when it computes, and what a commit changes', () => {
+  it('runs the Magic Wand only when a recorded click needs a new tolerance', () => {
+    const clicked = click(open(STAIRS()), 0, 0, 'new')
+    // The check itself works: a real re-apply reads the pixels.
+    expect(() => reapplyMagicWandCommand(withUnreadablePixels(clicked), 60)).toThrow('The Magic Wand ran')
+
+    // The same effective tolerance, no click, another version: nothing is computed.
+    expect(reapplyMagicWandCommand(withUnreadablePixels(clicked), 20.4)).toBeNull()
+    expect(reapplyMagicWandCommand(withUnreadablePixels(open(STAIRS())), 60)).toBeNull()
+    const revised: EditorState = { ...clicked, document: { ...clicked.document!, revision: 1 } }
+    expect(reapplyMagicWandCommand(withUnreadablePixels(revised), 60)).toBeNull()
+    expect(reapplyMagicWandCommand(withUnreadablePixels(run(clicked, 'grow')), 60)).toBeNull()
+  })
+
+  it('re-applies Subtract from nothing as nothing, without running the Magic Wand', () => {
+    const subtracted = click(open(STAIRS()), 0, 0, 'subtract')
+    expect(subtracted.selection).toBeNull()
+    const action = reapplyMagicWandCommand(withUnreadablePixels(subtracted), 90)
+    expect(action).toMatchObject({ type: 'magic-wand-reapplied', tolerance: 90, selection: null })
+    const committed = commit(subtracted, 90)
+    expect(committed.selection).toBeNull()
+    expect(committed.lastMagicWandOperation).toMatchObject({ selectionMode: 'subtract', base: null, tolerance: 90 })
+  })
+
+  it('leaves the state untouched for a commit that changes nothing', () => {
+    const clicked = click(open(STAIRS()), 0, 0, 'new')
+    expect(commit(clicked, 20)).toBe(clicked)
+    const raised = commit(clicked, 60)
+    expect(commit(raised, 60)).toBe(raised)
+    expect(commit(raised, 59.6)).toBe(raised)
+  })
+
+  it('never re-applies while the tolerance is only being adjusted, only when it is committed', () => {
+    const clicked = click(open(STAIRS()), 0, 0, 'new')
+    // A slider drag: every movement changes the tolerance, nothing else.
+    let dragged = clicked
+    for (const tolerance of [21, 30, 45, 70, 100, 64, 60]) {
+      dragged = reduce(dragged, { type: 'magic-wand-tolerance-changed', tolerance })
+      expect(dragged.selection).toBe(clicked.selection)
+      expect(dragged.lastMagicWandOperation).toBe(clicked.lastMagicWandOperation)
+    }
+    // Released at 60.
+    const released = commit(dragged, 60)
+    expectSameSelection(released, freshClick(open(STAIRS()), 0, 0, 'new', 60))
+    expect(released.lastMagicWandOperation!.tolerance).toBe(60)
+  })
+
+  it('computes nothing when a drag ends at the tolerance the selection was made with', () => {
+    // Raised and lowered back to the click's tolerance before release.
+    let state = click(open(STAIRS()), 0, 0, 'new')
+    const selection = state.selection
+    for (const tolerance of [50, 80, 20]) state = reduce(state, { type: 'magic-wand-tolerance-changed', tolerance })
+    expect(reapplyMagicWandCommand(withUnreadablePixels(state), 20)).toBeNull()
+    expect(commit(state, 20).selection).toBe(selection)
+  })
+
+  it('makes a click with a tolerance typed but not yet committed, which the later commit leaves alone', () => {
+    // Typing "60" applies it; the click on the image arrives before the field loses focus.
+    const before = click(open(STAIRS()), 9, 0, 'new')
+    const typed = reduce(before, { type: 'magic-wand-tolerance-changed', tolerance: 60 })
+    const clicked = click(typed, 0, 0, 'add')
+    expect(clicked.lastMagicWandOperation).toMatchObject({ tolerance: 60, base: before.selection })
+    // Leaving the field commits 60: the new click was made with it, so nothing is computed.
+    expect(reapplyMagicWandCommand(withUnreadablePixels(clicked), 60)).toBeNull()
+    expect(commit(clicked, 60)).toBe(clicked)
+    expectSameSelection(clicked, freshClick(before, 0, 0, 'add', 60))
+  })
+
+  it('re-applies at the clicked pixel after zooming, panning and resizing the workspace', () => {
+    const before = click(open(STAIRS()), 9, 0, 'new')
+    const clicked = click(before, 0, 2, 'add')
+    const moved = reduce(
+      clicked,
+      { type: 'zoom-scaled', anchor: { x: 400, y: 300 }, factor: 9 },
+      { type: 'wheel-panned', delta: { x: -170, y: 40 } },
+      { type: 'workspace-resized', workspace: { size: { width: 640, height: 480 }, devicePixelRatio: 1.5 } },
+    )
+    for (const tolerance of [70, 30, 5]) {
+      expectSameSelection(commit(moved, tolerance), freshClick(before, 0, 2, 'add', tolerance))
+    }
+  })
+
+  it('re-applies on the open image while another import runs, which then replaces or keeps the result', () => {
+    const clicked = click(open(STAIRS()), 0, 0, 'new')
+    const importing = reduce(clicked, { type: 'import-started', importId: 997 })
+    const reapplied = commit(importing, 60)
+    expectSameSelection(reapplied, freshClick(open(STAIRS()), 0, 0, 'new', 60))
+
+    const failed = reduce(reapplied, {
+      type: 'import-finished',
+      importId: 997,
+      result: { ok: false, error: { code: 'decode-failed', message: 'x' } },
+    })
+    expect(failed.selection).toBe(reapplied.selection)
+    expect(failed.lastMagicWandOperation).toBe(reapplied.lastMagicWandOperation)
+    // Still re-applies after the failure.
+    expectSameSelection(commit(failed, 10), freshClick(open(STAIRS()), 0, 0, 'new', 10))
+
+    const pixels = STAIRS()
+    const document = createImageDocument({ name: 'b.png', format: 'png', source: 'drop', fileSizeBytes: 1, pixels })
+    const bitmap = { width: pixels.width, height: pixels.height, close: () => {} }
+    const succeeded = reduce(reapplied, { type: 'import-finished', importId: 997, result: { ok: true, document, bitmap } })
+    expect(succeeded.selection).toBeNull()
+    expect(succeeded.lastMagicWandOperation).toBeNull()
+    expect(commit(succeeded, 80).selection).toBeNull()
+  })
+
+  it('discards a re-applied result that arrives after Select All, Invert, Grow, Shrink or Clear', () => {
+    const clicked = click(open(STAIRS()), 0, 0, 'new')
+    const late = reapplyMagicWandCommand(clicked, 70)!
+    for (const action of ['select-all', 'clear', 'invert', 'grow', 'shrink'] as const) {
+      const changed = run(clicked, action)
+      expect(editorReducer(changed, late)).toBe(changed)
+    }
+  })
+})
+
+describe('re-applying: what the overlay and status bar show', () => {
+  /** Every overlay pixel at `scale` device pixels per image pixel: selection states and the drawn colours. */
+  function overlay(selection: SelectionMask, scale: number) {
+    const lineWidth = boundaryLineWidth(1)
+    const rect = { x: -lineWidth, y: -lineWidth, width: Math.ceil(selection.width * scale) + 2 * lineWidth, height: Math.ceil(selection.height * scale) + 2 * lineWidth }
+    const out = new Uint32Array(rect.width * rect.height)
+    rasteriseSelectionOverlay(selection, scale, lineWidth, rect, out, rect.width)
+    return { states: selectionStates(selection, scale, rect), pixels: out }
+  }
+
+  it('draws a re-applied selection exactly as the same click made once at that tolerance', () => {
+    for (const mode of ['new', 'add', 'subtract'] as const) {
+      const before = mode === 'new' ? open(STAIRS()) : mode === 'add' ? click(open(STAIRS()), 9, 2, 'new') : run(open(STAIRS()), 'select-all')
+      let state = click(before, 0, 0, mode)
+      for (const tolerance of [55, 5, 30]) {
+        state = commit(state, tolerance)
+        const expected = freshClick(before, 0, 0, mode, tolerance)
+        if (!expected.selection) {
+          expect(state.selection).toBeNull()
+          continue
+        }
+        for (const scale of [1, 3, 0.5]) expect(overlay(state.selection!, scale)).toEqual(overlay(expected.selection, scale))
+      }
+    }
+  })
+
+  it('reports the re-applied pixel count and bounds in the status bar, recounted from the mask', () => {
+    const before = click(open(STAIRS()), 9, 0, 'new')
+    let state = click(before, 0, 0, 'add')
+    for (const tolerance of [40, 100, 0, 25]) {
+      state = commit(state, tolerance)
+      const expected = freshClick(before, 0, 0, 'add', tolerance)
+      expect(formatSelection(state.selection!)).toBe(formatSelection(expected.selection!))
+      expect(describeSelection(state.selection)).toBe(describeSelection(expected.selection))
+      const recount = createSelectionMask(10, 3, Uint8Array.from(state.selection!.data))!
+      expect(formatSelection(state.selection!)).toBe(formatSelection(recount))
+    }
+    expect(formatSelection(commit(state, 100).selection!)).toBe('30 px · 10 × 3')
+  })
+})
+
+/**
+ * A 3840 × 2160 screenshot-like image: a vertical background gradient (light grey), a dark
+ * toolbar and blue panels, so tolerance decides how much of the background a click reaches.
+ */
+function screenshot4K(): ImageData {
+  const width = 3840
+  const height = 2160
+  const data = new Uint8ClampedArray(width * height * 4)
+  const words = new Uint32Array(data.buffer)
+  // Little-endian words: 0xAABBGGRR.
+  for (let y = 0; y < height; y++) {
+    const shade = 200 + Math.floor((y * 50) / height)
+    words.fill((255 << 24) | (shade << 16) | (shade << 8) | shade, y * width, (y + 1) * width)
+  }
+  const rect = (x0: number, y0: number, w: number, h: number, value: number) => {
+    for (let y = y0; y < y0 + h; y++) words.fill(value, y * width + x0, y * width + x0 + w)
+  }
+  rect(0, 0, width, 120, 0xff302820)
+  for (let i = 0; i < 6; i++) rect(200 + i * 600, 400 + (i % 2) * 500, 480, 900, 0xffc08040)
+  return { colorSpace: 'srgb', width, height, data }
+}
+
+function sameMask(a: SelectionMask | null, b: SelectionMask | null): boolean {
+  if (!a || !b) return a === b
+  if (a.count !== b.count || JSON.stringify(a.bounds) !== JSON.stringify(b.bounds)) return false
+  for (let i = 0; i < a.data.length; i++) if (a.data[i] !== b.data[i]) return false
+  return true
+}
+
+describe('re-applying on a 4K image', () => {
+  it('takes one Magic Wand pass per commit, never accumulates and keeps only the masks it needs', () => {
+    const opened = open(screenshot4K())
+    const befores = {
+      new: opened,
+      // One blue panel.
+      add: click(opened, 300, 500, 'new'),
+      subtract: run(opened, 'select-all'),
+    } as const
+    expect(befores.add.selection!.count).toBe(480 * 900)
+    for (const mode of ['new', 'add', 'subtract'] as const) {
+      const before = befores[mode]
+      let state = click(before, 3000, 2000, mode)
+      const counts = [state.selection?.count]
+      // Down from the click's 20 (which reaches the whole gradient), then back up part of the
+      // way: the background reached changes each time.
+      for (const tolerance of [5, 12]) {
+        const started = performance.now()
+        state = commit(state, tolerance)
+        // About 50–200 ms in Node on a desktop; the limit only catches runaway work.
+        expect(performance.now() - started).toBeLessThan(2000)
+        counts.push(state.selection?.count)
+        // Memory: New keeps no earlier mask; Add and Subtract share the one from before the
+        // click, never copying it, so the state holds at most two full-image masks.
+        expect(state.lastMagicWandOperation!.base).toBe(mode === 'new' ? null : before.selection)
+      }
+      expect(new Set(counts).size).toBe(3)
+      expect(sameMask(state.selection, freshClick(before, 3000, 2000, mode, 12).selection)).toBe(true)
+    }
   })
 })

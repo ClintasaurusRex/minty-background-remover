@@ -69,7 +69,8 @@ export function toleranceToCommit(draft: string | null, current: number): number
  *   covers values set by assistive technology).
  * - Slider and text field, keyboard: when the last adjustment key is released. Holding an
  *   arrow key repeats the step, and is re-applied once, at the end.
- * - Text field, typing: Enter or leaving the field. Escape cancels the unfinished entry.
+ * - Text field, typing: Enter or leaving the field. Escape cancels the unfinished entry,
+ *   restoring the tolerance from before it, which is already committed.
  * - Leaving either control finishes whatever adjustment was still in progress.
  *
  * Committing the tolerance the selection was already made with computes nothing, so an
@@ -114,6 +115,8 @@ export function releaseAdjustmentKey(held: HeldKeys, key: string): { held: HeldK
 export type ToleranceSliderEvent =
   | { readonly type: 'key-down'; readonly key: string }
   | { readonly type: 'key-up'; readonly key: string }
+  /** A pointer press on the slider, which starts a pointer adjustment. */
+  | { readonly type: 'pointer-down' }
   /** The native change event: the browser's signal that the user committed a value. */
   | { readonly type: 'change' }
   | { readonly type: 'blur' }
@@ -124,6 +127,11 @@ export interface ToleranceSliderResult {
   readonly commit: boolean
 }
 
+/**
+ * The slider's behaviour: pointer adjustments commit on release (the change event), keyboard
+ * adjustments when the last adjustment key is released, and leaving the slider commits
+ * whatever is in progress.
+ */
 export function toleranceSliderEvent(held: HeldKeys, event: ToleranceSliderEvent): ToleranceSliderResult {
   switch (event.type) {
     case 'key-down':
@@ -132,6 +140,11 @@ export function toleranceSliderEvent(held: HeldKeys, event: ToleranceSliderEvent
       const released = releaseAdjustmentKey(held, event.key)
       return { held: released.held, commit: released.finished }
     }
+    case 'pointer-down':
+      // A pointer press ends a keyboard adjustment, committing it. So a pointer adjustment
+      // always commits on release, even after a key release that was never reported (macOS
+      // reports none while ⌘ is held).
+      return { held: NO_KEYS_HELD, commit: held.size > 0 }
     case 'change':
       // Browsers fire change for every keyboard step too; those wait for the key's release.
       return { held, commit: held.size === 0 }
@@ -140,15 +153,21 @@ export function toleranceSliderEvent(held: HeldKeys, event: ToleranceSliderEvent
   }
 }
 
-/** The tolerance text field's own state. */
+/**
+ * The tolerance text field's own state. An entry is in progress from the first typed
+ * character or step key until it is finished (Enter, Escape, the last step key released or
+ * leaving the field).
+ */
 export interface ToleranceFieldState {
   /** The text being typed, or null to show the current tolerance. */
   readonly draft: string | null
   /**
-   * The tolerance when the field gained focus or last finished an adjustment: what Escape
-   * goes back to, cancelling only the unfinished entry.
+   * The tolerance from just before the entry in progress began: what Escape restores,
+   * cancelling only the unfinished entry. Captured when the entry begins, so it is always the
+   * committed tolerance, however the tolerance changed since the field gained focus.
    */
   readonly committed: number
+  /** Step keys held down (see FIELD_ADJUSTMENT_KEYS). */
   readonly held: HeldKeys
 }
 
@@ -180,8 +199,8 @@ export interface ToleranceFieldResult {
  * - Typing a whole number from 0 to 100 applies it at once; other text waits.
  * - Enter or leaving the field commits the entry, rounded and clamped; text that is not a
  *   number commits the current tolerance.
- * - Escape cancels the unfinished entry: it restores and commits the tolerance from when
- *   the field gained focus or last committed (which normally re-applies nothing).
+ * - Escape cancels the unfinished entry: it restores and commits the tolerance from before
+ *   the entry began, which is already committed, so it re-applies nothing.
  * - Up / Down arrows and Page Up / Page Down step the tolerance at once and commit it when
  *   the last of them is released.
  */
@@ -190,37 +209,41 @@ export function toleranceFieldEvent(
   event: ToleranceFieldEvent,
   tolerance: number,
 ): ToleranceFieldResult {
+  // Without an entry in progress, the current tolerance is the committed one: an entry
+  // beginning now is cancelled back to it.
+  const committed = state.draft !== null || state.held.size > 0 ? state.committed : tolerance
   switch (event.type) {
     case 'focus':
       return { state: initialToleranceFieldState(tolerance) }
 
     case 'input': {
-      const next = { ...state, draft: event.text }
+      const next = { ...state, draft: event.text, committed }
       const exact = exactToleranceInput(event.text)
       return exact === null ? { state: next } : { state: next, change: exact }
     }
 
     case 'key-down': {
-      if (event.key === 'Enter') return finishField(state, toleranceToCommit(state.draft, tolerance))
+      if (event.key === 'Enter') return finishField(toleranceToCommit(state.draft, tolerance))
       // Handled here, so Escape does not also clear the selection.
-      if (event.key === 'Escape') return { ...finishField(state, state.committed), handled: true }
+      if (event.key === 'Escape') return { ...finishField(committed), handled: true }
       const stepped = steppedTolerance(committedToleranceInput(state.draft ?? '') ?? tolerance, event.key)
       if (stepped === null) return { state }
       const held = pressAdjustmentKey(state.held, event.key, FIELD_ADJUSTMENT_KEYS)
-      return { state: { ...state, draft: null, held }, change: stepped, handled: true }
+      return { state: { draft: null, committed, held }, change: stepped, handled: true }
     }
 
     case 'key-up': {
       const { held, finished } = releaseAdjustmentKey(state.held, event.key)
-      if (!finished) return held === state.held ? { state } : { state: { ...state, held } }
-      return { state: { ...state, committed: tolerance, held }, commit: tolerance }
+      if (finished) return finishField(tolerance)
+      return held === state.held ? { state } : { state: { ...state, held } }
     }
 
     case 'blur':
-      return finishField({ ...state, held: NO_KEYS_HELD }, toleranceToCommit(state.draft, tolerance))
+      return finishField(toleranceToCommit(state.draft, tolerance))
   }
 }
 
-function finishField(state: ToleranceFieldState, value: number): ToleranceFieldResult {
-  return { state: { ...state, draft: null, committed: value }, commit: value }
+/** Ends the entry in progress, committing `value`. */
+function finishField(value: number): ToleranceFieldResult {
+  return { state: initialToleranceFieldState(value), commit: value }
 }
