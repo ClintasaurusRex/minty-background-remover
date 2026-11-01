@@ -7,12 +7,19 @@ import { pixelUnderPointer } from './coordinates'
 import { snapToDevicePixels } from './devicePixels'
 import { intersect, planFrame } from './rendering'
 import {
+  type BoundaryPattern,
+  MARCHING_ANTS_PHASES,
   OVERLAY_PIXELS,
   OVERLAY_TILE_SIZE,
+  STATIC_BOUNDARY,
   boundaryLineWidth,
+  marchingBoundary,
   overlayContentRect,
+  paintOverlayBoundary,
   planSelectionOverlay,
+  rasteriseOverlayTile,
   rasteriseSelectionOverlay,
+  repaintOverlayBoundary,
   selectionStates,
 } from './selectionOverlay'
 
@@ -38,9 +45,15 @@ function randomMask(width: number, height: number, density: number, seed: number
   return createSelectionMask(width, height, data)!
 }
 
-function rasterise(selection: SelectionMask, scale: number, lineWidth: number, rect: Rectangle) {
+function rasterise(
+  selection: SelectionMask,
+  scale: number,
+  lineWidth: number,
+  rect: Rectangle,
+  pattern: BoundaryPattern = STATIC_BOUNDARY,
+) {
   const pixels = new Uint32Array(rect.width * rect.height)
-  const drawn = rasteriseSelectionOverlay(selection, scale, lineWidth, rect, pixels, rect.width)
+  const drawn = rasteriseSelectionOverlay(selection, scale, lineWidth, rect, pixels, rect.width, pattern)
   return { drawn, pixels }
 }
 
@@ -71,9 +84,16 @@ function picture(selection: SelectionMask, scale: number, lineWidth: number, rec
 
 /**
  * Reference rasteriser, one device pixel at a time: boundary where the square window of
- * 2 × lineWidth + 1 pixels holds both states, coloured by the checkerboard cell and side.
+ * 2 × lineWidth + 1 pixels holds both states, coloured by the side and the checkerboard cell
+ * (static) or the diagonal stripe floor((x + y − phase × lineWidth) / (4 × lineWidth)) (marching).
  */
-function referenceRaster(selection: SelectionMask, scale: number, lineWidth: number, rect: Rectangle): Uint32Array {
+function referenceRaster(
+  selection: SelectionMask,
+  scale: number,
+  lineWidth: number,
+  rect: Rectangle,
+  pattern: BoundaryPattern = STATIC_BOUNDARY,
+): Uint32Array {
   const m = lineWidth
   const outer = { x: rect.x - m, y: rect.y - m, width: rect.width + 2 * m, height: rect.height + 2 * m }
   const states = selectionStates(selection, scale, outer)
@@ -91,7 +111,13 @@ function referenceRaster(selection: SelectionMask, scale: number, lineWidth: num
         }
       }
       const selected = states[(r + m) * outer.width + c + m]
-      const parity = (Math.floor((rect.x + c) / cell) + Math.floor((rect.y + r) / cell) + selected) & 1
+      const x = rect.x + c
+      const y = rect.y + r
+      const stripe =
+        pattern.kind === 'static'
+          ? Math.floor(x / cell) + Math.floor(y / cell)
+          : Math.floor((x + y - pattern.phase * lineWidth) / cell)
+      const parity = (stripe + selected) & 1
       pixels[r * rect.width + c] = any && !all ? (parity === 1 ? light : dark) : selected ? tint : transparent
     }
   }
@@ -373,6 +399,326 @@ describe('rasteriseSelectionOverlay', () => {
     expect(selection.data).toEqual(before.data)
     expect(selection.bounds).toEqual(before.bounds)
     expect(selection.count).toBe(before.count)
+  })
+})
+
+/** Compares pixel arrays quickly, reporting the first difference. */
+function expectSamePixels(actual: Uint32Array, expected: Uint32Array, label = '') {
+  expect(actual.length, label).toBe(expected.length)
+  const mismatch = actual.findIndex((pixel, i) => pixel !== expected[i])
+  expect(mismatch, `${label}: first difference at index ${mismatch}`).toBe(-1)
+}
+
+/** `.` transparent, `T` tint, `B` boundary (black or white): what a pattern must never change. */
+function classes(pixels: Uint32Array): string {
+  return Array.from(pixels, (pixel) => (pixel === transparent ? '.' : pixel === tint ? 'T' : pixel === dark || pixel === light ? 'B' : '?')).join('')
+}
+
+const ALL_PATTERNS: readonly BoundaryPattern[] = [
+  STATIC_BOUNDARY,
+  ...Array.from({ length: MARCHING_ANTS_PHASES }, (_, phase) => marchingBoundary(phase)),
+]
+
+describe('boundary patterns', () => {
+  it('has one shared pattern object per marching phase, taken modulo the period', () => {
+    expect(MARCHING_ANTS_PHASES).toBe(8)
+    expect(marchingBoundary(3)).toBe(marchingBoundary(3))
+    expect(marchingBoundary(3)).toBe(marchingBoundary(11))
+    expect(marchingBoundary(-1)).toBe(marchingBoundary(7))
+    expect(marchingBoundary(0)).toEqual({ kind: 'marching', phase: 0 })
+    expect(STATIC_BOUNDARY).toEqual({ kind: 'static' })
+    expect(new Set(ALL_PATTERNS).size).toBe(9)
+  })
+
+  it('draws the static checkerboard unless a pattern is given', () => {
+    const selection = randomMask(40, 30, 0.5, 3)
+    const rect = { x: -4, y: -2, width: 50, height: 37 }
+    expectSamePixels(rasterise(selection, 1.5, 1, rect).pixels, rasterise(selection, 1.5, 1, rect, STATIC_BOUNDARY).pixels)
+  })
+
+  it('matches the reference rasteriser at every marching phase, zoom, line width and tile', () => {
+    const masks = [randomMask(61, 47, 0.5, 31), randomMask(61, 47, 0.05, 32), selectAll(61, 47)]
+    const rects = [
+      { x: -5, y: -3, width: 37, height: 53 },
+      { x: 20, y: 11, width: 70, height: 40 },
+      { x: -40, y: -40, width: 33, height: 31 },
+    ]
+    for (const selection of masks) {
+      for (const scale of [0.3, 0.9, 1, 1.5, 2.5, 8]) {
+        for (const lineWidth of [1, 2, 3]) {
+          for (const rect of rects) {
+            for (const pattern of ALL_PATTERNS) {
+              const expected = referenceRaster(selection, scale, lineWidth, rect, pattern)
+              const { pixels } = rasterise(selection, scale, lineWidth, rect, pattern)
+              const mismatch = pixels.findIndex((pixel, i) => pixel !== expected[i])
+              expect(mismatch, `scale ${scale}, line ${lineWidth}, ${JSON.stringify(rect)}, ${JSON.stringify(pattern)}`).toBe(-1)
+            }
+          }
+        }
+      }
+    }
+  })
+
+  it('never changes which pixels are tint, boundary or transparent, only black and white', () => {
+    const selection = mask(
+      '..........',
+      '.####.....',
+      '.#..#..##.',
+      '.####..##.',
+      '..........',
+      '....#.....',
+    )
+    for (const [scale, lineWidth] of [
+      [1, 1],
+      [3, 1],
+      [4, 2],
+      [0.5, 1],
+    ]) {
+      const rect = { x: -3, y: -3, width: Math.ceil(10 * scale) + 6, height: Math.ceil(6 * scale) + 6 }
+      const expected = classes(rasterise(selection, scale, lineWidth, rect).pixels)
+      for (const pattern of ALL_PATTERNS) {
+        expect(classes(rasterise(selection, scale, lineWidth, rect, pattern).pixels), JSON.stringify(pattern)).toBe(expected)
+      }
+    }
+  })
+
+  it('moves the dashes one line width along horizontal and vertical edges per phase', () => {
+    for (const lineWidth of [1, 2]) {
+      const size = 64
+      // A selected square well inside the rectangle: two horizontal and two vertical edges.
+      const selection = mask(...Array.from({ length: size }, (_, y) => Array.from({ length: size }, (_, x) => (x >= 16 && x < 48 && y >= 16 && y < 48 ? '#' : '.')).join('')))
+      const rect = { x: 0, y: 0, width: size, height: size }
+      const at = (pixels: Uint32Array, x: number, y: number) => pixels[y * size + x]
+      for (let phase = 0; phase < MARCHING_ANTS_PHASES; phase++) {
+        const now = rasterise(selection, 1, lineWidth, rect, marchingBoundary(phase)).pixels
+        const next = rasterise(selection, 1, lineWidth, rect, marchingBoundary(phase + 1)).pixels
+        for (let k = 0; k < lineWidth; k++) {
+          // Rows just inside and outside the top and bottom edges, away from the corners.
+          for (const y of [16 + k, 15 - k, 47 - k, 48 + k]) {
+            for (let x = 16 + 2 * lineWidth; x < 48 - 3 * lineWidth; x++) expect(at(next, x + lineWidth, y)).toBe(at(now, x, y))
+          }
+          // Columns just inside and outside the left and right edges.
+          for (const x of [16 + k, 15 - k, 47 - k, 48 + k]) {
+            for (let y = 16 + 2 * lineWidth; y < 48 - 3 * lineWidth; y++) expect(at(next, x, y + lineWidth)).toBe(at(now, x, y))
+          }
+        }
+      }
+    }
+  })
+
+  it('keeps black and white on both sides of every edge, opposite across it, at every phase', () => {
+    for (const lineWidth of [1, 2]) {
+      const cell = 4 * lineWidth
+      for (const edge of [2, cell]) {
+        const rows = edge + lineWidth + 1
+        const selection = mask(...Array.from({ length: rows }, (_, y) => (y < edge ? '#' : '.').repeat(64)))
+        for (let phase = 0; phase < MARCHING_ANTS_PHASES; phase++) {
+          const { pixels } = rasterise(selection, 1, lineWidth, { x: 0, y: 0, width: 64, height: rows }, marchingBoundary(phase))
+          for (const row of [edge - lineWidth, edge - 1, edge, edge + lineWidth - 1]) {
+            const colours = new Set(pixels.subarray(row * 64, row * 64 + 64))
+            expect(colours).toEqual(new Set([dark, light]))
+            // Dashes of `cell` pixels: the colour changes every `cell` pixels along the edge.
+            let changes = 0
+            for (let x = 1; x < 64; x++) if (pixels[row * 64 + x] !== pixels[row * 64 + x - 1]) changes++
+            expect(changes).toBeGreaterThanOrEqual(64 / cell - 1)
+            expect(changes).toBeLessThanOrEqual(64 / cell + 1)
+          }
+          // Across the edge the sides differ except where a dash ends (one pixel per line width
+          // and dash, as the stripes are diagonal).
+          let same = 0
+          for (let x = 0; x < 64; x++) if (pixels[(edge - 1) * 64 + x] === pixels[edge * 64 + x]) same++
+          expect(same, `line ${lineWidth}, edge ${edge}, phase ${phase}`).toBeLessThanOrEqual(64 / cell + 1)
+        }
+      }
+    }
+  })
+
+  it('outlines the image edge inside and out at every phase', () => {
+    for (const pattern of ALL_PATTERNS) {
+      const { pixels } = rasterise(selectAll(6, 4), 1, 1, { x: -2, y: -2, width: 10, height: 8 }, pattern)
+      expect(classes(pixels).match(/.{10}/g)).toEqual([
+        '..........',
+        '.BBBBBBBB.',
+        '.BBBBBBBB.',
+        '.BBTTTTBB.',
+        '.BBTTTTBB.',
+        '.BBBBBBBB.',
+        '.BBBBBBBB.',
+        '..........',
+      ])
+    }
+  })
+})
+
+describe('overlay tile boundaries', () => {
+  /** Rasterises a tile keeping its boundary, at `pattern`. */
+  function tile(selection: SelectionMask, scale: number, lineWidth: number, rect: Rectangle, pattern: BoundaryPattern) {
+    const pixels = new Uint32Array(rect.width * rect.height)
+    const raster = rasteriseOverlayTile(selection, scale, lineWidth, rect, pixels, rect.width, pattern)
+    return { ...raster, pixels }
+  }
+
+  /** The tile pixels inside `area`, row by row. */
+  function crop(pixels: Uint32Array, stride: number, area: Rectangle): Uint32Array {
+    const out = new Uint32Array(area.width * area.height)
+    for (let r = 0; r < area.height; r++) {
+      out.set(pixels.subarray((area.y + r) * stride + area.x, (area.y + r) * stride + area.x + area.width), r * area.width)
+    }
+    return out
+  }
+
+  const cases: { selection: SelectionMask; scale: number; lineWidth: number; rect: Rectangle }[] = [
+    { selection: randomMask(61, 47, 0.5, 41), scale: 1, lineWidth: 1, rect: { x: -5, y: -3, width: 70, height: 53 } },
+    { selection: randomMask(61, 47, 0.03, 42), scale: 2.5, lineWidth: 2, rect: { x: 20, y: 11, width: 100, height: 90 } },
+    { selection: randomMask(200, 150, 0.5, 43), scale: 0.4, lineWidth: 1, rect: { x: -1, y: -1, width: 82, height: 62 } },
+    { selection: mask('...', '.#.', '...'), scale: 30, lineWidth: 3, rect: { x: 0, y: 0, width: 90, height: 90 } },
+    { selection: selectAll(300, 300), scale: 1, lineWidth: 1, rect: { x: -2, y: 256, width: 256, height: 46 } },
+  ]
+
+  it('produces the same pixels as rasteriseSelectionOverlay', () => {
+    for (const { selection, scale, lineWidth, rect } of cases) {
+      for (const pattern of [STATIC_BOUNDARY, marchingBoundary(5)]) {
+        expectSamePixels(tile(selection, scale, lineWidth, rect, pattern).pixels, rasterise(selection, scale, lineWidth, rect, pattern).pixels)
+      }
+    }
+  })
+
+  it('keeps an area that holds every boundary pixel, on 32-pixel columns, at most 16 KB a tile', () => {
+    for (const { selection, scale, lineWidth, rect } of cases) {
+      const { drawn, boundary, pixels } = tile(selection, scale, lineWidth, rect, STATIC_BOUNDARY)
+      expect(drawn).toBe(true)
+      if (!boundary) throw new Error('expected a boundary')
+      const { area } = boundary
+      expect(area.x % 32).toBe(0)
+      expect(area.x + area.width === rect.width || (area.x + area.width) % 32 === 0).toBe(true)
+      expect(boundary.words).toBe(Math.ceil((area.x + area.width) / 32) - area.x / 32)
+      expect(boundary.edge.length).toBe(boundary.words * area.height)
+      expect(boundary.selected.length).toBe(boundary.edge.length)
+      expect(boundary.edge.byteLength + boundary.selected.byteLength).toBeLessThanOrEqual(2 * 4 * ((rect.width + 31) >> 5) * rect.height)
+      for (let r = 0; r < rect.height; r++) {
+        for (let c = 0; c < rect.width; c++) {
+          const isBoundary = pixels[r * rect.width + c] === dark || pixels[r * rect.width + c] === light
+          const inArea = c >= area.x && c < area.x + area.width && r >= area.y && r < area.y + area.height
+          if (isBoundary) expect(inArea, `${c}, ${r}`).toBe(true)
+          if (inArea) {
+            const bit = (boundary.edge[(r - area.y) * boundary.words + ((c - area.x) >> 5)] >>> ((c - area.x) & 31)) & 1
+            expect(bit, `${c}, ${r}`).toBe(isBoundary ? 1 : 0)
+          }
+        }
+      }
+      // The first and last rows of the area hold boundary pixels.
+      expect(boundary.edge.subarray(0, boundary.words).some((word) => word !== 0)).toBe(true)
+      expect(boundary.edge.subarray(boundary.edge.length - boundary.words).some((word) => word !== 0)).toBe(true)
+    }
+  })
+
+  it('has no boundary for tiles that are all tint or not drawn', () => {
+    const selection = selectAll(600, 600)
+    expect(tile(selection, 1, 1, { x: 100, y: 100, width: 256, height: 256 }, marchingBoundary(0))).toMatchObject({ drawn: true, boundary: null })
+    expect(tile(mask('#..', '...'), 1, 1, { x: 40, y: 40, width: 16, height: 16 }, marchingBoundary(0))).toMatchObject({ drawn: false, boundary: null })
+  })
+
+  it('paints the area exactly as rasterising with each pattern would, without reading the selection', () => {
+    for (const { selection, scale, lineWidth, rect } of cases) {
+      const { boundary } = tile(selection, scale, lineWidth, rect, STATIC_BOUNDARY)
+      if (!boundary) throw new Error('expected a boundary')
+      for (const pattern of ALL_PATTERNS) {
+        const expected = crop(rasterise(selection, scale, lineWidth, rect, pattern).pixels, rect.width, boundary.area)
+        const out = new Uint32Array(boundary.area.width * boundary.area.height).fill(0xdeadbeef)
+        paintOverlayBoundary(boundary, pattern, out)
+        expectSamePixels(out, expected, JSON.stringify(pattern))
+      }
+    }
+  })
+
+  it('steps to the next phase by flipping only the pixels that change, matching a full paint', () => {
+    for (const { selection, scale, lineWidth, rect } of cases) {
+      const { boundary } = tile(selection, scale, lineWidth, rect, marchingBoundary(0))
+      if (!boundary) throw new Error('expected a boundary')
+      const out = new Uint32Array(boundary.area.width * boundary.area.height)
+      paintOverlayBoundary(boundary, marchingBoundary(0), out)
+      // Two full cycles, wrapping from the last phase to the first.
+      for (let step = 1; step <= 2 * MARCHING_ANTS_PHASES; step++) {
+        const before = out.slice()
+        repaintOverlayBoundary(boundary, marchingBoundary(step - 1), marchingBoundary(step), out)
+        const expected = new Uint32Array(out.length)
+        paintOverlayBoundary(boundary, marchingBoundary(step), expected)
+        expectSamePixels(out, expected, `step ${step}`)
+        // Only black and white swapped, on about a quarter of the boundary pixels.
+        let flipped = 0
+        let unexpected = 0
+        let boundaryPixels = 0
+        for (let i = 0; i < out.length; i++) {
+          if (out[i] === dark || out[i] === light) boundaryPixels++
+          if (out[i] !== before[i]) {
+            flipped++
+            if (!((before[i] === dark && out[i] === light) || (before[i] === light && out[i] === dark))) unexpected++
+          }
+        }
+        expect(unexpected).toBe(0)
+        expect(flipped).toBeLessThanOrEqual(Math.ceil(boundaryPixels / 4) + 4 * boundary.area.height)
+      }
+    }
+  })
+
+  it('paints in full when the pattern jumps, is static, or the area contents are unknown', () => {
+    const { selection, scale, lineWidth, rect } = cases[0]
+    const { boundary } = tile(selection, scale, lineWidth, rect, STATIC_BOUNDARY)
+    if (!boundary) throw new Error('expected a boundary')
+    const size = boundary.area.width * boundary.area.height
+    const painted = (pattern: BoundaryPattern) => {
+      const out = new Uint32Array(size)
+      paintOverlayBoundary(boundary, pattern, out)
+      return out
+    }
+    const transitions: [BoundaryPattern | null, BoundaryPattern][] = [
+      [marchingBoundary(2), marchingBoundary(5)],
+      [marchingBoundary(4), marchingBoundary(3)],
+      [STATIC_BOUNDARY, marchingBoundary(1)],
+      [marchingBoundary(6), STATIC_BOUNDARY],
+      [null, marchingBoundary(1)],
+    ]
+    for (const [shown, next] of transitions) {
+      const out = shown ? painted(shown) : new Uint32Array(size).fill(0xdeadbeef)
+      repaintOverlayBoundary(boundary, shown, next, out)
+      expectSamePixels(out, painted(next), `${JSON.stringify(shown)} to ${JSON.stringify(next)}`)
+    }
+    const unchanged = new Uint32Array(size).fill(0xdeadbeef)
+    repaintOverlayBoundary(boundary, marchingBoundary(3), marchingBoundary(3), unchanged)
+    expect(unchanged.every((pixel) => pixel === 0xdeadbeef)).toBe(true)
+  })
+
+  it('keeps work and memory per tile bounded for a million disconnected pixels', () => {
+    // 2048 × 1024 checkerboard: 1,048,576 selected pixels, none sharing an edge.
+    const width = 2048
+    const height = 1024
+    const data = new Uint8Array(width * height)
+    for (let y = 0; y < height; y++) for (let x = (y & 1); x < width; x += 2) data[y * width + x] = 1
+    const selection = createSelectionMask(width, height, data)!
+    expect(selection.count).toBe(1_048_576)
+    const plan = planSelectionOverlay({
+      selection,
+      viewport: { zoom: 1, offset: { x: 0, y: 0 } },
+      viewportSize: { width: 1920, height: 1080 },
+      devicePixelRatio: 1,
+    })
+    // A frame never needs more tiles than cover the view, however many pixels are selected.
+    expect(plan.tiles.length).toBeLessThanOrEqual(Math.ceil(1920 / 256 + 1) * Math.ceil(1080 / 256 + 1))
+    const out = new Uint32Array(OVERLAY_TILE_SIZE * OVERLAY_TILE_SIZE)
+    let geometryBytes = 0
+    for (const { rect } of plan.tiles) {
+      const { boundary } = rasteriseOverlayTile(selection, plan.scale, plan.lineWidth, rect, out, OVERLAY_TILE_SIZE, marchingBoundary(0))
+      if (!boundary) throw new Error('every tile has boundary')
+      geometryBytes += boundary.edge.byteLength + boundary.selected.byteLength
+      // Every pixel is boundary: a step flips a quarter of them and paints the same as in full.
+      const area = new Uint32Array(boundary.area.width * boundary.area.height)
+      paintOverlayBoundary(boundary, marchingBoundary(0), area)
+      repaintOverlayBoundary(boundary, marchingBoundary(0), marchingBoundary(1), area)
+      const expected = new Uint32Array(area.length)
+      paintOverlayBoundary(boundary, marchingBoundary(1), expected)
+      expectSamePixels(area, expected)
+    }
+    expect(geometryBytes).toBeLessThanOrEqual(plan.tiles.length * 16 * 1024)
   })
 })
 

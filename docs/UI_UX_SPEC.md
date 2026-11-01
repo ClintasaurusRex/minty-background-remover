@@ -210,9 +210,18 @@ Reduced-motion users must still have a clear non-animated selection indicator.
 As implemented (Step 8):
 
 - Tint: the mint accent (`#6ee7b7`) at 35% opacity over every selected pixel.
-- Boundary: wherever selected and unselected pixels meet, including the image edge, a static black-and-white line about one CSS pixel wide on each side of the edge. Its colours follow a checkerboard of four-CSS-pixel squares anchored to the image: within a square the two sides of the edge take opposite colours, and the colours swap from square to square. Both colours therefore run along every edge, on both sides, so the boundary shows on white, black, transparent and detailed images. It is never animated (optional marching ants are Step 11).
+- Boundary: wherever selected and unselected pixels meet, including the image edge, a black-and-white line about one CSS pixel wide on each side of the edge. With reduced motion requested its colours follow a static checkerboard of four-CSS-pixel squares anchored to the image: within a square the two sides of the edge take opposite colours, and the colours swap from square to square. Both colours therefore run along every edge, on both sides, so the boundary shows on white, black, transparent and detailed images. Otherwise the boundary is animated (Step 11, below).
 - At 100% zoom and above, the tint and boundary follow exactly the image pixels as drawn, and the pixels a click would pick. Zoomed out, where one screen pixel covers several image pixels, a screen pixel shows the selection when any pixel it covers is selected, so even a single selected pixel stays visible.
 - The overlay lets every pointer event through to the image, and is hidden from assistive technology; the status bar describes the selection in words.
+
+As implemented (Step 11, awaiting manual review):
+
+- Marching ants: the boundary is drawn with diagonal black and white stripes, four CSS pixels wide, which step about one CSS pixel every 150 ms. Along horizontal and vertical edges they form four-pixel dashes that move steadily right or down, without changing shape; a full cycle takes 1.2 seconds. As with the static pattern, the two sides of an edge take opposite colours and both colours run along every edge, so the boundary stays visible on white, black, transparent and detailed images.
+- Only the boundary moves. The tint, which pixels are boundary, and the selection itself never change from step to step, and the pattern stays anchored to the image while zooming and panning.
+- Reduced motion: when the system or browser asks for reduced motion (`prefers-reduced-motion: reduce`), nothing moves and the boundary is the static checkerboard of Step 8. The preference is followed live: switching it on stops the ants at once, switching it off starts them. There is no separate setting in the app.
+- The ants do not run when nothing is selected, when no part of the boundary is in view (for example zoomed into the middle of a selection), while the page is hidden (another tab, a minimised window), or while the boundary in view covers more than 10 million device pixels (more than a whole 4K screen of complex boundary); they continue from where they stopped.
+- Steps are kept light: when a step takes longer than usual (very complex boundaries, high-DPI screens, slower computers) the next one waits longer, so the animation never takes more than about a twentieth of the main thread. The ants then move more slowly; the rest of the app does not.
+- Selection state is never communicated by motion alone: the tint, the boundary and the status bar show it whether or not the ants move.
 
 ---
 

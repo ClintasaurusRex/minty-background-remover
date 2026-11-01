@@ -34,6 +34,33 @@ const BOUNDARY_LIGHT: OverlayColour = [255, 255, 255, 255]
 /** Boundary dashes are this many boundary line widths long. */
 const DASH_LENGTH_IN_LINE_WIDTHS = 4
 
+/**
+ * How boundary pixels are coloured. Which pixels are boundary never depends on the pattern.
+ *
+ * - Static (when reduced motion is requested): the Step 8 checkerboard of square cells.
+ * - Marching ants: diagonal black and white stripes, one dash length wide, moved one line width
+ *   per phase. Along every horizontal or vertical edge they form dashes that travel right or
+ *   down by one line width each phase, without changing shape.
+ *
+ * Either way the selected and unselected sides of an edge take opposite colours, and both
+ * colours run along every edge.
+ */
+export type BoundaryPattern = { readonly kind: 'static' } | { readonly kind: 'marching'; readonly phase: number }
+
+export const STATIC_BOUNDARY: BoundaryPattern = Object.freeze({ kind: 'static' })
+
+/** Marching phases before the stripes repeat: two dash lengths, one line width per phase. */
+export const MARCHING_ANTS_PHASES = 2 * DASH_LENGTH_IN_LINE_WIDTHS
+
+const MARCHING_BOUNDARIES: readonly BoundaryPattern[] = Array.from({ length: MARCHING_ANTS_PHASES }, (_, phase) =>
+  Object.freeze({ kind: 'marching', phase }),
+)
+
+/** The marching-ants pattern at `phase` (any integer, taken modulo the period). Equal phases give the same object. */
+export function marchingBoundary(phase: number): BoundaryPattern {
+  return MARCHING_BOUNDARIES[((phase % MARCHING_ANTS_PHASES) + MARCHING_ANTS_PHASES) % MARCHING_ANTS_PHASES]
+}
+
 /** A colour as one 32-bit value laid out like ImageData bytes, whatever the platform's byte order. */
 function packColour([r, g, b, a]: OverlayColour): number {
   return new Uint32Array(new Uint8Array([r, g, b, a]).buffer)[0]
@@ -168,18 +195,49 @@ export function selectionStates(selection: SelectionMask, scale: number, rect: R
 }
 
 /**
+ * Where a tile's boundary pixels are, kept so the boundary can be painted again in another
+ * pattern (paintOverlayBoundary) without reading the selection or rasterising the tile again.
+ *
+ * Only the rows and 32-pixel columns of the tile that hold boundary pixels are kept, one bit per
+ * device pixel: at most 16 KB for a 256 × 256 tile, a sixteenth of its pixels.
+ */
+export interface OverlayBoundary {
+  /** The tile's rectangle, in image-anchored device pixels. */
+  readonly rect: Rectangle
+  readonly lineWidth: number
+  /** The part of the tile holding boundary pixels, relative to `rect`; its sides are 32-pixel aligned. */
+  readonly area: Rectangle
+  /** 32-bit words per row of `edge` and `selected`. */
+  readonly words: number
+  /** Bit c of word (row × words + (c >> 5)) is set where area column c of that row is boundary. */
+  readonly edge: Uint32Array
+  /** Bits laid out as `edge`, set where the device pixel shows a selected pixel. */
+  readonly selected: Uint32Array
+}
+
+export interface OverlayTileRaster {
+  /** False when nothing in the tile is drawn; the output is then untouched. */
+  readonly drawn: boolean
+  /** The tile's boundary, or null when it has no boundary pixels (its pixels never change). */
+  readonly boundary: OverlayBoundary | null
+}
+
+const NOTHING_DRAWN: OverlayTileRaster = Object.freeze({ drawn: false, boundary: null })
+const DRAWN_WITHOUT_BOUNDARY: OverlayTileRaster = Object.freeze({ drawn: true, boundary: null })
+
+/**
  * Rasterises the overlay for `rect` (image-anchored device pixels) into `out`, `stride` values
  * per row, as packed RGBA in ImageData byte order (OVERLAY_PIXELS):
  *
  * - Every device pixel within `lineWidth` device pixels (including diagonally) of a pixel in the
  *   other state is boundary, so the boundary is `lineWidth` wide on each side of the edge. Its
- *   pixels are black or white by a checkerboard of square cells, four line widths wide: within a
- *   cell, selected and unselected pixels take opposite colours, and the colours swap from cell to
- *   cell. Both colours therefore alternate along every edge, on both sides of it, and the
- *   boundary stays visible on white, black, transparent and detailed images.
+ *   pixels are black or white by `pattern` (by default the static checkerboard of square cells,
+ *   four line widths wide): selected and unselected pixels take opposite colours, and the colours
+ *   alternate along every edge, on both sides of it, so the boundary stays visible on white,
+ *   black, transparent and detailed images.
  * - Other selected pixels get the tint; other unselected pixels stay transparent.
  *
- * The cell pattern is anchored to the image, so it does not shimmer while panning. Returns false,
+ * Patterns are anchored to the image, so they do not shimmer while panning. Returns false,
  * leaving `out` untouched, when nothing in `rect` is drawn.
  *
  * Cost does not depend on how complex the boundary is. Areas entirely inside or outside the
@@ -194,17 +252,124 @@ export function rasteriseSelectionOverlay(
   rect: Rectangle,
   out: Uint32Array,
   stride: number,
+  pattern: BoundaryPattern = STATIC_BOUNDARY,
 ): boolean {
+  return rasteriseTile(selection, scale, lineWidth, rect, out, stride, pattern, false).drawn
+}
+
+/**
+ * rasteriseSelectionOverlay for an overlay tile, also returning where its boundary is, so later
+ * patterns can be painted with paintOverlayBoundary alone.
+ */
+export function rasteriseOverlayTile(
+  selection: SelectionMask,
+  scale: number,
+  lineWidth: number,
+  rect: Rectangle,
+  out: Uint32Array,
+  stride: number,
+  pattern: BoundaryPattern,
+): OverlayTileRaster {
+  return rasteriseTile(selection, scale, lineWidth, rect, out, stride, pattern, true)
+}
+
+/**
+ * Paints the boundary area of a tile (OverlayBoundary.area) in `pattern`, into `out`, which holds
+ * just that area: `area.width` values per row. The result is exactly what
+ * rasteriseSelectionOverlay writes there with that pattern, tint and transparent pixels included,
+ * so the area can be copied to the tile as a whole.
+ *
+ * The work is one bit test per boundary pixel and native fills elsewhere; the selection is not
+ * read.
+ */
+export function paintOverlayBoundary(boundary: OverlayBoundary, pattern: BoundaryPattern, out: Uint32Array): void {
+  const { rect, lineWidth, area, words, edge, selected } = boundary
+  paintRows(rect, lineWidth, area, words, edge, selected, null, pattern, out, area.width, -(area.y * area.width + area.x))
+}
+
+/** Boundary pixels change between black and white by XOR with this. */
+const BLACK_WHITE_FLIP = OVERLAY_PIXELS.dark ^ OVERLAY_PIXELS.light
+
+/**
+ * Changes the boundary area in `out` (as for paintOverlayBoundary) from `shown`, the pattern it
+ * holds (null when its contents are unknown), to `next`.
+ *
+ * One marching-ants step (to the next phase) only changes the colour of the boundary pixels where
+ * the stripes move: a quarter of them, found 32 at a time with bit masks and flipped between
+ * black and white. Anything else is painted in full.
+ */
+export function repaintOverlayBoundary(
+  boundary: OverlayBoundary,
+  shown: BoundaryPattern | null,
+  next: BoundaryPattern,
+  out: Uint32Array,
+): void {
+  if (shown === next) return
+  if (
+    shown === null ||
+    shown.kind !== 'marching' ||
+    next.kind !== 'marching' ||
+    next.phase !== (shown.phase + 1) % MARCHING_ANTS_PHASES
+  ) {
+    paintOverlayBoundary(boundary, next, out)
+    return
+  }
+  const { rect, lineWidth, area, words, edge } = boundary
+  const cell = DASH_LENGTH_IN_LINE_WIDTHS * lineWidth
+  // The stripe floor((x + y − offset) / cell) changes when the offset grows by one line width
+  // exactly where (x + y − offset) mod cell < lineWidth.
+  const offset = shown.phase * lineWidth
+  const changes = cellBits('changes', rect.x + area.x, area.width + cell, cell, lineWidth)
+  for (let k = 0; k < area.height; k++) {
+    const shift = (((rect.y + area.y + k - offset) % cell) + cell) % cell
+    const row = k * words
+    const target = k * area.width
+    for (let i = 0; i < words; i++) flipBoundaryPixels(out, target + 32 * i, edge[row + i] & bitsAt(changes, 0, 32 * i + shift))
+  }
+}
+
+/**
+ * Bit i is set where (x + i) mod cell < count, for i < length: with x an image-anchored column, a
+ * row y reads it from bit (y − offset) mod cell on to test (column + y − offset) mod cell < count.
+ * The words are scratch, valid until the next call with the same name.
+ */
+function cellBits(name: string, x: number, length: number, cell: number, count: number): Uint32Array {
+  const bits = scratch.words(name, (length >>> 5) + 2)
+  for (let i = 0; i < length; i++) {
+    if ((((x + i) % cell) + cell) % cell < count) bits[i >>> 5] |= 1 << (i & 31)
+  }
+  return bits
+}
+
+/** Swaps black and white at out[base + b] for each set bit b of `flips` (boundary pixels only). */
+function flipBoundaryPixels(out: Uint32Array, base: number, flips: number): void {
+  while (flips !== 0) {
+    const lowest = flips & -flips
+    out[base + 31 - Math.clz32(lowest)] ^= BLACK_WHITE_FLIP
+    flips ^= lowest
+  }
+}
+
+function rasteriseTile(
+  selection: SelectionMask,
+  scale: number,
+  lineWidth: number,
+  rect: Rectangle,
+  out: Uint32Array,
+  stride: number,
+  pattern: BoundaryPattern,
+  keepBoundary: boolean,
+): OverlayTileRaster {
   const { x: x0, y: y0, width, height } = rect
   const margin = lineWidth
   const span = 2 * margin + 1
   const outer = { x: x0 - margin, y: y0 - margin, width: width + 2 * margin, height: height + 2 * margin }
 
   const uniform = uniformState(selection, scale, outer)
-  if (uniform === 0) return false
+  if (uniform === 0) return NOTHING_DRAWN
   if (uniform === 1) {
     for (let r = 0; r < height; r++) out.fill(OVERLAY_PIXELS.tint, r * stride, r * stride + width)
-    return true
+    return DRAWN_WITHOUT_BOUNDARY
   }
 
   // Device pixel states, one bit each: bit c of row k is column c of `outer`.
@@ -241,32 +406,31 @@ export function rasteriseSelectionOverlay(
     }
   }
 
-  const { tint } = OVERLAY_PIXELS
-  const cell = DASH_LENGTH_IN_LINE_WIDTHS * lineWidth
-  const columnCells = scratch.bytes('columnCells', width)
-  for (let c = 0; c < width; c++) columnCells[c] = (Math.floor((x0 + c) / cell) & 1) << 2
-
-  let previousRowCell = -1
+  // The geometry of each output row: boundary pixels (edge) and selected pixels, one bit each.
+  // Bits past the tile's width are cleared, so they never count as boundary.
+  const edgeRows = scratch.words('edgeRows', height * outWords)
+  const selectedRows = scratch.words('selectedRows', height * outWords)
+  const repeats = scratch.bytes('repeats', height)
+  const lastWordMask = (width & 31) === 0 ? -1 : (1 << (width & 31)) - 1
+  // The rows and words holding boundary pixels.
+  let edgeTop = height
+  let edgeBottom = -1
+  let edgeFirstWord = outWords
+  let edgeLastWord = -1
+  let previousHasEdge = false
   for (let r = 0; r < height; r++) {
-    const rowCell = Math.floor((y0 + r) / cell) & 1
-    const target = r * stride
+    const target = r * outWords
     // Rows with equal keys are equal, so when the row entering the window equals the one leaving
     // it and the centre row is unchanged, this output row repeats the previous one.
-    if (
-      r > 0 &&
-      rowCell === previousRowCell &&
-      rowKeys[r + span - 1] === rowKeys[r - 1] &&
-      rowKeys[r + margin] === rowKeys[r + margin - 1]
-    ) {
-      out.copyWithin(target, target - stride, target - stride + width)
+    if (r > 0 && rowKeys[r + span - 1] === rowKeys[r - 1] && rowKeys[r + margin] === rowKeys[r + margin - 1]) {
+      edgeRows.copyWithin(target, target - outWords, target)
+      selectedRows.copyWithin(target, target - outWords, target)
+      repeats[r] = 1
+      if (previousHasEdge) edgeBottom = r
       continue
     }
-    previousRowCell = rowCell
-    const palette = rowCell === 1 ? PALETTE_ODD_ROW : PALETTE_EVEN_ROW
     const centreBase = (r + margin) * rowWords
-    // Words without boundary are collected into one fill.
-    let runStart = 0
-    let runValue = -1
+    let hasEdge = false
     for (let i = 0; i < outWords; i++) {
       let any = 0
       let all = -1
@@ -274,12 +438,123 @@ export function rasteriseSelectionOverlay(
         any |= rowAny[k * outWords + i]
         all &= rowAll[k * outWords + i]
       }
-      const start = 32 * i
-      const edge = any & ~all
-      const centre = bitsAt(bits, centreBase, start + margin)
+      const mask = i === outWords - 1 ? lastWordMask : -1
+      const edge = any & ~all & mask
+      edgeRows[target + i] = edge
+      selectedRows[target + i] = bitsAt(bits, centreBase, 32 * i + margin) & mask
+      if (edge !== 0) {
+        hasEdge = true
+        if (edgeFirstWord > i) edgeFirstWord = i
+        if (edgeLastWord < i) edgeLastWord = i
+      }
+    }
+    previousHasEdge = hasEdge
+    if (hasEdge) {
+      if (edgeTop > r) edgeTop = r
+      edgeBottom = r
+    }
+  }
+
+  const whole = { x: 0, y: 0, width, height }
+  paintRows(rect, lineWidth, whole, outWords, edgeRows, selectedRows, repeats, pattern, out, stride, 0)
+
+  if (!keepBoundary || edgeBottom < 0) return DRAWN_WITHOUT_BOUNDARY
+  // Keep the rows and words holding boundary pixels.
+  const words = edgeLastWord - edgeFirstWord + 1
+  const rows = edgeBottom - edgeTop + 1
+  const edge = new Uint32Array(rows * words)
+  const selected = new Uint32Array(rows * words)
+  for (let k = 0, to = 0; k < rows; k++) {
+    for (let i = 0, from = (edgeTop + k) * outWords + edgeFirstWord; i < words; i++, from++, to++) {
+      edge[to] = edgeRows[from]
+      selected[to] = selectedRows[from]
+    }
+  }
+  const left = 32 * edgeFirstWord
+  const area = { x: left, y: edgeTop, width: Math.min(width, 32 * (edgeLastWord + 1)) - left, height: rows }
+  return { drawn: true, boundary: { rect, lineWidth, area, words, edge, selected } }
+}
+
+/**
+ * Writes the overlay pixels of `area` (relative to the tile `rect`) from its geometry: `edge` and
+ * `selected` bits, `words` words per row, starting at the area's first row and column. Words
+ * without boundary are tint or transparent as a whole and are collected into native fills; only
+ * boundary pixels are written one at a time.
+ *
+ * With `repeats` (1 where a row's geometry equals the previous row's), such rows start as a copy
+ * of the previous row: static rows within the same checkerboard cell are then complete, and
+ * marching rows only need the boundary pixels where a stripe begins (one in four) swapped, as each
+ * row's stripes are the previous row's moved by one pixel.
+ *
+ * Tile pixel (row r, column c) is written to out[origin + r × stride + c].
+ */
+function paintRows(
+  rect: Rectangle,
+  lineWidth: number,
+  area: Rectangle,
+  words: number,
+  edgeRows: Uint32Array,
+  selectedRows: Uint32Array,
+  repeats: Uint8Array | null,
+  pattern: BoundaryPattern,
+  out: Uint32Array,
+  stride: number,
+  origin: number,
+): void {
+  const { tint } = OVERLAY_PIXELS
+  const cell = DASH_LENGTH_IN_LINE_WIDTHS * lineWidth
+  const period = 2 * cell
+  const marching = pattern.kind === 'marching'
+  const left = area.x
+  const right = area.x + area.width
+
+  // Colour parity (times 4, a palette offset) of image-anchored column rect.x + left + i. Marching
+  // stripes depend on x + y − phase, so each row reads this table from its own shift; whole
+  // periods do not change the parity, so shifts stay below one period.
+  const parityLength = area.width + (marching ? period : 0)
+  const parity = scratch.bytes('columnParity', parityLength)
+  for (let i = 0; i < parityLength; i++) parity[i] = (Math.floor((rect.x + left + i) / cell) & 1) << 2
+  const offset = marching ? pattern.phase * lineWidth : 0
+  // For marching rows with the previous row's geometry: where a stripe begins, (x + y − offset)
+  // mod cell = 0, the colours differ from the previous row's.
+  const starts = marching && repeats !== null ? cellBits('stripeStarts', rect.x + left, area.width + cell, cell, 1) : null
+
+  let previousRowCell = -1
+  for (let k = 0; k < area.height; k++) {
+    const r = area.y + k
+    const y = rect.y + r
+    const target = origin + r * stride
+    const rowCell = Math.floor(y / cell) & 1
+    if (repeats !== null && k > 0 && repeats[k] === 1) {
+      if (!marching && rowCell === previousRowCell) {
+        out.copyWithin(target + left, target - stride + left, target - stride + right)
+        continue
+      }
+      if (starts) {
+        out.copyWithin(target + left, target - stride + left, target - stride + right)
+        const shift = (((y - offset) % cell) + cell) % cell
+        const row = k * words
+        for (let i = 0; i < words; i++) {
+          flipBoundaryPixels(out, target + left + 32 * i, edgeRows[row + i] & bitsAt(starts, 0, 32 * i + shift))
+        }
+        continue
+      }
+    }
+    previousRowCell = rowCell
+    // Static: checkerboard cells, the row's cell swapping the colours. Marching: diagonal stripes.
+    const palette = !marching && rowCell === 1 ? PALETTE_ODD_ROW : PALETTE_EVEN_ROW
+    const shift = marching ? (((y - offset) % period) + period) % period : 0
+    const row = k * words
+    // Words without boundary are collected into one fill.
+    let runStart = left
+    let runValue = -1
+    for (let i = 0; i < words; i++) {
+      const start = left + 32 * i
+      const edge = edgeRows[row + i]
+      const selected = selectedRows[row + i]
       if (edge === 0) {
         // No boundary pixel, so no change of state either: the whole word is tint or transparent.
-        const value = (centre & 1) === 1 ? tint : 0
+        const value = (selected & 1) === 1 ? tint : 0
         if (value !== runValue) {
           if (runValue !== -1) out.fill(runValue, target + runStart, target + start)
           runValue = value
@@ -291,14 +566,17 @@ export function rasteriseSelectionOverlay(
         out.fill(runValue, target + runStart, target + start)
         runValue = -1
       }
-      const end = Math.min(start + 32, width)
-      for (let c = start, bit = 0; c < end; c++, bit++) {
-        out[target + c] = palette[columnCells[c] | (((edge >>> bit) & 1) << 1) | ((centre >>> bit) & 1)]
+      const end = Math.min(start + 32, right)
+      let edgeBits = edge
+      let selectedBits = selected
+      for (let c = start, column = start - left + shift; c < end; c++, column++) {
+        out[target + c] = palette[parity[column] | ((edgeBits & 1) << 1) | (selectedBits & 1)]
+        edgeBits >>>= 1
+        selectedBits >>>= 1
       }
     }
-    if (runValue !== -1) out.fill(runValue, target + runStart, target + width)
+    if (runValue !== -1) out.fill(runValue, target + runStart, target + right)
   }
-  return true
 }
 
 /** Row key for a row with nothing selected. */

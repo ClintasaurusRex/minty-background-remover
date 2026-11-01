@@ -288,6 +288,45 @@ Added to whole interactions (pointer-down or button click including the React co
 - 50-megapixel clicks, which already take 210–430 ms: +19 to +47 ms.
 - Zoom In / Out, Fit and 100% with a selection: 15–42 ms instead of under 13 ms.
 
+#### Marching Ants (Step 11)
+
+The boundary pattern moves without touching the selection: which pixels are boundary, tint or transparent is decided once per tile, and a step only changes black and white boundary pixels (see `ARCHITECTURE.md`, Phase 2 Modules, and `UI_UX_SPEC.md`, Selection UX).
+
+What a step costs:
+
+- No mask reads, no Magic Wand or selection work, no rasterising and no React work. The steps run on timers (one every 150 ms at most) followed by one animation frame, never on every frame, and none at all with reduced motion, while the page is hidden, or when no boundary is in view.
+- Pixel work: in each visible tile with boundary, the quarter of its boundary pixels where the stripes move are flipped between black and white, found 32 at a time with bit masks. Tiles without boundary are skipped.
+- Canvas work: per visible tile with boundary, one `putImageData` of its boundary area (a dirty rectangle, usually much smaller than the tile), one `clearRect` and one `drawImage` of that area onto the overlay. A selection with a million disconnected pixels is still at most one set of three calls per visible tile (about 40 at 1920 × 1080, 140 at 3840 × 2160 device pixels).
+- Budget: steps are timed, and when they take longer than 7.5 ms the next one waits 20 times as long, so steps never take more than about a twentieth of the main thread. The ants pause while the boundary areas in view exceed 10 million device pixels.
+
+Memory, in addition to Step 8 (all of it freed with the selection):
+
+- Boundary geometry: two bits per device pixel for the rows and 32-pixel columns of each tile that hold boundary, at most 16 KB a tile; 0.04–0.85 MB in the cases below, 2.3 MB for noise filling a 3840 × 2160 view.
+- Once the pattern changes (the first step, or reduced motion being switched on or off), each visible tile with boundary keeps its boundary area's pixels (4 bytes per device pixel of that area), so a step only changes the pixels that move: 0.5–4.6 MB at 1920 × 1080 and 0.9–13 MB at 3840 × 2160 device pixels for the screenshot-like and large connected selections below, 6–11 MB and 25–36 MB for noise-like ones. Tiles out of view drop theirs; with reduced motion from the start none are kept.
+
+Step 11 measurements (production builds, i7-14700HX, headless Chrome 156 and Firefox 158, 1920 × 1080 CSS workspace; medians). Chrome was measured both with GPU-accelerated canvas and compositing (`--enable-gpu`, closest to a desktop browser) and with its default headless software rendering; Firefox headless renders canvases in software.
+
+Main-thread time while idle with a selection on screen (Chrome `TaskDuration` over 6 s; Step 10, and Step 11 with reduced motion or without a selection: 0.1–2 ms/s in every case):
+
+| Selection (view) | GPU, DPR 1 | GPU, DPR 2 | Software, DPR 1 | Software, DPR 2 |
+| --- | --- | --- | --- | --- |
+| 1280 × 800 screenshot background (Fit) | 15 ms/s | 26 ms/s | 37 ms/s | 63 ms/s |
+| Same, 200% | 11 ms/s | 17 ms/s | 29 ms/s | 59 ms/s |
+| 3840 × 2400 screenshot background (Fit) | 17 ms/s | 27 ms/s | 38 ms/s | 65 ms/s |
+| 4K noisy image, everything selected (Fit) | 14 ms/s | 24 ms/s | 31 ms/s | 60 ms/s |
+| 4K noisy image, fragmented Global selection (100%) | 48 ms/s | 48 ms/s | 65 ms/s | 65 ms/s |
+| 50 MP, background with a million dots as holes (Fit) | 19 ms/s | 24 ms/s | 41 ms/s | 62 ms/s |
+| Same, 100% inside an unselected area (no boundary in view) | 0.3 ms/s | 0.3 ms/s | 1.2 ms/s | 1.3 ms/s |
+
+With GPU rendering that is about 1–3% of one core for screenshot-like and large connected selections, and about 5% (the step budget) for fragmented ones. With software rendering it is 3–6.5%: presenting the changed overlay canvas then costs more than the step itself (the difference between the main-thread and script times), as the whole canvas is composited again on the CPU. Desktop browsers usually composite on the GPU, but this has not been measured on real displays.
+
+Cost of one step (JavaScript time of the renderer, overlay pipeline alone):
+
+- Chrome (GPU): 1–4 ms for screenshot-like and large connected selections at device pixel ratio 1, 1–6 ms at ratio 2; 4–8 ms and 9–12 ms for noise-like ones. A single selected pixel: 0.1 ms.
+- Firefox: 3–7 ms and 6–10 ms for screenshot-like selections, 8–11 ms and 18–25 ms for noise-like ones. Firefox has a floor of about 2–3 ms at ratio 1 and 6 ms at ratio 2 even for a single selected pixel (apparently the copy of the whole overlay canvas after the compositor has shown it; its pan frames show the same floor since Step 8). Steps over 7.5 ms are spaced out by the budget, so in Firefox at ratio 2 noise-like boundaries step every 360–500 ms instead of 150 ms.
+
+Effect on the rest of the overlay (Step 10 → Step 11, Chrome software rendering, which varies least between runs): a selection change or zoom step costs about the same for screenshot-like and large connected selections (0–3 ms, up to about 10% more), and 5–20% more for noise-like ones (for example 18.6 → 21.9 ms at ratio 1 and 57.8 → 66.3 ms at ratio 2 for 50% noise at 100%), mainly because tiles are now rasterised in two passes (boundary geometry, then colours) so that the geometry can be kept; Firefox is similar. Pan frames are unchanged.
+
 ---
 
 ## Delete Selection

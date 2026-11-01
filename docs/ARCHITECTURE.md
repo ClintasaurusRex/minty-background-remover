@@ -152,8 +152,12 @@ src/
 │                          slider or text field adjustment is finished (pure event handling)
 ├── components/Toolbar/ToolOptions.tsx, MagicWandOptions.tsx  contextual second toolbar row
 ├── canvas/selectionOverlay.ts  overlay tile plans and rasterising (pure; typed arrays only)
-├── canvas/selectionOverlayRenderer.ts  the only overlay drawing code (tile cache, canvas)
-├── components/Workspace/SelectionOverlayCanvas.tsx  the overlay canvas over the image canvas
+├── canvas/selectionOverlayRenderer.ts  the only overlay drawing code (tile cache, canvas,
+│                          boundary pattern changes)
+├── canvas/marchingAnts.ts       when the marching ants step: timing, reduced motion, page
+│                          visibility, cost budget (pure; injected clock)
+├── components/Workspace/SelectionOverlayCanvas.tsx  the overlay canvas over the image canvas;
+│                          connects the renderer and the ants to the browser
 └── image/selection/       selectionMask (builder: validates, counts, bounds),
                            colourDistance (alpha-aware distance, tolerance threshold),
                            magicWand (Contiguous scanline fill, Global pass),
@@ -178,6 +182,9 @@ Later Phase 2 steps add colour distance, the Magic Wand, combine / invert / grow
 - The overlay is rasterised in plain typed arrays at device-pixel resolution, only where it can be seen, in 256 × 256 device-pixel tiles counted from the image's top-left corner. No full-resolution RGBA overlay is ever allocated, and tiles away from the selection's bounds are never created. Tiles are kept while the selection, zoom and device pixel ratio stay the same, so panning only rasterises tiles coming into view; tiles more than one tile out of view are released. With no selection the overlay canvas has no backing store.
 - Drawing a frame is one `drawImage` per visible tile, whatever the selection's shape. The boundary is found per device pixel with states packed 32 to a word, so its cost does not depend on how many edges the selection has.
 - Planning and rasterising run in the overlay's layout effect, after the image is drawn in the same commit, never during React rendering.
+- Marching ants (Step 11) run outside React: no state changes, renders or effects per step. `canvas/marchingAnts.ts` decides when a step is due (a timer, then one animation frame) and calls the renderer's `setPattern`; the component only creates both, feeds them the `prefers-reduced-motion` media query and `visibilitychange`, and disposes them on unmount, so a remount (React Strict Mode) never leaves a second loop running.
+- A boundary pattern change never rasterises again or reads the selection. When a tile is rasterised it keeps where its boundary is (`OverlayBoundary`: one bit per device pixel for "boundary" and one for "selected", only for the rows and 32-pixel columns holding boundary pixels, at most 16 KB a tile). A step repaints only the boundary area of the visible tiles that have one: once a tile's area pixels are kept, a step flips the quarter of its boundary pixels where the stripes move, uploads the area to the tile canvas (`putImageData` with a dirty rectangle) and copies just that area to the overlay canvas. Tiles without boundary (inside or outside the selection) and the tint are never touched, and the number of canvas calls per step is three per visible boundary tile, however many edges the selection has.
+- Tiles kept out of view are brought up to date when they come back into view; new tiles are rasterised in the current phase.
 
 ---
 

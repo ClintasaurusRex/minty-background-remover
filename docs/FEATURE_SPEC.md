@@ -224,6 +224,8 @@ Visual selection effects must not modify the image pixels themselves.
 
 The overlay shows the current selection however it was made (Contiguous or Global; New, Add or Subtract; Select All) and disappears when the selection is cleared. Separate regions and holes each get their own boundary. Zoom, pan, window resizing and changes of display scaling redraw it in place; they never change the selection. Its appearance is specified in `UI_UX_SPEC.md` (Selection UX).
 
+Marching ants (Step 11, implemented, awaiting manual review): the boundary's black and white pattern moves slowly along it, while the tint and the selection stay still. It is static when reduced motion is requested, and pauses when nothing is selected, no boundary is in view, the page is hidden, or the boundary in view is too large to repaint cheaply (`UI_UX_SPEC.md`, Selection UX). There is no user setting for it.
+
 ---
 
 ## 7. Selection Operations
