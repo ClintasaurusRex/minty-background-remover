@@ -226,7 +226,17 @@ src/
                            copying (decoded ImageData is passed through)
 ```
 
-Planned for later steps (subject to review at each step): `image/edit/` (Delete, edge band, cleanup, feather), `image/trim/autoTrim.ts`, `editor/history/` (pixel and crop patches, mask codec, bounded history), `editor/editCommands.ts`, `canvas/displayImage.ts` (the display image for an edited revision) and edit shortcuts.
+Step 2 (Delete Selection algorithm):
+
+```text
+src/
+└── image/edit/deleteSelection.ts  deleteSelectedPixels: alpha 0 for every selected pixel, colour
+                                   kept hidden; one copy of the image, only when a pixel changes;
+                                   returns the new pixels, count and bounds of the change, or null
+                                   (pure; not yet called by the application)
+```
+
+Planned for later steps (subject to review at each step): `image/edit/` (edge band, cleanup, feather), `image/trim/autoTrim.ts`, `editor/history/` (pixel and crop patches, mask codec, bounded history), `editor/editCommands.ts`, `canvas/displayImage.ts` (the display image for an edited revision) and edit shortcuts.
 
 Key rules:
 

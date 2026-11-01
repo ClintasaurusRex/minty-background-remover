@@ -329,8 +329,8 @@ Decisions approved by the project owner after review of the Phase 3 architecture
 
 Phase 3 is implemented in twelve reviewed steps, each stopping for review:
 
-1. Record decisions; pixel buffer and revision model. (Implemented; awaiting review.)
-2. Delete algorithm (pure).
+1. Record decisions; pixel buffer and revision model. Done.
+2. Delete algorithm (pure). (Implemented; awaiting review.)
 3. History building blocks: pixel patches, crop patches, selection encoding, byte accounting.
 4. Display image for edited pixels and render invalidation (verifies P3-D10).
 5. Edit history in the editor state.
@@ -344,13 +344,39 @@ Phase 3 is implemented in twelve reviewed steps, each stopping for review:
 
 The unsaved-edits warning (P3-D12) needs Undo / Redo (Step 6) to know whether edits exist; its checkpoint is still to be agreed.
 
-#### Step 1: Pixel Buffers and Revisions (implemented; awaiting review)
+#### Step 1: Pixel Buffers and Revisions (done; approved)
 
 - `ImageDocument.pixels` is a `PixelBuffer`: width, height and read-only RGBA bytes. Decoded `ImageData` already has this shape and is stored as it is; the Magic Wand and selection commands take any `PixelBuffer`.
 - `image/pixelBuffer.ts`: `validatePixelBuffer` (whole dimensions of at least 1, exact length, 4-byte alignment), `createPixelBuffer` (wraps without copying), `copyPixelData` (the copy-on-write starting point), `sharesPixelMemory`.
 - `createEditedDocument` (`editor/imageDocument.ts`) keeps the document's id, name, format, source and file size, takes its dimensions from the new pixels, rejects pixels sharing memory with the current ones, and gives a revision from a session-wide counter: never reused and always increasing. Imported documents keep revision 0. Imports and edits share the same buffer validation.
 - `canvas/imageData.ts`: `toImageData` hands a `PixelBuffer` to canvas APIs without copying. The import's display bitmap uses it; for imported pixels it returns the decoded `ImageData` itself, so import behaviour is unchanged.
 - Nothing calls `createEditedDocument` yet: the application looks and behaves exactly as at the end of Phase 2.
+
+#### Step 2: Delete Selection Algorithm (implemented; awaiting review)
+
+- `image/edit/deleteSelection.ts`: `deleteSelectedPixels(pixels, selection)` returns `{ pixels, count, bounds }` (the edited image, the number of pixels made transparent, and the smallest rectangle containing them), or null when nothing would change. Pure: no DOM, no canvas, no `ImageData`.
+- Every selected pixel gets alpha 0; only its alpha byte is written, so its colour stays hidden (P3-D2). Unselected pixels, and selected pixels that are already fully transparent, keep every byte; the latter are neither counted nor bounded.
+- Copy-on-write: the input pixels and the selection are never written. The scan looks for the first pixel that changes; only then is the image copied (`copyPixelData`), once. A null selection, or one covering only fully transparent pixels, returns null without allocating anything.
+- Only the selection's bounds are scanned, and each pixel in them is read once: up to the first change in the source, after it in the copy, so the loop touches one full-size buffer. Nothing else proportional to the image is allocated.
+- Throws a RangeError for an invalid pixel buffer, or a selection of another size or whose bounds lie outside the image (constant-time checks).
+- 18 tests (`deleteSelection.test.ts`): one pixel, several pixels, full selections, disconnected regions and holes, every edge and corner, 1 × 1 images, opaque, partially transparent (down to alpha 1) and transparent pixels, hidden colour kept, unselected pixels bit-identical, inputs unchanged, one copy only when something changes, no-ops, invalid input, 175 random cases against a per-pixel reference, and 4K and 50 MP cases. Six deliberately introduced defects were each caught by the tests.
+- Nothing calls it yet; the production bundle is byte-identical to Step 1's.
+
+Measurements (Node 24, x64, this development machine; browser timings come with the Delete command in Step 6):
+
+| Image | Copy alone | Background (80%) | Everything | 400 × 400 selection | Nothing to delete (all selected, transparent image) |
+| --- | --- | --- | --- | --- | --- |
+| 1280 × 800 | 0.4 ms | 6 ms | 6 ms | 0.8 ms | 3 ms |
+| 3840 × 2400 | 15 ms | 39 ms | 42 ms | 16 ms | 13 ms |
+| 8660 × 5773 (50 MP) | 78 ms | 162 ms | 170 ms | 84 ms | 68 ms |
+
+Memory: a Delete that changes something keeps exactly one new image-sized buffer (35 MB at 4K, 191 MB at 50 MP); a no-op allocates nothing.
+
+Known limitations (Step 2):
+
+- The copy is the floor: even a small selection costs a whole-image copy (78 ms of the 84 ms at 50 MP). That is the approved copy-on-write trade-off (P3-D1).
+- Copying row by row and deleting while each row is still in cache measured about 10% faster at 50 MP (about 145 ms instead of 162 ms). It was not adopted, to keep `copyPixelData` as the single copy-on-write path; it remains an option if Step 6 browser measurements call for it.
+- While the edited image exists, the previous one is kept as well (one more image-sized buffer) until the editor lets go of it; Step 5 and Step 6 decide when that happens.
 
 ---
 

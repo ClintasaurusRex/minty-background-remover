@@ -453,6 +453,14 @@ Approved for Phase 3 (P3-D2): Delete keeps the RGB values of deleted pixels inte
 - Operations that resample (resize, rotation by other angles) must work on premultiplied colour, so hidden colour cannot bleed into visible neighbours.
 - Delete clears the selection; Undo restores it (P3-D3).
 
+Implemented in Phase 3 Step 2 (`image/edit/deleteSelection.ts`, `deleteSelectedPixels`):
+
+- Input: the image's pixels and the selection (null for none). The selection must be the image's size.
+- Output: the new pixels, the number of pixels made transparent and the smallest rectangle containing them; or null when nothing would change.
+- A selected pixel whose alpha is above 0, including alpha 1, gets alpha 0; nothing else about it changes. A selected pixel that is already fully transparent keeps every byte and is not counted. Unselected pixels are never touched.
+- The input pixels and the selection are never written. The image is copied once, and only when at least one pixel changes; no other buffer proportional to the image is allocated. Work is limited to the selection's bounds.
+- Node measurements: 39 ms for a 4K background and 162 ms at 50 MP, of which the copy is 15 ms and 78 ms (`IMPLEMENTATION_PLAN.md`, Phase 3 Step 2). Browser timings are measured with the Delete command (Step 6).
+
 ---
 
 ## Edge Cleanup
