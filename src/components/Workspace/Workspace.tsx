@@ -107,7 +107,7 @@ export function Workspace({
       <ImageCanvas
         canvasRef={canvasRef}
         document={document}
-        bitmap={documentBitmap}
+        image={documentBitmap}
         viewport={viewport}
         workspace={workspace}
         onResize={onResize}

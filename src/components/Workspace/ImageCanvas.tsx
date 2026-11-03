@@ -1,4 +1,5 @@
-import { type RefObject, useEffect, useLayoutEffect, useRef } from 'react'
+import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { type DisplayImage, createDisplayImageOwner, displayContentKey } from '../../canvas/displayImage'
 import { planFrame } from '../../canvas/rendering'
 import { type WorkspaceRenderer, createWorkspaceRenderer } from '../../canvas/workspaceRenderer'
 import type { WorkspaceMetrics } from '../../editor/editorState'
@@ -7,8 +8,8 @@ import type { ImageDocument, Size, ViewportState } from '../../editor/types'
 interface ImageCanvasProps {
   canvasRef: RefObject<HTMLCanvasElement | null>
   document: ImageDocument | null
-  /** The document's drawable bitmap, replaced together with the document. */
-  bitmap: ImageBitmap | null
+  /** The document's display image, replaced together with the document. */
+  image: DisplayImage | null
   /** The display (snapped) viewport. */
   viewport: ViewportState | null
   workspace: WorkspaceMetrics | null
@@ -17,11 +18,12 @@ interface ImageCanvasProps {
 
 /**
  * The canvas covering the workspace. It reports its size and device pixel ratio,
- * and draws the document's bitmap at the given viewport.
+ * and draws the document's display image at the given viewport.
  */
-export function ImageCanvas({ canvasRef, document, bitmap, viewport, workspace, onResize }: ImageCanvasProps) {
+export function ImageCanvas({ canvasRef, document, image, viewport, workspace, onResize }: ImageCanvasProps) {
   const rendererRef = useRef<WorkspaceRenderer | null>(null)
-  const drawnBitmapRef = useRef<ImageBitmap | null>(null)
+  // Releases each display image once the canvas has moved on from it (see displayImage.ts).
+  const [owner] = useState(createDisplayImageOwner)
 
   useLayoutEffect(() => {
     const renderer = canvasRef.current && createWorkspaceRenderer(canvasRef.current)
@@ -39,21 +41,23 @@ export function ImageCanvas({ canvasRef, document, bitmap, viewport, workspace, 
   }, [canvasRef, onResize])
 
   useLayoutEffect(() => {
-    // The previous image's bitmap is no longer in the editor state once it has been
-    // replaced, so release its memory now rather than waiting for garbage collection.
-    if (drawnBitmapRef.current && drawnBitmapRef.current !== bitmap) drawnBitmapRef.current.close()
-    drawnBitmapRef.current = bitmap
-
     const renderer = rendererRef.current
-    if (!renderer || !workspace) return
-    const plan = planFrame({
-      imageSize: document ?? { width: 0, height: 0 },
-      viewport: viewport ?? { zoom: 1, offset: { x: 0, y: 0 } },
-      viewportSize: workspace.size,
-      devicePixelRatio: workspace.devicePixelRatio,
-    })
-    renderer.render(plan, document && viewport ? bitmap : null)
-  }, [document, bitmap, viewport, workspace])
+    if (renderer && workspace) {
+      const plan = planFrame({
+        imageSize: document ?? { width: 0, height: 0 },
+        viewport: viewport ?? { zoom: 1, offset: { x: 0, y: 0 } },
+        viewportSize: workspace.size,
+        devicePixelRatio: workspace.devicePixelRatio,
+      })
+      // The content key says which document revision the image shows, so a new revision is
+      // always drawn, whatever image object it comes with.
+      renderer.render(plan, document && viewport && image ? { image, key: displayContentKey(document) } : null)
+    }
+    // The previous image is no longer in the editor state once it has been replaced: release
+    // its memory now, after the renderer has moved on to the new one, rather than waiting for
+    // garbage collection.
+    owner.show(image)
+  }, [document, image, viewport, workspace, owner])
 
   const label = document
     ? `${document.name}, ${document.width} by ${document.height} pixels`

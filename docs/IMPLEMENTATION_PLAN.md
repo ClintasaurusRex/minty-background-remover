@@ -227,7 +227,7 @@ Known limitations of Phase 2, by severity (details in the step lists above):
   - The ants are diagonal stripes, not dashes tracing each outline. They slow down on very complex boundaries, pause above 10 million boundary pixels in view, and keep moving in an unfocused but visible window (Step 11).
   - Memory: an Add or Subtract click keeps the selection from before it for re-applying (one more mask: 9.2 MB at 4K, 50 MB at 50 MP). React keeps the selection (and, just after an import, the previous image) of its previous render until it renders again.
   - Clear and Escape do nothing with nothing selected, so they do not end re-applying after a Subtract that removed everything. A click made while a typed tolerance is uncommitted uses the typed value (Step 10).
-  - Neither canvas handles a lost 2D context: if the browser drops it (rare, mainly GPU process crashes), the canvas stays blank until the view changes. Since Step 12 a selection change no longer repaints the image.
+  - Neither canvas handles a lost 2D context: if the browser drops it (rare, mainly GPU process crashes), the canvas stays blank until the view changes. Since Step 12 a selection change no longer repaints the image. (Both canvases fixed in Phase 3 Step 4, which also found that the image canvas stayed blank after view changes too, and the overlay until the zoom changed.)
 - Test coverage only (not product defects):
   - Headless Firefox never has window focus, so blur commits, `:focus-visible` and Space / Enter on buttons cannot be automated there; they were verified in the Step 9–11 manual reviews.
   - Constructed paste events in Firefox carry no files, so Firefox paste is verified manually only.
@@ -237,10 +237,10 @@ Decisions remaining for the project owner:
 
 1. Main-thread time near 50 megapixels (D9, open since Step 7): keep everything synchronous, time-slice, or move selection work to a Web Worker. Recommendation: keep it synchronous for Phase 2. Everything up to 4K and 12-megapixel photographs responds in about 120 ms or less, and only images near the limit pause for 0.15–0.4 s. Re-evaluate with real images in Phase 3, where Delete and Undo add more full-image work, and introduce a Worker only if that testing shows the pauses matter.
 2. Size the canvas backing stores from `ResizeObserver`'s `devicePixelContentBoxSize` to keep both canvases pixel-exact at fractional scaling (open since Step 8). It touches Phase 1 image rendering, so it would be its own small, separately reviewed change.
-3. Whether to commit the benchmark and browser-check scripts (M6). They would need to become dependency-free scripts under `scripts/`; Chrome and Firefox are driven over their own protocols.
+3. Whether to commit the benchmark and browser-check scripts (M6). They would need to become dependency-free scripts under `scripts/`; Chrome and Firefox are driven over their own protocols. (Resolved in Phase 3 Step 4: a maintained subset is in `scripts/browser/`.)
 4. Optional: keep a just-opened image fitted on every window resize until the user zooms or pans, instead of only for the options row's resize. Recommendation: keep the current, narrower rule.
 
-After the merge: decision 1 carries into Phase 3 as P3-D11 (pixel edits stay synchronous until measured). Decisions 2 and 3 remain open.
+After the merge: decision 1 carries into Phase 3 as P3-D11 (pixel edits stay synchronous until measured). Decision 2 remains open; decision 3 was resolved in Phase 3 Step 4.
 
 Recommended final manual QA (Linux Mint, Chrome and Firefox, real display):
 
@@ -331,8 +331,8 @@ Phase 3 is implemented in twelve reviewed steps, each stopping for review:
 
 1. Record decisions; pixel buffer and revision model. Done.
 2. Delete algorithm (pure). Done.
-3. History building blocks: pixel patches, crop patches, selection encoding, byte accounting. (Implemented; awaiting review.)
-4. Display image for edited pixels and render invalidation (verifies P3-D10).
+3. History building blocks: pixel patches, crop patches, selection encoding, byte accounting. Done.
+4. Display image for edited pixels and render invalidation (verifies P3-D10). (Implemented; awaiting review.)
 5. Edit history in the editor state.
 6. Delete Selection, Undo and Redo (first manual checkpoint).
 7. Edge cleanup prototype and visual comparison (owner decision P3-D5).
@@ -378,7 +378,7 @@ Known limitations (Step 2):
 - Copying row by row and deleting while each row is still in cache measured about 10% faster at 50 MP (about 145 ms instead of 162 ms). It was not adopted, to keep `copyPixelData` as the single copy-on-write path; it remains an option if Step 6 browser measurements call for it.
 - While the edited image exists, the previous one is kept as well (one more image-sized buffer) until the editor lets go of it; Step 5 and Step 6 decide when that happens.
 
-#### Step 3: History Building Blocks (implemented; awaiting review)
+#### Step 3: History Building Blocks (done; approved)
 
 Pure modules in `editor/history/`, not yet used by the application (the production bundle does not include them):
 
@@ -411,6 +411,118 @@ Known limitations (Step 3):
 - Patches hold pixel values in the platform's byte order. History lives only in memory, so this never matters; it would if history were ever saved.
 - At 50 MP a Delete with Undo will cost about 0.15 s for the patch and 0.1 s to encode the selection, on top of the Delete itself (Node). Reading the mask four bytes at a time measured about a third faster, and a Delete patch could be built from the selection instead of comparing whole images; both are left for the Step 12 performance review, if browser measurements call for them.
 - Undo of a Magic Wand Add or Subtract click must also keep the selection from before that click (`MagicWandOperation.base`); Step 5 stores it as an encoded selection too.
+
+#### Step 4: Display Image and Renderer Invalidation (implemented; awaiting review)
+
+Verifies P3-D10: edited pixels can reach the screen synchronously, so an edit can replace the document and the image that shows it in one editor update. Nothing creates edited display images yet (Step 6); imports still create their bitmap with `createImageBitmap`.
+
+- `canvas/displayImage.ts`: `createDisplayImage(pixels)` validates the buffer (RangeError before anything is allocated), writes it once with `putImageData` into an `OffscreenCanvas` and takes the result with `transferToImageBitmap`. Where `OffscreenCanvas`, its 2D context or `transferToImageBitmap` is missing, a canvas element (never added to the page) is the display image instead: also synchronous, also drawable by the renderer. `DisplayImage` is `ImageBitmap | HTMLCanvasElement`. The pixel buffer is wrapped (`toImageData`), never copied or written. A strategy that is unavailable passes to the next; one that fails (for example a canvas too large for memory) releases what it allocated and throws.
+- Both canvases are created with `willReadFrequently`, which keeps them in main memory. Measured in Chrome 156 with GPU rendering: after the GPU process restarts, a GPU-backed bitmap or canvas silently draws nothing, so the image could not be drawn again; main-memory bitmaps survive, as the import path's bitmaps do. It also makes edited display images show exactly the bytes imported ones show (with GPU-backed canvases Chrome rounded 22 colour values of partially transparent pixels, out of 1,024 test pixels, one level differently).
+- `releaseDisplayImage` (closes a bitmap, empties a canvas), `isReleasedDisplayImage`, `displayContentKey(document)` (`id:revision`) and `createDisplayImageOwner` (releases the image shown before once another has been shown; showing the same image again releases nothing).
+- `workspaceRenderer.render(plan, content)` takes `{ image, key }`. A frame is skipped only when the image, the content key and the frame plan all equal the last frame drawn, so a new revision is drawn even with the same image object, and a new image even with the same key. `invalidate()` makes the next render draw even an identical frame; nothing calls it yet. A frame that throws while drawing is not counted as shown. A released image is never drawn (drawImage would throw): the canvas is cleared instead.
+- Context restoration: on `contextrestored` the renderer draws the last frame again at once, and makes the checkerboard pattern again. A pattern made before the loss turned out to make every later draw on the restored canvas produce nothing in Chrome, which is why the Phase 2 canvas stayed blank even after the view changed. The event is never cancelled (that would stop the browser restoring the context).
+- `ImageCanvas` passes the content key, draws the new image first and only then releases the replaced one (`createDisplayImageOwner`, kept in state across effect re-runs). Nothing is released in effect clean-ups, which React Strict Mode runs while the image is still shown.
+- Selection overlay restoration (added after the first review): on `contextrestored` the overlay renderer drops every tile and draws its last frame again in the current boundary pattern, so the tint and boundary come back at once, with no zoom, pan or other action. See "Corrections after the first review" below.
+
+Ownership contract for Steps 5 and 6 (also in `displayImage.ts` and `ARCHITECTURE.md`, which has a table of who holds what):
+
+- A command creates the display image synchronously in its event handler, never in a reducer or state updater (React Strict Mode runs those twice), and dispatches it in the same action as the document it shows. Before dispatching it checks the result is still current, as the reducer will; if it is not, or anything fails after creation, it releases the image itself.
+- Once accepted, the editor state holds it, and the workspace canvas releases it after the commit that replaces it, once the replacement is drawn. A remounted canvas takes over the image shown.
+- The canvas releases only images it has shown. An image whose action the reducer rejects after dispatch, or that a later action in the same commit replaces, is left to garbage collection: only the committed state tells whether it is in use, so an explicit release there could blank the canvas.
+- Display images are never kept in history or reused for another revision, and no state may bring back an image an earlier state replaced. Undo and Redo create new ones.
+
+Tests: 46 added (857 in total), 8 of them after the first review (below). `displayImage.test.ts` (24) against fake canvases that keep their own pixel copy: sizes, every alpha value 0–255 with hidden colour, no copy before the write and none written to the pixels (also after release and after failures), independent images, `willReadFrequently`, the OffscreenCanvas canvas released after the transfer, all three fallback triggers, invalid buffers (no canvas created), no 2D context of either kind, write, transfer and size failures (everything released), release and the owner's Strict Mode sequences. `workspaceRenderer.test.ts` (18, replacing 4): skipped identical frames, key and image changes, every kind of view change, invalidation, retry after a failed draw, restoration (last frame, frames asked for while lost, nothing before the first frame, listener removed on dispose, event not cancelled), released images, replacement order, Strict Mode re-creation, and device-pixel alignment at ratios 1–3 and zooms 25–800% through invalidation and restoration. Sixteen deliberately introduced defects were each caught (one only after a test was strengthened).
+
+Browser verification (production build, headless Chrome 156 and Firefox 158):
+
+- Imports of PNG, JPEG, WebP and SVG, with and without transparency (including a PNG and WebP with every alpha value and hidden colour under alpha 0, and an SVG with partial opacity) and a 4K screenshot, at 100%, 200% and 400% (whole device scales), before and after panning, at device pixel ratios 1, 1.5 and 2 (Firefox 1 and 2) and with Chrome GPU rendering: every opaque pixel shows exactly, every fully transparent pixel shows exactly the checkerboard, partially transparent pixels are within 1.3 levels of the exact blend; images are drawn at Fit. All 87 checks pass in each configuration at ratio 1 (71 at ratio 2). At ratio 1.5 in Chrome, 20 of 71 checks fail on a single device row where the checkerboard shows through (alpha 254, one level off; opaque pixels exact), identically with the build before Step 4.
+- Redraws: a Magic Wand click, 20 tolerance changes and clearing the selection draw the image 0 times; a zoom step, a pan and a workspace resize once each. The replaced image's bitmap is released and the current one stays live.
+- The same checks pass with the development build, where React Strict Mode runs.
+- A GPU process crash (its process killed, headless Chrome with GPU): the workspace canvas fires `contextlost` and `contextrestored` and redraws the image at once with every pixel exact and no app activity. Before Step 4 it stayed blank, also after zooming.
+- `createDisplayImage` itself, built from the project's modules: an `ImageBitmap` in both browsers, a canvas element when the fallback is forced (no `OffscreenCanvas`, or no `transferToImageBitmap`); every path shows the same bytes as `createImageBitmap` of the same pixels (opaque exact, alpha 0 as transparent black, alpha exact, colour within one premultiplied level); pixels unchanged; 16384 × 3051 and 8660 × 5773 created.
+
+Creation time, synchronous (median of 5 runs, opaque and deleted-background content alike, ratio 1; Node has no canvas, so there are no Node timings):
+
+| Image | Chrome | Chrome, GPU rendering | Firefox | Firefox, canvas element | `createImageBitmap` (import path; Chrome / Firefox) |
+| --- | --- | --- | --- | --- | --- |
+| 1280 × 800 | 3.5–3.9 ms | 1.7–2.2 ms | 4–6 ms | 3–4 ms | 3–5 / 3–4 ms |
+| 1920 × 1080 | 3.1 ms | 3.1 ms | 6–8 ms | 3–5 ms | 4.4 / 5–6 ms |
+| 3840 × 2160 | 13 ms | 13 ms | 23–25 ms | 12 ms | 16–18 / 20 ms |
+| 3840 × 2400 | 14.5 ms | 14 ms | 26 ms | 13 ms | 18–20 / 23 ms |
+| 4032 × 3024 | 19 ms | 19 ms | 33–34 ms | 17 ms | 24–25 / 30–31 ms |
+| 8660 × 5773 (50 MP) | 77 ms | 77 ms | 137–139 ms | 69–70 ms | 98–99 / 126 ms |
+| 16384 × 3051 (50 MP) | 76 ms | 75–77 ms | 138–139 ms | 68–69 ms | 101 / 124–125 ms |
+
+In Chrome the canvas element takes the same time as the transfer. Until the first frame is on the canvas (creation, drawing at Fit, finishing the drawing): 31–34 ms at 4K and 106–118 ms at 50 MP in Chrome, 28–30 ms and 140–144 ms in Firefox.
+
+Memory (resident memory of the browser's processes, Linux):
+
+- Chrome: creating a display image needs exactly the image's size (35 MB at 4K, 191 MB at 50 MP) and no more at its peak, for both strategies; the transfer copies nothing. Released images give it back. After a transferred bitmap's first draw, the page's process keeps about one more image's size at 4K and a third to half of one at 50 MP; it stays constant over repeated create, draw and release cycles (no accumulation) and does not occur with canvas elements or `createImageBitmap`.
+- Firefox: the transfer copies, so creation briefly needs twice the image's size (68 MB at 4K, 378 MB at 50 MP), the same as `createImageBitmap` on import; the canvas element needs once its size. Sixteen cycles at 4K rose to 1.5 images and fell back to 0.4: no accumulation.
+
+##### Corrections after the first review
+
+The review approved the display-image architecture, the transfer-first strategy with the canvas-element fallback, the content key and the image canvas's restoration in principle, and asked for three things before the step is committed.
+
+Selection overlay recovery after context restoration:
+
+- Root cause: the overlay renderer did not listen for `contextrestored`, and its tile cache kept canvases whose pixels the browser had lost. Measured in Chrome 156 (headless, with and without `--enable-gpu`): a GPU process restart blanks every canvas that lived on the GPU, including every 256 × 256 tile canvas, and restores the tiles just before the overlay canvas. Nothing redrew the overlay canvas. Marching-ants steps repaint only each tile's boundary area from pixels kept in memory, so with the ants about half the overlay came back (211,883 of 421,608 pixels) and with reduced motion none of it. A pan reused the blank tiles; only a zoom change, which rasterises every tile again, recovered.
+- Fix (`selectionOverlayRenderer.ts`): on `contextrestored` the renderer releases every tile and draws its last frame again in the current boundary pattern. That rasterises only the visible tiles, once, as a zoom change does. The selection is only read; the editor state, the tile approach, device-pixel placement and reduced-motion behaviour are unchanged. `dispose()` removes the listener, and `contextlost` is not cancelled. Making the tiles `willReadFrequently` instead would not have been enough: in Chrome's software mode even main-memory canvas elements came back blank.
+- Tests (`selectionOverlayRenderer.test.ts`, 6 added): fake canvases that draw nothing while the "GPU" is lost and come back blank, tiles first, as measured. They check that the overlay comes back exactly (static and marching, at zooms 25–800% and ratios 1–2 with fractional offsets), that later steps and pans never reuse blank tiles, that frames asked for while lost are drawn, that each restoration draws once and rasterises only the visible tiles, that reduced motion stays static with nothing scheduled, and that nothing happens without a selection or after disposal. Without the fix, 5 of them fail. Four other deliberate defects were each caught: keeping the blank tiles, skipping the redraw, redrawing in the static pattern, and leaving the listener after disposal.
+
+Display-image ownership review: no image is released before its last draw, and no correction to the code was needed.
+
+- An image replaced in the state is released after the replacement is drawn.
+- A rejected stale import's bitmap is closed by the import runner.
+- Effect replays and remounts release nothing.
+- A remounted canvas's new owner takes over the image shown.
+- A released image left in the renderer's last frame is never drawn, also on restoration.
+
+The analysis found one case to document rather than change. An image whose action is rejected, or replaced within one commit, can only be left to garbage collection: only the committed state tells whether it is in use. The ownership contract above now states this, and that reducers never create or release images. Two tests were added (`displayImage.test.ts`): the owner releases only images it has shown, and a remounted canvas takes over.
+
+Browser scripts (M6): `scripts/browser/` holds dependency-free, manually run scripts, outside `npm test`; see its `README.md`.
+
+- `smoke.mjs`: the rendering smoke test, now also checking the overlay's tint, emptiness and boundary against the selection, pixel by pixel.
+- `gpu-crash.mjs`: opt-in, Linux. It kills only the GPU process of the headless Chrome it started, found among that browser's own descendants.
+- `display-image-bench.mjs`: correctness and timing.
+- `fixtures.mjs`: generates the images into a Git-ignored folder.
+
+Not kept from the investigation scripts:
+
+- The one-off API probes, whose findings are recorded here.
+- The `/proc`-based memory measurements, which depend on Chrome's and Firefox's process trees and spare processes, so they are fragile.
+- The Fast Refresh experiment, which did not work.
+- The Phase 2 overlay and Step 9 scripts, which assert older behaviour.
+
+Verification of the corrections (production build, headless Chrome 156 and Firefox 159):
+
+- `smoke.mjs`: Chrome and Firefox pass every check at ratio 1 (94 checks) and ratio 2 (76). The checks cover 8 files, the overlay at 100–400% before and after panning, redraw counts and release. The development build (React Strict Mode) passes all 94 in both browsers. Chrome at ratio 1.5 passes 56 and fails the same 20 checks, with the same counts, as the build before Step 4: the existing limitation below.
+- `gpu-crash.mjs`, in Chrome's default headless mode and with `--enable-gpu`, at ratios 1 and 2, each with reduced motion and with marching ants (46 checks per mode, all passing). Without any action after the crash:
+  - Both layers lose and regain their contexts.
+  - The image is exact.
+  - The overlay is complete and aligned: identical to before the crash with reduced motion, the same coverage with the ants.
+  - The selection, document and view are the same objects as before.
+  - The image is drawn once, and with reduced motion nothing is drawn while idle.
+  - A pan that moves the view still draws correctly.
+
+  The same script against the Step 4 build without the overlay fix fails exactly where expected. With reduced motion the overlay is blank (0 pixels painted); with the ants half of it is missing; after the pan it is still missing. The image layer passes there too.
+- Firefox: a synthetic `contextrestored` on both canvases, after blanking them, redraws the overlay completely and the image exactly (Chrome the same). This checks the wiring only: a real context loss cannot be caused in headless Firefox.
+- `display-image-bench.mjs`: all correctness checks pass in both browsers. Timings agree with the table above. At 3840 × 2160 and 8660 × 5773, the transfer took 13.1 and 78 ms in Chrome and 24 and 138 ms in Firefox; Firefox's canvas element took 12 and 70 ms, and `createImageBitmap` 16.6 and 100 ms in Chrome and 21 and 129 ms in Firefox.
+
+Known limitations (Step 4):
+
+- Firefox copies the canvas in `transferToImageBitmap` (11 ms at 4K, 68 ms at 50 MP), doubling creation time and peak memory against the canvas element. Accepted for now (owner decision); to be revisited with whole-Delete measurements in Step 6 or the Step 12 performance review.
+- Keeping display images in main memory costs Chrome with GPU rendering a CPU write at creation (13 ms at 4K, 77 ms at 50 MP) where a GPU-backed canvas defers the work (time to first frame at 50 MP 111 ms instead of 49 ms in the measurement of the variants), in exchange for surviving a GPU process restart and matching imported pixels exactly.
+- Existing limitation, recorded rather than changed: in Chrome at device pixel ratio 1.5, one device row of the image canvas is left very slightly transparent (alpha 254 instead of 255) where the image is transparent or partly transparent, so the checkerboard there is one level off; opaque pixels are exact. Builds before Step 4 behave identically. It belongs with the `devicePixelContentBoxSize` carry-over from Phase 2.
+- Deferred to desktop compatibility testing: WebKitGTK, the engine of the planned Linux desktop build.
+- Not verified: context restoration after a real context loss in Firefox, whose headless mode has no separate GPU process to crash. The listener wiring is verified with a synthetic event. A manual check on a desktop would need a GPU reset.
+- Fast Refresh with an image open did not re-run the effects in the browser, so re-creating the renderers with an image shown is verified by unit tests only.
+
+Owner decisions (from the first review):
+
+1. Display image strategy: keep `transferToImageBitmap` first and the canvas-element fallback. Reconsider the trade-off when the whole Delete workflow can be measured (Step 6) or in the Step 12 performance review.
+2. Selection overlay restoration: done in this step (above).
+3. Browser scripts (M6): approved; added under `scripts/browser/`.
 
 ---
 

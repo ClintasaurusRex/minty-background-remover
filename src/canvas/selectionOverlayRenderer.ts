@@ -24,6 +24,10 @@ import {
  * without boundary are never touched, and the selection is not read. Visible tiles also keep
  * their boundary area's pixels once the pattern has changed, so each marching-ants step only
  * flips the pixels that move.
+ *
+ * When the browser restores the canvas's lost context (after the GPU process restarts, for
+ * example), the last frame is drawn again straight away, with new tiles: the old ones came back
+ * blank. See onContextRestored.
  */
 
 export interface SelectionOverlayRenderer {
@@ -39,7 +43,7 @@ export interface SelectionOverlayRenderer {
    * boundary): what a new pattern repaints.
    */
   visibleBoundaryArea(): number
-  /** Releases the canvas and every tile. */
+  /** Releases the canvas and every tile, and stops redrawing when the context is restored. */
   dispose(): void
 }
 
@@ -138,7 +142,7 @@ export function createSelectionOverlayRenderer(canvas: HTMLCanvasElement): Selec
     }
   }
 
-  return {
+  const renderer: SelectionOverlayRenderer = {
     render(plan, selection, nextPattern) {
       if (!plan || !selection) {
         // Setting the size releases the backing store and clears the canvas.
@@ -204,6 +208,7 @@ export function createSelectionOverlayRenderer(canvas: HTMLCanvasElement): Selec
     },
 
     dispose() {
+      canvas.removeEventListener('contextrestored', onContextRestored)
       releaseTiles()
       canvas.width = canvas.height = 0
       pixels = null
@@ -211,6 +216,24 @@ export function createSelectionOverlayRenderer(canvas: HTMLCanvasElement): Selec
       boundaryArea = 0
     },
   }
+
+  /*
+   * After a lost context is restored, this canvas is blank, and so is every tile: in Chrome 156 a
+   * GPU process restart blanks every canvas that lived on the GPU, tiles included (they are
+   * restored just before this canvas). A pan would reuse them blank, so every tile is dropped and
+   * the last frame is drawn again in the current pattern. Only the visible tiles are rasterised,
+   * as after a zoom change. contextlost is not cancelled: that would stop the restoration.
+   */
+  const onContextRestored = () => {
+    const last = drawn
+    releaseTiles()
+    drawn = null
+    boundaryArea = 0
+    if (last && pattern) renderer.render(last.plan, last.selection, pattern)
+  }
+  canvas.addEventListener('contextrestored', onContextRestored)
+
+  return renderer
 }
 
 /** Whether two plans put the same tiles in the same places. */

@@ -76,6 +76,15 @@ Revisions:
 - This includes Undo and Redo: restoring earlier pixels creates a new revision with a copy of them, never the earlier revision number. Work tagged with any earlier version (a selection, a Magic Wand click or re-apply, and later edits computed outside the reducer) can therefore never be accepted, even when the restored pixels are identical.
 - Undo must still restore the selection and the Magic Wand click that can be re-applied. The recorded click is rebound to the new version (its `version` replaced with the restored document's) when it is restored, which is valid because the restored pixels and selection are exactly those it was made on. Stale version identifiers are never restored. (Planned for the Undo / Redo steps.)
 
+### Display Images
+
+Implemented in Phase 3 Step 4 (`canvas/displayImage.ts`); verifies P3-D10.
+
+- The canvas never draws a document's pixels directly. It draws a display image: a copy made once per content state, synchronously (`createDisplayImage`), so an edit can replace the document and its display image together. The pixels are written into a canvas with `putImageData` and handed over as an `ImageBitmap` (`transferToImageBitmap`); where that is unavailable, the canvas itself is the display image. The pixel buffer is never copied beforehand or written.
+- Canvases store colour premultiplied by alpha. A display image therefore shows opaque pixels exactly, fully transparent pixels as transparent black (hidden colour can never be displayed, as P3-D2 requires), and partially transparent pixels with the alpha exact and the colour within one premultiplied level. Measured in Chrome 156 and Firefox 158, it shows exactly the same bytes as the import path's `createImageBitmap`, with both strategies.
+- Display images live in main memory (`willReadFrequently`): GPU-backed images lose their pixels when the browser's GPU process restarts, and the workspace must be able to draw the image again when its canvas is restored.
+- Each content state (every revision) gets its own display image, identified by the document id and revision; display images are never kept in history. Creation takes about 13 ms at 4K and 77 ms at 50 MP in Chrome, and 25 ms and 138 ms in Firefox, whose transfer copies the pixels once more (`IMPLEMENTATION_PLAN.md`, Phase 3 Step 4).
+
 ---
 
 ## Source Image Integrity
@@ -763,7 +772,7 @@ Potential future performance tools:
 
 Do not introduce these until profiling demonstrates a need.
 
-Phase 3 (P3-D11): pixel edits start synchronous on the main thread, like Phase 2 selection work, and are measured at 4K and 50 MP before anything else is decided. Copy-on-write buffers can be handed to a Web Worker later without changing the algorithms. How the display image is rebuilt after an edit (P3-D10, recommendation: synchronously through `OffscreenCanvas`) is verified in Phase 3 Step 4.
+Phase 3 (P3-D11): pixel edits start synchronous on the main thread, like Phase 2 selection work, and are measured at 4K and 50 MP before anything else is decided. Copy-on-write buffers can be handed to a Web Worker later without changing the algorithms. How the display image is rebuilt after an edit (P3-D10) was verified in Phase 3 Step 4: synchronously through `OffscreenCanvas` (see Display Images), 13–15 ms at 4K and 77 ms at 50 MP in Chrome, 23–26 ms and 138 ms in Firefox.
 
 ---
 

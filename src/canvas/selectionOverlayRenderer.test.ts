@@ -3,6 +3,7 @@ import type { SelectionMask, Size } from '../editor/types'
 import { createSelectionMask } from '../image/selection/selectionMask'
 import { selectAll } from '../image/selection/selectionOperations'
 import { snapToDevicePixels } from './devicePixels'
+import { type AnimationClock, createMarchingAnts } from './marchingAnts'
 import {
   type BoundaryPattern,
   MARCHING_ANTS_PHASES,
@@ -36,6 +37,9 @@ class FakeImageData {
 const LITTLE_ENDIAN = new Uint8Array(Uint32Array.of(1).buffer)[0] === 1
 const alpha = (pixel: number) => (LITTLE_ENDIAN ? pixel >>> 24 : pixel & 255)
 
+/** Whether the (fake) GPU is down: drawing does nothing, as on a lost context. */
+const gpu = { lost: false }
+
 class FakeContext {
   imageSmoothingEnabled = true
   readonly calls = { putImageData: 0, drawImage: 0, clearRect: 0 }
@@ -50,12 +54,14 @@ class FakeContext {
 
   clearRect(x: number, y: number, width: number, height: number) {
     this.calls.clearRect++
+    if (gpu.lost) return
     const { pixels, width: w, height: h } = this.canvas
     for (let r = Math.max(0, y); r < Math.min(h, y + height); r++) pixels.fill(0, r * w + Math.max(0, x), r * w + Math.min(w, x + width))
   }
 
   putImageData(image: FakeImageData, dx: number, dy: number, sx = 0, sy = 0, sw = image.width, sh = image.height) {
     this.calls.putImageData++
+    if (gpu.lost) return
     const source = new Uint32Array(image.data.buffer)
     const { pixels, width: w, height: h } = this.canvas
     for (let r = 0; r < sh; r++) {
@@ -73,6 +79,7 @@ class FakeContext {
     const [sx, sy, sw, sh, dx, dy] = args.length === 2 ? [0, 0, source.width, source.height, args[0], args[1]] : args
     if (args.length !== 2) expect([args[6], args[7]]).toEqual([sw, sh])
     expect(this.imageSmoothingEnabled).toBe(false)
+    if (gpu.lost) return
     const { pixels, width: w, height: h } = this.canvas
     for (let r = 0; r < sh; r++) {
       for (let c = 0; c < sw; c++) {
@@ -112,12 +119,29 @@ class FakeCanvas {
   getContext(type: string) {
     return type === '2d' ? this.context : null
   }
+  readonly listeners = new Map<string, Set<() => void>>()
+  addEventListener(type: string, listener: () => void) {
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set())
+    this.listeners.get(type)?.add(listener)
+  }
+  removeEventListener(type: string, listener: () => void) {
+    this.listeners.get(type)?.delete(listener)
+  }
+  fire(type: string) {
+    for (const listener of [...(this.listeners.get(type) ?? [])]) listener()
+  }
+  /** What a restored context looks like: no pixels, and the context state back to its defaults. */
+  blank() {
+    this.pixels.fill(0)
+    this.context.imageSmoothingEnabled = true
+  }
 }
 
 let created: FakeCanvas[] = []
 
 beforeEach(() => {
   created = []
+  gpu.lost = false
   vi.stubGlobal('ImageData', FakeImageData)
   vi.stubGlobal('document', {
     createElement(tag: string) {
@@ -193,6 +217,35 @@ function expectFrame(canvas: FakeCanvas, expected: Uint32Array, label: string) {
   const mismatch = canvas.pixels.findIndex((pixel, i) => pixel !== expected[i])
   expect(mismatch, `${label}: first difference at ${mismatch % canvas.width}, ${Math.floor(mismatch / canvas.width)}`).toBe(-1)
   expect(canvas.context.overlaps, `${label}: tint drawn twice`).toBe(0)
+}
+
+/** The GPU process dies: every canvas loses its context and nothing drawn reaches it. */
+function loseContexts() {
+  gpu.lost = true
+}
+
+/**
+ * The GPU process is back: every canvas comes back blank, the tiles first and the overlay canvas
+ * last, as measured in Chrome 156.
+ */
+function restoreContexts(canvas: FakeCanvas) {
+  gpu.lost = false
+  for (const tile of created) tile.blank()
+  canvas.blank()
+  for (const tile of created) tile.fire('contextrestored')
+  canvas.fire('contextrestored')
+}
+
+/** `frame`, which must show something: a frame with nothing to see would prove nothing. */
+function shown(frame: Uint32Array): Uint32Array {
+  expect(frame.some((pixel) => alpha(pixel) !== 0)).toBe(true)
+  return frame
+}
+
+/** How many tiles of `overlay` have something to draw, so get a canvas. */
+function drawnTiles(selection: SelectionMask, overlay: SelectionOverlayPlan): number {
+  const out = new Uint32Array(256 * 256)
+  return overlay.tiles.filter(({ rect }) => rasteriseOverlayTile(selection, overlay.scale, overlay.lineWidth, rect, out, 256, STATIC_BOUNDARY).drawn).length
 }
 
 const totalCalls = () =>
@@ -392,5 +445,135 @@ describe('selection overlay renderer: marching ants', () => {
     }
     expect(overlay.tiles.length).toBeLessThanOrEqual(40)
     expectFrame(canvas, expectedFrame(selection, overlay, marchingBoundary(2)), 'checkerboard')
+  })
+})
+
+describe('selection overlay renderer: context restoration', () => {
+  it('draws the tint and boundary again as soon as its context is restored, at any zoom, pan and display scaling', () => {
+    const selection = screenshotMask(160, 110)
+    const before = selection.data.slice()
+    const configurations: [zoom: number, dpr: number, offset: { x: number; y: number }][] = [
+      [0.25, 1, { x: 7.3, y: 5.1 }],
+      [1, 1, { x: 3, y: 4 }],
+      [1.5, 1, { x: -20.4, y: 9.7 }],
+      [2, 1.25, { x: -61.3, y: -11.9 }],
+      [1, 1.5, { x: 10.2, y: 3.3 }],
+      [8, 2, { x: -150.6, y: -40.2 }],
+      [1.234, 1.25, { x: 13.6, y: -9.2 }],
+    ]
+    for (const [zoom, dpr, offset] of configurations) {
+      for (const steps of [0, 3]) {
+        const { renderer, canvas } = setup()
+        const overlay = plan(selection, zoom, offset, dpr, { width: 300, height: 200 })
+        const label = `zoom ${zoom}, dpr ${dpr}, ${steps ? 'marching' : 'static'}`
+        renderer.render(overlay, selection, steps ? marchingBoundary(0) : STATIC_BOUNDARY)
+        for (let step = 1; step <= steps; step++) renderer.setPattern(marchingBoundary(step))
+        const pattern = steps ? marchingBoundary(steps) : STATIC_BOUNDARY
+        loseContexts()
+        restoreContexts(canvas)
+        expectFrame(canvas, shown(expectedFrame(selection, overlay, pattern)), label)
+        renderer.dispose()
+      }
+    }
+    expect(selection.data).toEqual(before)
+  })
+
+  it('never draws the blank tiles again: marching-ants steps and pans after restoration show the whole overlay', () => {
+    // Before restoration was handled, steps brought back only the boundary areas and a pan
+    // reused the blank tiles; only a zoom change, which rasterises every tile again, recovered.
+    const selection = screenshotMask(900, 700)
+    const { renderer, canvas } = setup()
+    const size = { width: 400, height: 300 }
+    renderer.render(plan(selection, 1.5, { x: 0, y: 0 }, 1, size), selection, marchingBoundary(0))
+    renderer.setPattern(marchingBoundary(1))
+    const oldTiles = [...created]
+    loseContexts()
+    restoreContexts(canvas)
+    expect(oldTiles.every((tile) => tile.width === 0 && tile.height === 0)).toBe(true)
+    const oldCalls = oldTiles.map((tile) => ({ ...tile.context.calls }))
+
+    renderer.setPattern(marchingBoundary(2))
+    expectFrame(canvas, shown(expectedFrame(selection, plan(selection, 1.5, { x: 0, y: 0 }, 1, size), marchingBoundary(2))), 'step')
+    for (const [k, offset] of [{ x: -40, y: -25 }, { x: -5.3, y: -13.1 }, { x: 0, y: 0 }].entries()) {
+      const overlay = plan(selection, 1.5, offset, 1, size)
+      renderer.render(overlay, selection, marchingBoundary(3 + k))
+      expectFrame(canvas, shown(expectedFrame(selection, overlay, marchingBoundary(3 + k))), `pan ${k}`)
+    }
+    expect(oldTiles.map((tile) => tile.context.calls)).toEqual(oldCalls)
+  })
+
+  it('draws the latest frame when frames were asked for while the context was lost', () => {
+    const selection = screenshotMask(500, 400)
+    const { renderer, canvas } = setup()
+    const size = { width: 300, height: 200 }
+    renderer.render(plan(selection, 1, { x: 0, y: 0 }, 1, size), selection, marchingBoundary(0))
+    loseContexts()
+    renderer.render(plan(selection, 1, { x: -50, y: -30 }, 1, size), selection, marchingBoundary(0))
+    // Another zoom: its tiles are created while the context is lost.
+    const latest = plan(selection, 2, { x: -10.5, y: -6.25 }, 1, size)
+    renderer.render(latest, selection, marchingBoundary(0))
+    renderer.setPattern(marchingBoundary(5))
+    restoreContexts(canvas)
+    expectFrame(canvas, shown(expectedFrame(selection, latest, marchingBoundary(5))), 'latest frame')
+  })
+
+  it('draws once per restoration, rasterising only the visible tiles', () => {
+    const selection = screenshotMask(1200, 900)
+    const { renderer, canvas } = setup()
+    const overlay = plan(selection, 1, { x: -100, y: -60 }, 1, { width: 500, height: 400 })
+    renderer.render(overlay, selection, STATIC_BOUNDARY)
+    // Tiles kept just out of view after panning back are dropped too, not rasterised.
+    renderer.render(plan(selection, 1, { x: -300, y: -200 }, 1, { width: 500, height: 400 }), selection, STATIC_BOUNDARY)
+    renderer.render(overlay, selection, STATIC_BOUNDARY)
+    const visible = drawnTiles(selection, overlay)
+    expect(created.length).toBeGreaterThan(visible)
+    for (let restoration = 1; restoration <= 2; restoration++) {
+      const tilesBefore = created.length
+      const drawsBefore = canvas.context.calls.drawImage
+      loseContexts()
+      restoreContexts(canvas)
+      expect(created.length - tilesBefore).toBe(visible)
+      expect(canvas.context.calls.drawImage - drawsBefore).toBe(visible)
+      expectFrame(canvas, shown(expectedFrame(selection, overlay, STATIC_BOUNDARY)), `restoration ${restoration}`)
+    }
+  })
+
+  it('stays static with reduced motion, and schedules no marching-ants step', () => {
+    const selection = screenshotMask(300, 200)
+    const { renderer, canvas } = setup()
+    let scheduled = 0
+    const clock: AnimationClock = {
+      now: () => 0,
+      setTimeout: () => ++scheduled,
+      clearTimeout() {},
+      requestAnimationFrame: () => ++scheduled,
+      cancelAnimationFrame() {},
+    }
+    const ants = createMarchingAnts(renderer, clock, { reducedMotion: true, hidden: false })
+    const overlay = plan(selection, 1, { x: 0, y: 0 }, 1, { width: 300, height: 200 })
+    renderer.render(overlay, selection, ants.pattern())
+    ants.update()
+    loseContexts()
+    restoreContexts(canvas)
+    expectFrame(canvas, shown(expectedFrame(selection, overlay, STATIC_BOUNDARY)), 'static after restoration')
+    expect(scheduled).toBe(0)
+    ants.dispose()
+  })
+
+  it('does nothing when restored with nothing selected, or after it was disposed', () => {
+    const { renderer, canvas } = setup()
+    renderer.render(null, null, STATIC_BOUNDARY)
+    restoreContexts(canvas)
+    expect([canvas.width, canvas.height]).toEqual([0, 0])
+    expect(created).toHaveLength(0)
+
+    const selection = screenshotMask(300, 200)
+    renderer.render(plan(selection, 1, { x: 0, y: 0 }, 1, { width: 300, height: 200 }), selection, STATIC_BOUNDARY)
+    const tiles = created.length
+    renderer.dispose()
+    expect(canvas.listeners.get('contextrestored')?.size ?? 0).toBe(0)
+    restoreContexts(canvas)
+    expect(created).toHaveLength(tiles)
+    expect([canvas.width, canvas.height]).toEqual([0, 0])
   })
 })

@@ -206,7 +206,7 @@ Everything is synchronous on the main thread; no Web Workers (see Web Workers).
 
 #### Test coverage (end of Phase 2)
 
-Vitest, Node environment, 706 tests in 39 files. Pixel algorithms are tested against character-map fixtures (`image/selection/testFixtures.ts`) and brute-force references: colour distance boundaries; Contiguous and Global wands (four-connectivity, narrow and winding one-pixel corridors, large images without recursion, a breadth-first reference on random images); combine, invert, grow and shrink; the mask builder. Editor state, commands and tolerance input are tested as pure reducers and functions, including stale-version, replay and placement cases. The overlay rasteriser is compared with a per-pixel reference rasteriser over a range of zoom levels, line widths and tiles, at every marching-ants phase, and both renderers run against fake canvases that count drawing calls. Components are rendered to static markup. Browser behaviour (hit-testing against what the browser draws, the overlay against a fresh render, timing, memory) is checked with headless Chrome and Firefox scripts kept outside the repository (see `IMAGE_PROCESSING_SPEC.md`, Final Phase 2 Measurements).
+Vitest, Node environment, 706 tests in 39 files. Pixel algorithms are tested against character-map fixtures (`image/selection/testFixtures.ts`) and brute-force references: colour distance boundaries; Contiguous and Global wands (four-connectivity, narrow and winding one-pixel corridors, large images without recursion, a breadth-first reference on random images); combine, invert, grow and shrink; the mask builder. Editor state, commands and tolerance input are tested as pure reducers and functions, including stale-version, replay and placement cases. The overlay rasteriser is compared with a per-pixel reference rasteriser over a range of zoom levels, line widths and tiles, at every marching-ants phase, and both renderers run against fake canvases that count drawing calls. Components are rendered to static markup. Browser behaviour (hit-testing against what the browser draws, the overlay against a fresh render, timing, memory) is checked with headless Chrome and Firefox scripts kept outside the repository (see `IMAGE_PROCESSING_SPEC.md`, Final Phase 2 Measurements). Since Phase 3 Step 4 a maintained subset is in `scripts/browser/`.
 
 ### Phase 3 Modules
 
@@ -257,7 +257,41 @@ Contract for the Undo / Redo history (Step 5), which builds on these without cha
 - All of this is pixel work, done in commands outside the reducer. The reducer only checks the version and that the entry is the one on top.
 - The history's size is `retainedBytes` over the payloads of all its entries, so anything shared between entries is counted once.
 
-Planned for later steps (subject to review at each step): `image/edit/` (edge band, cleanup, feather), `image/trim/autoTrim.ts`, `editor/history/` (bounded history), `editor/editCommands.ts`, `canvas/displayImage.ts` (the display image for an edited revision) and edit shortcuts.
+Step 4 (display image and renderer invalidation):
+
+```text
+src/canvas/
+├── displayImage.ts       createDisplayImage: a document's pixels as a drawable image, synchronously
+│                         (OffscreenCanvas → transferToImageBitmap, or a canvas element where that is
+│                         unavailable; both kept in main memory); releaseDisplayImage,
+│                         isReleasedDisplayImage, displayContentKey (document id and revision),
+│                         createDisplayImageOwner (releases an image once another is shown)
+├── workspaceRenderer.ts  render(plan, { image, key }), invalidate(), redraw on contextrestored
+└── selectionOverlayRenderer.ts  also redraws on contextrestored, with new tiles
+
+scripts/browser/          manual browser checks, outside npm test (README.md there): rendering
+                          smoke test, opt-in GPU process crash test, display-image bench
+```
+
+Who holds what:
+
+| Resource | Held by | Released |
+| --- | --- | --- |
+| The current display image (`documentBitmap`) | The editor state | By `ImageCanvas` (its `createDisplayImageOwner`), after the commit that replaces it, once the replacement is drawn |
+| A display image a command has created but not dispatched | The command | By the command, if it is stale or anything fails |
+| An import's bitmap that lost to a newer import | The import runner | Closed by the runner |
+| Image canvas backing store and checkerboard pattern | `workspaceRenderer` (one per `ImageCanvas` mount) | `dispose()` in the effect clean-up; the pattern is remade on restoration |
+| Overlay backing store, tile canvases and pixel buffers | `selectionOverlayRenderer` (one per `SelectionOverlayCanvas` mount) | When the selection is cleared, the zoom, ratio or selection changes, tiles leave the kept area, on restoration, and on `dispose()` |
+| Marching-ants timers | `marchingAnts` (one per overlay mount) | `dispose()` |
+
+Ownership of display images (for the edit commands of Steps 5 and 6):
+
+- `createDisplayImage` returns an image only its caller holds. A command creates it synchronously in its event handler, right after the edited document, never in a reducer or state updater (React Strict Mode runs those twice), and dispatches both in one action, so the canvas never shows the pixels of another revision. Before dispatching, the command checks that its result is still current (the document version it was computed from is still the open one, as the reducer will check); if it is not, or anything fails after creation, the command releases the image itself. If creation fails, nothing stays allocated and the current document and image stay.
+- Once the editor has accepted it, the editor state holds it and `ImageCanvas` releases it: it draws the new image and only then releases the one it replaced. Nothing is released in effect clean-ups, which React Strict Mode runs while the image is still shown, and the renderer never releases images. A remounted `ImageCanvas` gets a new owner, which takes over the image shown.
+- The canvas releases only images it has shown. An image whose action the reducer rejects after dispatch, or that a later action in the same commit replaces, is not released explicitly: only the committed state tells whether it is in use (React can process a queued action against another state than the command saw), so an earlier release could blank the canvas. Garbage collection frees it; commands keep the case rare by checking currency just before dispatching.
+- Display images are never kept in history or reused for another revision, and no state may bring back an image that an earlier state replaced (it may have been released). Undo and Redo create a new one with the new revision.
+
+Planned for later steps (subject to review at each step): `image/edit/` (edge band, cleanup, feather), `image/trim/autoTrim.ts`, `editor/history/` (bounded history), `editor/editCommands.ts` and edit shortcuts.
 
 Key rules:
 
@@ -265,7 +299,9 @@ Key rules:
 - `ImageDocument.revision` comes from one session-wide counter: an opened image is revision 0, and every later content state, including an Undo or Redo, gets a revision never given out before. Results computed outside the reducer are tagged with `documentVersion()` and discarded for any other version, so work computed before an edit, Undo or Redo is never applied after it.
 - Undo restores earlier pixels as a new revision. The selection and the Magic Wand click recorded before the edit are restored with it, and the click's `version` is rebound to the new revision; a stale version is never restored.
 - Pixels become `ImageData` only at the canvas boundary (`toImageData`). Pixel algorithms take and return `PixelBuffer`s, so they run in Node tests and could move to a Web Worker unchanged.
-- The display bitmap is still created once per import. Edited pixels must reach the screen through a new display image and an explicit renderer invalidation (Step 4): writing pixel memory or changing the revision alone never redraws the canvas, because `workspaceRenderer` draws from its own bitmap copy and skips frames whose bitmap and plan are unchanged.
+- Edited pixels reach the screen only through a new display image (`createDisplayImage`, Step 4): writing pixel memory never changes what the canvas shows, because `workspaceRenderer` draws from the display image, its own copy. Imports still create theirs with `createImageBitmap`; both show the same bytes.
+- `workspaceRenderer` skips a frame only when the display image, the content key (`displayContentKey`: document id and revision) and the frame plan all equal the last frame drawn. A new revision is therefore always drawn, even with the same image object, and so is a new image. `invalidate()` forces the next frame to be drawn; nothing needs it yet.
+- When the browser restores a lost 2D context (after a GPU process restart), both renderers draw their last frame again at once, without waiting for user action. The workspace renderer makes a new checkerboard pattern: one made before the loss made every later draw produce nothing in Chrome. The overlay renderer drops all its tiles, which come back blank, and rasterises the visible ones again in the current boundary pattern, as a zoom change does. Display images are kept in main memory (`willReadFrequently`), because GPU-backed images lose their pixels when the GPU process restarts. Neither renderer cancels `contextlost`, which would stop the restoration.
 
 ---
 
