@@ -551,6 +551,8 @@ Approved for Phase 3:
 - Limits (P3-D8): at most 25 entries and 256 MB of history data. The oldest entries are dropped first. The newest entry is always kept, even when it alone exceeds 256 MB, so the last edit can always be undone.
 - Undo and Redo shortcuts keep their text-editing meaning in text fields.
 
+Phase 3 Step 5 implements the history in the editor state; the controls, shortcuts and the first edit (Delete Selection) that use it come in Step 6. As implemented: Undo restores the pixels, the selection and the Magic Wand click (re-applicable with a new tolerance) from just before the edit; Redo restores the pixels and the selection the edit left (none after Delete). Both replace whatever is selected at the time. An edit, Undo or Redo that fails (for example for lack of memory) changes nothing and is reported.
+
 ---
 
 ## 22. Export

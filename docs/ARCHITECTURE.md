@@ -250,7 +250,7 @@ src/editor/history/
 └── geometry.ts        rectangle and dimension validation
 ```
 
-Contract for the Undo / Redo history (Step 5), which builds on these without changing them:
+Contract for the Undo / Redo history, which Step 5 implements on these without changing them:
 
 - An entry holds one patch (`PixelPatch` for same-size edits, `CropPatch` for crops), the selection from before the edit (`EncodedSelection | null`, plus the recorded Magic Wand click with its own `base` mask encoded) and the selection after it. It never holds a pixel buffer, a document, a revision number or an `ImageBitmap`.
 - Undo of a pixel patch: `applyPixelPatch(current.pixels, patch)`; Redo: the same call on the pixels Undo produced. Undo of a crop: `restoreCroppedPixels(current.pixels, patch)`; Redo: `cropPixels(current.pixels, patch.kept)`. Each result becomes a new revision through `createEditedDocument`, the selection comes back through `decodeSelection`, and the restored Magic Wand click is rebound to the new version.
@@ -278,7 +278,9 @@ Who holds what:
 | Resource | Held by | Released |
 | --- | --- | --- |
 | The current display image (`documentBitmap`) | The editor state | By `ImageCanvas` (its `createDisplayImageOwner`), after the commit that replaces it, once the replacement is drawn |
-| A display image a command has created but not dispatched | The command | By the command, if it is stale or anything fails |
+| A display image a command has created but not dispatched | The command | By the command, if it is stale or anything fails (Step 5's history commands create it last, so nothing fails after it) |
+| A display image whose action the reducer rejected, or that was replaced before it was drawn | Nobody | Garbage collection; from Step 6, released by the dispatcher once the action is committed and the image is not current (see Step 5) |
+| Edit history (patches and encoded selections; no images or pixel buffers) | The editor state (`history`) | Garbage collection, when entries are dropped by the limits, Redo is cleared by a new edit, or another image opens |
 | An import's bitmap that lost to a newer import | The import runner | Closed by the runner |
 | Image canvas backing store and checkerboard pattern | `workspaceRenderer` (one per `ImageCanvas` mount) | `dispose()` in the effect clean-up; the pattern is remade on restoration |
 | Overlay backing store, tile canvases and pixel buffers | `selectionOverlayRenderer` (one per `SelectionOverlayCanvas` mount) | When the selection is cleared, the zoom, ratio or selection changes, tiles leave the kept area, on restoration, and on `dispose()` |
@@ -291,7 +293,31 @@ Ownership of display images (for the edit commands of Steps 5 and 6):
 - The canvas releases only images it has shown. An image whose action the reducer rejects after dispatch, or that a later action in the same commit replaces, is not released explicitly: only the committed state tells whether it is in use (React can process a queued action against another state than the command saw), so an earlier release could blank the canvas. Garbage collection frees it; commands keep the case rare by checking currency just before dispatching.
 - Display images are never kept in history or reused for another revision, and no state may bring back an image that an earlier state replaced (it may have been released). Undo and Redo create a new one with the new revision.
 
-Planned for later steps (subject to review at each step): `image/edit/` (edge band, cleanup, feather), `image/trim/autoTrim.ts`, `editor/history/` (bounded history), `editor/editCommands.ts` and edit shortcuts.
+Step 5 (edit history in the editor state; not yet called by the application):
+
+```text
+src/editor/
+├── history/historyEntry.ts  HistoryEntry: edit kind, patch, the encoded selection before and after
+│                            the edit, the Magic Wand click before it (its previous selection
+│                            encoded); createHistoryEntry (each mask encoded once and shared),
+│                            restoreSelectionBefore / restoreSelectionAfter (new masks)
+├── history/editHistory.ts   EditHistory: limits, the version it is bound to, Undo and Redo stacks,
+│                            retained bytes; recordEdit / recordUndo / recordRedo, nextUndo / nextRedo,
+│                            clearEditHistory (pure and cheap; runs in the reducer)
+├── historyCommands.ts       completedEditCommand, undoCommand, redoCommand (patches, selections, the
+│                            new revision and, last, its display image, outside the reducer);
+│                            availableHistoryActions
+└── editorState.ts           history and editError; edit-applied, edit-undone, edit-redone, edit-failed,
+                             edit-error-dismissed; documentBitmap is a DisplayImage
+```
+
+- The history is bound to the document version its stacks apply to, and every accepted edit, Undo and Redo rebinds it in the same reducer step. Revisions are never reused, so an entry can only meet the pixels it was made for; a history bound to any other version offers nothing.
+- Edit, Undo and Redo actions carry the version they were computed from, the new document and its display image; Undo and Redo also carry the entry they applied, which must still be the next one, and an edit the selection and Magic Wand click it was computed with (identity). The reducer also requires a newer revision of the same image with its own pixel memory, and matching patch, image and selection sizes. A rejected action returns the state itself.
+- Versions only move forward, so a rejected action is rejected by every later state. Step 6 relies on this to release a rejected action's display image: dispatch inside `flushSync`, then release the image unless the committed state holds it (`IMPLEMENTATION_PLAN.md`, Phase 3 Step 5).
+- Undo restores the selection and Magic Wand click from before the edit, the click bound to the new version; Redo restores the selection the edit left, with no click.
+- Limits: 25 entries and 256 MiB over both stacks (`retainedBytes`, shared payloads once), oldest dropped first, newest always kept. A new edit clears Redo; selection changes never touch the history; a successful import clears it and a failed one keeps it.
+
+Planned for later steps (subject to review at each step): `image/edit/` (edge band, cleanup, feather), `image/trim/autoTrim.ts`, `editor/editCommands.ts` (Delete Selection, using `completedEditCommand`) and the edit and Undo / Redo controls and shortcuts.
 
 Key rules:
 

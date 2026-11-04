@@ -74,7 +74,7 @@ Revisions:
 
 - A document keeps its `id` across edits; `revision` identifies its pixel content. An opened image starts at revision 0. Every later content state gets a revision never given out before in the session, larger than any earlier one. Revisions come from one session-wide counter, so they are unique across all images, and `id` with `revision` (the `DocumentVersion`) never repeats.
 - This includes Undo and Redo: restoring earlier pixels creates a new revision with a copy of them, never the earlier revision number. Work tagged with any earlier version (a selection, a Magic Wand click or re-apply, and later edits computed outside the reducer) can therefore never be accepted, even when the restored pixels are identical.
-- Undo must still restore the selection and the Magic Wand click that can be re-applied. The recorded click is rebound to the new version (its `version` replaced with the restored document's) when it is restored, which is valid because the restored pixels and selection are exactly those it was made on. Stale version identifiers are never restored. (Planned for the Undo / Redo steps.)
+- Undo must still restore the selection and the Magic Wand click that can be re-applied. The recorded click is rebound to the new version (its `version` replaced with the restored document's) when it is restored, which is valid because the restored pixels and selection are exactly those it was made on. Stale version identifiers are never restored: history keeps the click without any version. (Implemented in the editor state in Phase 3 Step 5; reachable from Undo / Redo in Step 6.)
 
 ### Display Images
 
@@ -754,6 +754,13 @@ Approved for Phase 3:
   - Size changes (Auto Trim): the original size, the kept rectangle and every removed pixel once, in row order, run-length encoded as raw RGBA, hidden colour included.
   - Selections: only their bounds, as varint row runs or packed bits, whichever is smaller.
   - Size: a typical background Delete patch is tens of kilobytes even at 50 MP, and a crop of a transparent or single-colour border under a kilobyte. The worst cases are 1 byte per deleted pixel (every alpha different), 4 bytes per changed pixel for arbitrary edits, and 4 bytes per removed pixel for a crop of a varied background: up to about 191 MB for a whole 50 MP image. Measurements are in `IMPLEMENTATION_PLAN.md` (Phase 3 Step 3).
+
+Implemented in the editor state in Phase 3 Step 5 (`editor/history/editHistory.ts`, `historyEntry.ts`, `editor/historyCommands.ts`; details in `IMPLEMENTATION_PLAN.md`, Phase 3 Step 5):
+
+- An entry keeps the patch, the encoded selection before the edit, the Magic Wand click before it (its previous selection encoded, shared with the selection when it is the same mask) and the encoded selection after it. Nothing else: no pixel buffer, document, revision, display image or mask.
+- The 256 MB budget is 256 MiB (268,435,456 bytes) of retained memory over both stacks, measured with `retainedBytes` (each distinct buffer and payload once). Only history is counted, not the current document or its display image.
+- Undo applies the patch backwards to the current pixels (`applyPixelPatch`, or `restoreCroppedPixels` for a crop) and Redo forwards (`applyPixelPatch`, or `cropPixels`); each result is a new revision, every byte exact, hidden colour included.
+- A patch is applied only to the content state it belongs to: the history is bound to the document version its entries apply to, and the action applying an entry must carry that version and that entry. Size checks come on top of this, never instead of it: same-size patches would otherwise fit any state of the image, and a crop any image containing its rectangle.
 
 ---
 

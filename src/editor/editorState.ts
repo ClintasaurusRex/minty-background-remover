@@ -1,11 +1,23 @@
 import { snapToDevicePixels } from '../canvas/devicePixels'
+import type { DisplayImage } from '../canvas/displayImage'
 import { keepImageReachable, limitPan } from '../canvas/pan'
 import { clampZoom, fitViewport, nextZoomStep, panBy, resizeViewport, zoomAt } from '../canvas/viewport'
 import type { ImportError } from '../image/import/errors'
+import { sharesPixelMemory } from '../image/pixelBuffer'
 import type { MagicWandOptions } from '../image/selection/magicWand'
+import {
+  type EditHistory,
+  clearEditHistory,
+  createEditHistory,
+  recordEdit,
+  recordRedo,
+  recordUndo,
+} from './history/editHistory'
+import { type EditKind, type HistoryEntry, sizeAfter, sizeBefore } from './history/historyEntry'
 import { clampTolerance } from './toleranceInput'
 import { TOOLS } from './tools'
 import type {
+  DocumentVersion,
   FloodMode,
   ImageDocument,
   PixelCoordinate,
@@ -16,6 +28,8 @@ import type {
   ToolId,
   ViewportState,
 } from './types'
+
+export type { DocumentVersion } from './types'
 
 /** The workspace area the image is shown in, in CSS pixels. */
 export interface WorkspaceMetrics {
@@ -37,9 +51,11 @@ export interface EditorState {
   readonly document: ImageDocument | null
   /**
    * A drawable copy of the document's pixels, always replaced together with the
-   * document. The workspace canvas closes it once it has been replaced.
+   * document: the import's bitmap, or the display image an edit, Undo or Redo created
+   * for its new revision (canvas/displayImage.ts). The workspace canvas releases it once
+   * it has been replaced. Never kept in history, and never brought back once replaced.
    */
-  readonly documentBitmap: ImageBitmap | null
+  readonly documentBitmap: DisplayImage | null
   /**
    * How the document is presented, in CSS pixels and not snapped to device pixels.
    * Null until both a document and a non-empty workspace size are known.
@@ -78,9 +94,28 @@ export interface EditorState {
    * committed. Whenever it is set, `selection` is exactly its result at its tolerance.
    * Null when there is nothing to re-apply: before the first click, after the selection
    * was changed in any other way (Select All, Clear, Invert, Grow, Shrink) and after
-   * another image opened.
+   * another image opened. After an edit or Redo it is null (the pixels it was made on have
+   * changed); Undo restores the one from before the edit, bound to the restored version.
    */
   readonly lastMagicWandOperation: MagicWandOperation | null
+  /**
+   * Undo / Redo of image edits (editor/history/editHistory.ts), bound to the document's
+   * current version. Selection changes are not entries and never change it. Cleared when
+   * another image opens; kept when an import fails.
+   */
+  readonly history: EditHistory
+  /** The last edit, Undo or Redo that failed, until dismissed or a later one succeeds. */
+  readonly editError: EditError | null
+}
+
+/**
+ * An edit, Undo or Redo that could not be completed (for example, for lack of memory). The
+ * document, its selection and the history are unchanged.
+ */
+export interface EditError {
+  readonly operation: EditKind | 'undo' | 'redo'
+  /** Developer-facing cause. Not intended for display. */
+  readonly detail?: string
 }
 
 /** The Magic Wand's options as chosen in the editor. */
@@ -93,16 +128,6 @@ export const DEFAULT_MAGIC_WAND_SETTINGS: MagicWandSettings = {
   tolerance: 20,
   floodMode: 'contiguous',
   selectionMode: 'new',
-}
-
-/**
- * The document version a selection was computed from. Selections are computed outside
- * the reducer, so by the time a result arrives another image may be open or the pixels
- * may have changed; a result for any other version is discarded.
- */
-export interface DocumentVersion {
-  readonly documentId: number
-  readonly revision: number
 }
 
 /**
@@ -210,6 +235,50 @@ export type EditorAction =
       readonly tolerance: number
       readonly selection: SelectionMask | null
     }
+  /**
+   * A completed image edit of `version`: `document` (the same image, a new revision) and
+   * the display image created for it, with its history entry and the selection it leaves.
+   * Ignored unless `version` is the open document's current version, the selection and
+   * Magic Wand click it was computed with are still the state's own, and everything fits
+   * (a new revision of the same image, the image's size, the patch's sizes). Clears Redo.
+   */
+  | {
+      readonly type: 'edit-applied'
+      readonly version: DocumentVersion
+      readonly selectionBefore: SelectionMask | null
+      readonly magicWandOperationBefore: MagicWandOperation | null
+      readonly entry: HistoryEntry
+      readonly document: ImageDocument
+      readonly image: DisplayImage
+      readonly selection: SelectionMask | null
+    }
+  /**
+   * Undo of `entry`, computed from `version`: the restored pixels as a new revision, its
+   * display image, and the selection and Magic Wand click from before the edit, the click
+   * bound to the new revision. Ignored unless `version` is the open document's current
+   * version, the history is bound to it and `entry` is its next Undo.
+   */
+  | {
+      readonly type: 'edit-undone'
+      readonly version: DocumentVersion
+      readonly entry: HistoryEntry
+      readonly document: ImageDocument
+      readonly image: DisplayImage
+      readonly selection: SelectionMask | null
+      readonly magicWandOperation: MagicWandOperation | null
+    }
+  /** Redo of `entry`, computed from `version`, with the selection after the edit. Checked as Undo is. */
+  | {
+      readonly type: 'edit-redone'
+      readonly version: DocumentVersion
+      readonly entry: HistoryEntry
+      readonly document: ImageDocument
+      readonly image: DisplayImage
+      readonly selection: SelectionMask | null
+    }
+  /** An edit, Undo or Redo failed; nothing else changes. */
+  | { readonly type: 'edit-failed'; readonly error: EditError }
+  | { readonly type: 'edit-error-dismissed' }
 
 export const initialEditorState: EditorState = {
   document: null,
@@ -225,6 +294,8 @@ export const initialEditorState: EditorState = {
   magicWand: DEFAULT_MAGIC_WAND_SETTINGS,
   selection: null,
   lastMagicWandOperation: null,
+  history: createEditHistory(),
+  editError: null,
 }
 
 const FLOOD_MODES: readonly FloodMode[] = ['contiguous', 'global']
@@ -251,7 +322,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (action.importId !== state.pendingImportId) return state
       const { result } = action
       if (!result.ok) {
-        // The current document, viewport, tool and selection are kept.
+        // The current document, viewport, tool, selection and history are kept.
         return { ...state, pendingImportId: null, importError: result.error }
       }
       return {
@@ -270,6 +341,9 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         activeTool: 'magic-wand',
         selection: null,
         lastMagicWandOperation: null,
+        // Edits of the previous image cannot apply to this one.
+        history: clearEditHistory(state.history),
+        editError: null,
       }
     }
 
@@ -378,7 +452,165 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (operation !== state.lastMagicWandOperation || !fitsDocument(state, operation.version, selection)) return state
       return { ...state, selection, lastMagicWandOperation: { ...operation, tolerance } }
     }
+
+    case 'edit-applied':
+      return applyEdit(state, action)
+
+    case 'edit-undone':
+      return undoEdit(state, action)
+
+    case 'edit-redone':
+      return redoEdit(state, action)
+
+    case 'edit-failed':
+      return { ...state, editError: action.error }
+
+    case 'edit-error-dismissed':
+      return state.editError === null ? state : { ...state, editError: null }
   }
+}
+
+type EditAction<T extends EditorAction['type']> = Extract<EditorAction, { readonly type: T }>
+
+/*
+ * Document changes (edits, Undo, Redo). Everything is computed outside the reducer (pixels,
+ * patches, encoded and decoded selections, display images); these only check, in constant
+ * time apart from the history's memory accounting, that the result belongs to the current
+ * state, and then replace the document, its display image, the selection and the history
+ * together. A rejected action returns `state` itself: nothing is partly applied.
+ */
+
+function applyEdit(state: EditorState, action: EditAction<'edit-applied'>): EditorState {
+  const { version, entry, document: next, image, selection } = action
+  const current = state.document
+  if (!current || !isVersionOf(version, current) || !isNewContentState(current, next, image)) return state
+  // The edit was computed with this selection (Delete deletes it) and recorded this click for
+  // Undo: if either has changed since, the result and its entry are stale.
+  if (action.selectionBefore !== state.selection || action.magicWandOperationBefore !== state.lastMagicWandOperation) {
+    return state
+  }
+  if (!patchFits(entry, current, next) || !fitsSize(selection, next)) return state
+  return {
+    ...state,
+    ...moveContent(state, next, contentShift(entry, 1)),
+    document: next,
+    documentBitmap: image,
+    selection,
+    lastMagicWandOperation: null,
+    history: recordEdit(state.history, version, entry, versionOf(next)),
+    editError: null,
+  }
+}
+
+function undoEdit(state: EditorState, action: EditAction<'edit-undone'>): EditorState {
+  const { version, entry, document: next, image, selection, magicWandOperation } = action
+  const current = state.document
+  if (!current || !isVersionOf(version, current) || !isNewContentState(current, next, image)) return state
+  // The restored image is the one before the edit; the current one the one after it.
+  if (!patchFits(entry, next, current) || !fitsSize(selection, next)) return state
+  if (magicWandOperation && (!isVersionOf(magicWandOperation.version, next) || !fitsSize(magicWandOperation.base, next))) {
+    return state
+  }
+  const history = recordUndo(state.history, version, entry, versionOf(next))
+  if (!history) return state
+  return {
+    ...state,
+    ...moveContent(state, next, contentShift(entry, -1)),
+    document: next,
+    documentBitmap: image,
+    selection,
+    lastMagicWandOperation: magicWandOperation,
+    history,
+    editError: null,
+  }
+}
+
+function redoEdit(state: EditorState, action: EditAction<'edit-redone'>): EditorState {
+  const { version, entry, document: next, image, selection } = action
+  const current = state.document
+  if (!current || !isVersionOf(version, current) || !isNewContentState(current, next, image)) return state
+  if (!patchFits(entry, current, next) || !fitsSize(selection, next)) return state
+  const history = recordRedo(state.history, version, entry, versionOf(next))
+  if (!history) return state
+  return {
+    ...state,
+    ...moveContent(state, next, contentShift(entry, 1)),
+    document: next,
+    documentBitmap: image,
+    selection,
+    lastMagicWandOperation: null,
+    history,
+    editError: null,
+  }
+}
+
+function isVersionOf(version: DocumentVersion, document: ImageDocument): boolean {
+  return version.documentId === document.id && version.revision === document.revision
+}
+
+function versionOf(document: ImageDocument): DocumentVersion {
+  return { documentId: document.id, revision: document.revision }
+}
+
+/**
+ * Whether `next` can follow `current`: the same image, a revision newer than any it has had
+ * (revisions only increase, so an earlier document or revision can never come back), its own
+ * pixel memory (copy-on-write), and a display image of its size.
+ */
+function isNewContentState(current: ImageDocument, next: ImageDocument, image: DisplayImage): boolean {
+  return (
+    next.id === current.id &&
+    next.revision > current.revision &&
+    next.width === next.pixels.width &&
+    next.height === next.pixels.height &&
+    image.width === next.width &&
+    image.height === next.height &&
+    !sharesPixelMemory(next.pixels, current.pixels)
+  )
+}
+
+/** Whether `entry`'s patch turns an image of `original`'s size into one of `edited`'s. */
+function patchFits(entry: HistoryEntry, original: Size, edited: Size): boolean {
+  return sameSize(sizeBefore(entry.patch), original) && sameSize(sizeAfter(entry.patch), edited)
+}
+
+function sameSize(a: Size, b: Size): boolean {
+  return a.width === b.width && a.height === b.height
+}
+
+function fitsSize(mask: SelectionMask | null, size: Size): boolean {
+  return !mask || sameSize(mask, size)
+}
+
+/**
+ * Where the new image's top-left pixel was in the current image, in image pixels: the kept
+ * rectangle's corner for a crop or its Redo (direction 1), the opposite for its Undo (-1),
+ * nothing for same-size edits.
+ */
+function contentShift(entry: HistoryEntry, direction: 1 | -1): Point {
+  const { patch } = entry
+  if (patch.kind !== 'crop-patch') return { x: 0, y: 0 }
+  return { x: direction * patch.kept.x, y: direction * patch.kept.y }
+}
+
+/**
+ * The view after the document changes to `next`. Same-size edits keep it exactly. When the
+ * size changes (a crop, or its Undo), the zoom is kept and the image moves so that the pixels
+ * both images have stay where they were on screen, then is kept reachable; Undo of a crop
+ * therefore returns to the view before it. (Provisional: the view after Auto Trim is
+ * confirmed in Phase 3 Step 10, P3-D6.)
+ */
+function moveContent(state: EditorState, next: ImageDocument, shift: Point): Pick<EditorState, 'viewport' | 'pan'> {
+  const { viewport, workspace, document: current } = state
+  if (!viewport || !workspace || !current || (sameSize(current, next) && shift.x === 0 && shift.y === 0)) {
+    return { viewport, pan: state.pan }
+  }
+  const moved: ViewportState = {
+    zoom: viewport.zoom,
+    offset: { x: viewport.offset.x + shift.x * viewport.zoom, y: viewport.offset.y + shift.y * viewport.zoom },
+  }
+  const reachable = keepImageReachable(moved, next, workspace.size)
+  return { viewport: reachable, pan: rebasePan(state.pan, reachable) }
 }
 
 /**

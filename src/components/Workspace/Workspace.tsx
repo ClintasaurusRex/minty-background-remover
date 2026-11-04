@@ -1,5 +1,6 @@
 import { useCallback, useRef } from 'react'
 import { clientToViewport } from '../../canvas/coordinates'
+import type { DisplayImage } from '../../canvas/displayImage'
 import type { ImportNotice, WorkspaceMetrics } from '../../editor/editorState'
 import type { PanGestureEffect } from '../../editor/panGesture'
 import type { PointerPress } from '../../editor/selectionCommands'
@@ -16,7 +17,8 @@ import './Workspace.css'
 
 interface WorkspaceProps {
   document: ImageDocument | null
-  documentBitmap: ImageBitmap | null
+  /** The document's display image (an import's bitmap, or an edit's display image). */
+  documentBitmap: DisplayImage | null
   /** The open document's selection, shown over the image. */
   selection: SelectionMask | null
   viewport: ViewportState | null

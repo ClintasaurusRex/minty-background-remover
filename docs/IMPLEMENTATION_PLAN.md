@@ -332,8 +332,8 @@ Phase 3 is implemented in twelve reviewed steps, each stopping for review:
 1. Record decisions; pixel buffer and revision model. Done.
 2. Delete algorithm (pure). Done.
 3. History building blocks: pixel patches, crop patches, selection encoding, byte accounting. Done.
-4. Display image for edited pixels and render invalidation (verifies P3-D10). (Implemented; awaiting review.)
-5. Edit history in the editor state.
+4. Display image for edited pixels and render invalidation (verifies P3-D10). Done.
+5. Edit history in the editor state. (Implemented; awaiting review.)
 6. Delete Selection, Undo and Redo (first manual checkpoint).
 7. Edge cleanup prototype and visual comparison (owner decision P3-D5).
 8. Edge cleanup and feathering.
@@ -412,7 +412,7 @@ Known limitations (Step 3):
 - At 50 MP a Delete with Undo will cost about 0.15 s for the patch and 0.1 s to encode the selection, on top of the Delete itself (Node). Reading the mask four bytes at a time measured about a third faster, and a Delete patch could be built from the selection instead of comparing whole images; both are left for the Step 12 performance review, if browser measurements call for them.
 - Undo of a Magic Wand Add or Subtract click must also keep the selection from before that click (`MagicWandOperation.base`); Step 5 stores it as an encoded selection too.
 
-#### Step 4: Display Image and Renderer Invalidation (implemented; awaiting review)
+#### Step 4: Display Image and Renderer Invalidation (done; approved)
 
 Verifies P3-D10: edited pixels can reach the screen synchronously, so an edit can replace the document and the image that shows it in one editor update. Nothing creates edited display images yet (Step 6); imports still create their bitmap with `createImageBitmap`.
 
@@ -523,6 +523,121 @@ Owner decisions (from the first review):
 1. Display image strategy: keep `transferToImageBitmap` first and the canvas-element fallback. Reconsider the trade-off when the whole Delete workflow can be measured (Step 6) or in the Step 12 performance review.
 2. Selection overlay restoration: done in this step (above).
 3. Browser scripts (M6): approved; added under `scripts/browser/`.
+
+#### Step 5: Edit History in the Editor State (implemented; awaiting review)
+
+The editor state keeps an Undo / Redo history of image edits, and commands turn a completed edit, Undo and Redo into editor actions. Nothing in the application calls the commands yet: Delete Selection and the Undo / Redo controls and shortcuts are Step 6. The application looks and behaves exactly as at the end of Step 4; imports now also clear the (always empty) history.
+
+Modules:
+
+- `editor/history/historyEntry.ts`: `HistoryEntry`: the edit's kind (`delete-selection` or `auto-trim`), its patch (`PixelPatch` or `CropPatch`), the selection before the edit, the Magic Wand click that could be re-applied before it (seed, flood mode, New / Add / Subtract, tolerance and its previous selection), the selection after the edit, and its retained bytes. Every selection is stored with the Step 3 codec. `createHistoryEntry` encodes each mask once: when the edit keeps the selection, or the click's previous selection is the selection itself (an Add that added nothing), one encoded copy is shared. `restoreSelectionBefore` and `restoreSelectionAfter` decode into new masks, one shared mask where one copy was shared. Entries hold no pixel buffer, document, version, revision, display image or mask.
+- `editor/history/editHistory.ts`: `EditHistory` (limits, the version it is bound to, the Undo and Redo stacks, retained bytes), `recordEdit`, `recordUndo`, `recordRedo`, `nextUndo`, `nextRedo`, `clearEditHistory`, `historyRetainedBytes`. Pure and cheap (no pixel work; accounting reads buffer sizes only), so it runs inside the reducer.
+- `editor/historyCommands.ts`: `completedEditCommand(state, edit, createImage)`, `undoCommand`, `redoCommand` and `availableHistoryActions` (constant time, for the Step 6 controls). A `CompletedEdit` is what a tool computed from the open document: its version, the edited pixels and optionally the rectangle containing every change (Delete's bounds), or a crop rectangle; and the selection it leaves. `createImage` defaults to `createDisplayImage` and is injected in tests.
+- `editor/editorState.ts`: `history` and `editError` in the state; `documentBitmap` widened to `DisplayImage`; actions `edit-applied`, `edit-undone`, `edit-redone`, `edit-failed` and `edit-error-dismissed`. `DocumentVersion` moved to `types.ts` (still exported from `editorState.ts`). `Workspace` takes a `DisplayImage`.
+
+What happens where:
+
+- Commands (outside the reducer, in the future event handlers): the patch (`createPixelPatch` over the edit's region, or `createCropPatch` and `cropPixels`), the encoded selections, the new revision (`createEditedDocument`) and, last, its display image. Undo applies the patch backwards (`applyPixelPatch` or `restoreCroppedPixels`) to the current pixels, Redo forwards (`applyPixelPatch` or `cropPixels`), and both decode the selection they restore. Any failure (an exception from these, including running out of memory or a damaged entry) gives an `edit-failed` action and creates nothing; since the display image is created last, nothing can fail once it exists. An edit that changes no pixel returns null: no entry, no revision, no image.
+- Reducer: constant-time checks (plus the history's accounting), then the document, display image, selection, Magic Wand click and history change together. A rejected action returns the state object itself, so nothing is ever partly applied. `edit-failed` only records the error; the document, selection and history stay.
+
+Transitions:
+
+| | Document | Selection | Magic Wand click | History |
+| --- | --- | --- | --- | --- |
+| Edit accepted | New revision, its display image | The one the edit leaves (none for Delete) | None | Redo cleared, entry added, oldest dropped to the limits, bound to the new version |
+| Undo | Pixels before the edit, as a new revision | From just before the edit | From just before the edit, bound to the new version | Top entry moved to Redo, bound to the new version |
+| Redo | Pixels after the edit, as a new revision | The one the edit left | None | Top Redo entry moved back, bound to the new version |
+| Edit, Undo or Redo failed | Unchanged | Unchanged | Unchanged | Unchanged; `editError` set |
+| Selection change, Magic Wand click or re-apply | Unchanged | Changed | As in Phase 2 | Unchanged: no entry, Undo and Redo stay available |
+| Another image opened | Replaced | None | None | Cleared (limits kept); `editError` cleared |
+| Import failed, rejected, superseded or in progress | Unchanged | Unchanged | Unchanged | Unchanged |
+
+`editError` is cleared by `edit-error-dismissed`, the next accepted edit, Undo or Redo, and a successful import. How it is shown is Step 6.
+
+Preventing a patch from being applied to the wrong pixels. A pixel patch is an XOR: applied to the wrong state, or twice, it silently produces a wrong image, so applicability is never judged by the patch's size alone:
+
+1. Binding: the history records the document version (id and revision) its stacks apply to. Every accepted edit, Undo and Redo rebinds it to the new version in the same reducer step, and revisions are never reused, so no other content state, of this image or another, ever has that version. A history bound to any other version offers nothing (`nextUndo` and `nextRedo` return null), and the next edit drops its entries.
+2. Version tags: every action carries the version it was computed from, and the reducer accepts it only for the open document's current version.
+3. Entry identity: Undo and Redo carry the entry they applied, which must still be the next one on the bound history. Two Undos computed from the same state therefore apply once: the second is stale.
+4. A new content state: the action's document must be the same image (id), with a revision greater than the current one (an earlier document or revision can never come back), pixel memory of its own (copy-on-write), and a display image of its size.
+5. Sizes: the patch must turn an image of the current size into one of the new size (in the right direction for Undo), and every selection, and the restored click's previous selection, must be the new document's size.
+6. Edit basis: an edit must have been computed with the state's current selection and Magic Wand click (identity). Selection changes do not change the revision, so without this a Delete computed before a selection change could delete pixels that are no longer selected.
+7. The commands compute only for the current version, and the patch functions refuse pixels of another size. Redo of a crop also checks the image's size before cropping, since any image containing the kept rectangle could be cropped by it.
+8. Rejection is permanent: versions only move forward, so an action rejected once, or accepted once, is rejected by every later state. Undo restoring identical pixels does not make earlier work valid again. This is what lets a rejected action's display image be released safely (below).
+
+Selection and Magic Wand context:
+
+- Undo restores the selection from just before the edit and the Magic Wand click recorded then, including the previous selection of an Add or Subtract click, all decoded into new masks. The click's `version` is the restored document's new version, never the one recorded at the time: the restored pixels and selection are exactly those it was made on, so it can be re-applied, and the stale version it had can never be accepted again. Its tolerance is the one that produced the selection, whatever the tolerance setting is now, so a committed tolerance that differs re-applies it exactly as it would have before the edit.
+- Redo restores the selection the edit left (none after Delete) and no click: the pixels it was made on have changed.
+- Both replace whatever the selection is at the time of the Undo or Redo; selections made in between are not history (P3-D7). No selection (`null`) is restored as no selection.
+
+Limits and memory accounting (P3-D8):
+
+- At most 25 entries and 256 MB (MiB, 2^20 bytes, as elsewhere in these documents) retained, counted over both stacks with `retainedBytes`: each distinct buffer and payload once, so a selection shared between an entry's before and after is counted once.
+- Only recording can exceed the limits: a new edit clears Redo first, and Undo and Redo move entries without changing what is kept. The oldest entries are dropped first, by count and then by bytes (the total is counted again after each drop, as entries can share payloads). The newest entry is always kept, even alone above the budget.
+- Typical entries are kilobytes: a 4K background Delete with its selection and Magic Wand click retains under 64 KB in the tests (the image is 36.9 MB, the mask 9.2 MB). The budget matters for the worst cases measured in Step 3 (up to 191 MB for an edit changing every pixel of a 50 MP image differently): one such entry fits with smaller ones, a second drops everything older until it fits, and a single 300 MB entry is kept on its own.
+- What history does not count: the current document's pixels, its display image, and the previous document React keeps until its next render (one more image-sized buffer for a moment). The limits are for history only, as approved.
+
+Revisions: every accepted edit, Undo and Redo gets a revision from the session-wide counter (`createEditedDocument`), larger than any before. Undo back to the opened pixels does not bring back revision 0. Revisions are made by the commands; the reducer refuses any document whose revision is not newer than the current one.
+
+Display images and resource ownership (the Step 4 contract, unchanged):
+
+| Case | What happens to the display image |
+| --- | --- |
+| Edit, Undo or Redo accepted | Held by the state; the canvas releases the one it replaced once the new one is drawn |
+| Command fails (no image created) | Nothing to release: the image is created last |
+| Action rejected as stale | Never held by any state. Left to garbage collection today; the Step 6 safeguard below releases it |
+| Rapid actions computed from the same state | The first is accepted, the rest rejected as stale (as above) |
+| Accepted, then replaced in the same commit before it was drawn | Never shown, so the canvas does not release it; garbage collection (Step 6 safeguard) |
+| React Strict Mode runs the reducer twice | Both runs store the same image object from the action; reducers never create or release images |
+| Successful import | Replaces the image; the canvas releases the edited one after drawing the import |
+| Failed import | Nothing changes |
+
+Undo and Redo always create a new display image for their new revision; history never holds one, and no state can bring back an image a state replaced.
+
+Required Step 6 safeguard (abandoned display images). Commands compute from the latest committed state, but an action can still be processed against a later state than the one it was computed from (two key presses before React commits), and then it is rejected, or it replaces the image before it is drawn. Only the committed state tells whether the image is in use. For Step 6:
+
+1. Dispatch each edit, Undo and Redo action inside `flushSync`, so that the action is processed and committed, and the layout effect that keeps the latest committed state has run, before the handler continues.
+2. Then, if the committed state's `documentBitmap` is not the action's image, release it (`releaseDisplayImage`).
+
+This is safe because no state can hold that image later: only its own action carries it, that action has been processed, rejection is permanent (point 8 above), and no state brings back a replaced image. Releasing is idempotent, so an image the canvas has already released is harmless to release again. The approach must be verified in the browser with Step 6, including React Strict Mode; if it is not adopted, such images stay with garbage collection, as approved in Step 4.
+
+Viewport for size changes (provisional): a crop, and its Redo, keep the zoom and move the image so the pixels both images have stay where they were on screen; Undo of a crop moves it back, returning exactly to the view before the crop. The image is kept reachable. Same-size edits never change the view. The view after Auto Trim is confirmed in Step 10 (P3-D6).
+
+Tests: 64 added (921 in total).
+
+- `editHistory.test.ts` (17): empty history and limits validation, binding to versions of the same and other documents, stack order, refusal of anything but the next entry, Redo cleared by a new edit, unbound entries dropped, eviction by count (25) and by bytes, room made for a large entry, the oversized newest entry kept, shared payloads counted once, 50 MP worst-case entries against the 256 MB budget (allocated, never written), clearing with the same limits, and immutability.
+- `historyEntry.test.ts` (7): what an entry keeps (an object-graph walk finds only the payloads' own buffers), restoring the selection and an Add / Subtract click's previous selection exactly as new masks, the shared mask, no selection, New and Subtract-from-nothing clicks, a selection kept by the edit, crops with selections of both sizes, size validation, inputs never written.
+- `historyCommands.test.ts` (40), the commands and the reducer together: the 24 cases asked for (including a valid edit, stale revisions, other documents, Redo cleared, stack order, fresh revisions, exact pixel and crop restoration with hidden colour, selection, Magic Wand and Add / Subtract restoration with re-applies checked against fresh results, selection changes without entries and with Redo kept, imports, limits, the oversized entry, rejected actions on a deeply frozen state, Strict Mode replays, no-ops and failures), plus edits computed with a selection that has since changed, two Undos or Redos computed from one state, stale work after Undo to identical pixels, edits that return the pixels to an earlier state, an unbound history, damaged entries, a crop's Redo on another image size, the view after crops, and a 4K background Delete (entry under 64 KB, no buffer as large as the mask in history, exact Undo and Redo).
+- Randomized: 40 seeds × 60 steps of edits (Delete and arbitrary changes, alpha-only or every channel, regions), crops, Undo, Redo, selection changes, Magic Wand clicks of every mode and re-applies, failed imports and replays of every earlier version-tagged action, on images of 2–8 × 2–7 pixels with transparent and hidden-colour pixels and limits of 1–6 entries. After every step: pixels byte for byte against a model, sizes, selection, Magic Wand click (and its version), stack sizes, availability, accounting, a fresh revision and its own display image for every document change; every replayed stale action is rejected; restored clicks re-apply exactly as computed from the model.
+- `editorState.test.ts`: the initial state includes the empty history and no edit error.
+- 38 deliberately introduced defects (missing version, revision, memory, size, basis, binding and entry checks, wrong eviction, accounting, sharing, restoration, rebinding and view) were each caught; two only after a test was strengthened (a failure test now has a selection to keep, and a crop's Redo on an image of another size is tested). The Undo size check in the command was removed instead: the patch functions already make it.
+
+Measurements (Node 24, x64, two runs each; a Magic Wand click on the flat background around a noisy object, then Delete, Undo and Redo; display images are test fakes, so creating them is not included):
+
+| Image | Selected | Entry retained | Delete itself | Edit command (patch, selections, revision) | Reducer | Undo command | Redo command |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 3840 × 2400 | 7.1 M pixels | 22 KB | 34 ms | 49–52 ms | 0.2 ms | 26–27 ms | 26 ms |
+| 8660 × 5773 (50 MP) | 38.2 M pixels | 51 KB | 164–170 ms | 226–228 ms | under 0.1 ms | 129–137 ms | 111–115 ms |
+
+In the browser, creating the display image adds about 13–26 ms at 4K and 77–138 ms at 50 MP (Step 4), so a 50 MP Delete will take about 0.5 s and an Undo about 0.25 s before drawing. Step 6 measures them in Chrome and Firefox.
+
+Known limitations (Step 5):
+
+- Not connected to the application: no Delete, Undo or Redo can be performed yet; browser timings and memory for whole cycles come with Step 6. At the peak of an Undo the current pixels, the restored pixels, the decoded selection masks and the new display image exist together (in Firefox the display image briefly twice, while transferring).
+- A display image whose action is rejected or replaced before it is drawn is left to garbage collection until the Step 6 safeguard above is in place.
+- Undo and Redo replace the current selection with the recorded one; a selection made after Undo is lost on Redo (P3-D7: selections are not history).
+- No content check: applicability rests on the version binding, entry identity and sizes. A write into a document's pixels that bypassed copy-on-write would not be detected (the read-only type and the shared-memory checks guard against it). A checksum was considered and not added: it would read the whole changed region on every Undo and Redo.
+- Patch regions are trusted: a `CompletedPixelEdit` whose region misses some changed pixels would make an entry that cannot undo them. Delete Selection's bounds are exact (Step 2 tests); other tools must report correct regions or omit them.
+- Edits are accepted while an import is still running; when it succeeds it replaces the edited image and clears its history. The unsaved-edits warning (P3-D12) is still to be scheduled.
+
+Owner decisions for review:
+
+1. Redo restores the selection recorded just after the edit (none after Delete), replacing any selection made since the Undo; Undo likewise replaces the current selection with the one from before the edit.
+2. The Step 6 safeguard for abandoned display images (`flushSync` dispatch, then release when not current), replacing garbage collection for those images.
+3. The provisional view behaviour for crops above, until Step 10.
+4. `editError` records failures in the state only; the message, its wording and where it is shown are Step 6.
+5. "256 MB" read as 256 MiB (268,435,456 bytes), matching how sizes are given elsewhere in these documents.
 
 ---
 

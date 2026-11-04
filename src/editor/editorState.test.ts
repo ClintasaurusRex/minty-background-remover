@@ -71,6 +71,14 @@ describe('editorReducer: imports', () => {
       magicWand: { tolerance: 20, floodMode: 'contiguous', selectionMode: 'new' },
       selection: null,
       lastMagicWandOperation: null,
+      history: {
+        limits: { maxEntries: 25, maxBytes: 256 * 1024 * 1024 },
+        version: null,
+        undo: [],
+        redo: [],
+        retainedBytes: 0,
+      },
+      editError: null,
     })
     expect(isImporting(initialEditorState)).toBe(false)
   })

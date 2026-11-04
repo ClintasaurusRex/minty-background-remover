@@ -69,6 +69,17 @@ export interface ImageDocument {
   readonly revision: number
 }
 
+/**
+ * One content state of one image: a document's id and revision. Work computed outside the
+ * reducer (a selection, a Magic Wand click, an edit, Undo or Redo) is tagged with the version
+ * it was computed from, and a result for any other version is discarded. Revisions are never
+ * reused, so a version never comes back, even when the pixels do (Undo).
+ */
+export interface DocumentVersion {
+  readonly documentId: number
+  readonly revision: number
+}
+
 /** A position in some 2D coordinate space. The space is named by the function using it. */
 export interface Point {
   x: number
