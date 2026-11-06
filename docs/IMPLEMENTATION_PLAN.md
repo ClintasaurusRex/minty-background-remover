@@ -340,7 +340,7 @@ Phase 3 is implemented in twelve reviewed steps, each stopping for review:
 9. Optional, depending on P3-D4 and P3-D5: re-apply the last Delete when cleanup or feathering changes.
 10. Auto Trim algorithm.
 11. Auto Trim tool (second manual checkpoint).
-12. Final quality assurance, performance, memory and Phase 3 readiness. Phase 3 sign-off and merge require every deferred Step 6 check to be completed or explicitly dispositioned.
+12. Final quality assurance, performance, memory and Phase 3 readiness. Revisits Step 6 owner decision 1 (synchronous Delete, Undo and Redo on large images). Phase 3 sign-off and merge require every deferred Step 6 check to be completed or explicitly dispositioned.
 
 The unsaved-edits warning (P3-D12) is implemented with Step 6, which first gives the editor edits to protect.
 
@@ -746,9 +746,9 @@ Known limitations (Step 6):
 - The edited state is not shown anywhere (no "edited" marker), and closing or reloading the tab with unexported edits does not warn (only opening another image does).
 - Not verified headless: Escape and focus return in Firefox's dialog, the real clipboard and drag-and-drop, screen readers. WebKitGTK remains for desktop testing.
 
-Owner decisions (decisions 2–7 accepted with the Step 6 approval; decision 1 still awaiting review):
+Owner decisions (all seven accepted):
 
-1. Large images: keep Delete, Undo and Redo synchronous for now (P3-D11), or add a "Processing…" indication (which needs the work to start after a frame is painted) or a Worker. Recommendation: keep synchronous for Phase 3 and revisit in the Step 12 performance review; the history-patch and selection-encoding costs that dominate at 50 MP (Step 3 limitations) can be reduced first. (Awaiting review: not covered by the Step 6 approval. The implementation is synchronous in the meantime.)
+1. Large images: keep Delete, Undo and Redo synchronous for now (P3-D11), or add a "Processing…" indication (which needs the work to start after a frame is painted) or a Worker. Recommendation: keep synchronous for Phase 3 and revisit in the Step 12 performance review; the history-patch and selection-encoding costs that dominate at 50 MP (Step 3 limitations) can be reduced first. (Accepted: Delete, Undo and Redo stay synchronous, with no Web Worker and no processing indication for now. Revisit in Step 12 after evaluating real-browser performance and memory, particularly with 4K and near-50 MP images. Large-image manual QA (check 15) remains outstanding regardless of this decision.)
 2. Unexported edits are counted from the opened image, so undoing every edit means nothing is unexported (no question), even with Redo history; Phase 6 will count from the last export. (Accepted.)
 3. The question appears after the image to open is chosen (picker), dropped or pasted, for all three alike, rather than before the file picker opens. (Accepted.)
 4. Delete, Undo and Redo are unavailable while another image is opening. (Accepted.)
