@@ -470,6 +470,15 @@ Implemented in Phase 3 Step 2 (`image/edit/deleteSelection.ts`, `deleteSelectedP
 - The input pixels and the selection are never written. The image is copied once, and only when at least one pixel changes; no other buffer proportional to the image is allocated. Work is limited to the selection's bounds.
 - Node measurements: 39 ms for a 4K background and 162 ms at 50 MP, of which the copy is 15 ms and 78 ms (`IMPLEMENTATION_PLAN.md`, Phase 3 Step 2). Browser timings are measured with the Delete command (Step 6).
 
+Connected to the application in Phase 3 Step 6 (`editor/editCommands.ts`, `deleteSelectionCommand`): the result is recorded through the edit history (the deleted pixels' bounds as the patch region), becomes a new revision with its display image, and clears the selection. A selection of only fully transparent pixels changes nothing and records nothing. Whole Delete, from the key press until the new image is committed and drawn (production build, headless, `IMPLEMENTATION_PLAN.md` Phase 3 Step 6):
+
+| | Chrome 157 | Firefox 159 |
+| --- | --- | --- |
+| 3840 × 2160, 7.27 M pixels selected | 98–131 ms (display image 13–15 ms) | 89–105 ms (display image 22–37 ms) |
+| 8660 × 5773, 27.96 M pixels selected | 509–634 ms (display image 77–86 ms) | 464–482 ms (display image 138–170 ms) |
+
+Undo and Redo of those Deletes take 44–86 ms at 4K and 232–326 ms at 50 MP. History kept: 937 KB for the 4K screenshot background (mostly the selection around anti-aliased text) and 197 KB at 50 MP.
+
 ---
 
 ## Edge Cleanup
@@ -779,7 +788,7 @@ Potential future performance tools:
 
 Do not introduce these until profiling demonstrates a need.
 
-Phase 3 (P3-D11): pixel edits start synchronous on the main thread, like Phase 2 selection work, and are measured at 4K and 50 MP before anything else is decided. Copy-on-write buffers can be handed to a Web Worker later without changing the algorithms. How the display image is rebuilt after an edit (P3-D10) was verified in Phase 3 Step 4: synchronously through `OffscreenCanvas` (see Display Images), 13–15 ms at 4K and 77 ms at 50 MP in Chrome, 23–26 ms and 138 ms in Firefox.
+Phase 3 (P3-D11): pixel edits start synchronous on the main thread, like Phase 2 selection work, and are measured at 4K and 50 MP before anything else is decided. Measured in Step 6 (Delete Selection above): about 0.1 s at 4K in both browsers, about 0.5–0.65 s for a Delete and 0.23–0.33 s for Undo or Redo near 50 MP. Whether large images need a progress indication or a Worker is an open owner decision (`IMPLEMENTATION_PLAN.md`, Phase 3 Step 6). Copy-on-write buffers can be handed to a Web Worker later without changing the algorithms. How the display image is rebuilt after an edit (P3-D10) was verified in Phase 3 Step 4: synchronously through `OffscreenCanvas` (see Display Images), 13–15 ms at 4K and 77 ms at 50 MP in Chrome, 23–26 ms and 138 ms in Firefox.
 
 ---
 

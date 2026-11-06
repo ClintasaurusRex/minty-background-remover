@@ -99,3 +99,9 @@
   background: transparent;
   border-color: var(--color-border);
 }
+
+/* Delete Selection: the one action that edits the image, marked by its icon. */
+.tool-options__delete svg {
+  width: 16px;
+  height: 16px;
+}

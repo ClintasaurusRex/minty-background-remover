@@ -104,9 +104,36 @@ export interface EditorState {
    * another image opens; kept when an import fails.
    */
   readonly history: EditHistory
-  /** The last edit, Undo or Redo that failed, until dismissed or a later one succeeds. */
+  /** The last edit, Undo or Redo that failed, until dismissed or a later outcome (editNotice) replaces it. */
   readonly editError: EditError | null
+  /**
+   * How many edits the open image's pixels are away from the image as opened: every accepted
+   * edit and Redo adds one, every Undo takes one away. The history is a single line and Undo
+   * restores pixels exactly, so this is 0 exactly when the pixels are the opened ones (once
+   * the limits have dropped the oldest entries, Undo can no longer bring it back to 0). Opening
+   * an image sets it to 0. Read through hasUnexportedEdits (editCommands.ts); it never compares
+   * images.
+   */
+  readonly editDepth: number
+  /**
+   * The latest edit, Undo or Redo that succeeded or changed nothing, for announcing it. Null
+   * once a later one failed (editError) and after another image opened.
+   */
+  readonly editNotice: EditNotice | null
+  /**
+   * Increases with every new edit outcome (editError or editNotice set), so the same message
+   * is announced again when the same thing happens twice.
+   */
+  readonly editFeedbackId: number
 }
+
+/** What a successful edit, Undo or Redo did, or an edit that changed nothing. */
+export type EditNotice =
+  /** `changedPixels`: how many pixels the edit changed, when the tool reports it. */
+  | { readonly kind: 'applied'; readonly operation: EditKind; readonly changedPixels: number | null }
+  | { readonly kind: 'undone' | 'redone'; readonly operation: EditKind }
+  /** The edit would have changed no pixel (Delete with only fully transparent pixels selected): nothing happened. */
+  | { readonly kind: 'unchanged'; readonly operation: EditKind }
 
 /**
  * An edit, Undo or Redo that could not be completed (for example, for lack of memory). The
@@ -251,7 +278,14 @@ export type EditorAction =
       readonly document: ImageDocument
       readonly image: DisplayImage
       readonly selection: SelectionMask | null
+      /** How many pixels the edit changed, when the tool reports it (for the announcement). */
+      readonly changedPixels?: number
     }
+  /**
+   * An edit of `version` that would have changed no pixel, so nothing was recorded and nothing
+   * changes but the announcement. Ignored for any other version.
+   */
+  | { readonly type: 'edit-unchanged'; readonly version: DocumentVersion; readonly operation: EditKind }
   /**
    * Undo of `entry`, computed from `version`: the restored pixels as a new revision, its
    * display image, and the selection and Magic Wand click from before the edit, the click
@@ -296,6 +330,9 @@ export const initialEditorState: EditorState = {
   lastMagicWandOperation: null,
   history: createEditHistory(),
   editError: null,
+  editDepth: 0,
+  editNotice: null,
+  editFeedbackId: 0,
 }
 
 const FLOOD_MODES: readonly FloodMode[] = ['contiguous', 'global']
@@ -344,6 +381,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         // Edits of the previous image cannot apply to this one.
         history: clearEditHistory(state.history),
         editError: null,
+        editDepth: 0,
+        editNotice: null,
       }
     }
 
@@ -462,8 +501,14 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case 'edit-redone':
       return redoEdit(state, action)
 
+    case 'edit-unchanged': {
+      const { document } = state
+      if (!document || !isVersionOf(action.version, document)) return state
+      return withEditFeedback(state, null, { kind: 'unchanged', operation: action.operation })
+    }
+
     case 'edit-failed':
-      return { ...state, editError: action.error }
+      return withEditFeedback(state, action.error, null)
 
     case 'edit-error-dismissed':
       return state.editError === null ? state : { ...state, editError: null }
@@ -490,15 +535,16 @@ function applyEdit(state: EditorState, action: EditAction<'edit-applied'>): Edit
     return state
   }
   if (!patchFits(entry, current, next) || !fitsSize(selection, next)) return state
+  const notice: EditNotice = { kind: 'applied', operation: entry.kind, changedPixels: action.changedPixels ?? null }
   return {
-    ...state,
+    ...withEditFeedback(state, null, notice),
     ...moveContent(state, next, contentShift(entry, 1)),
     document: next,
     documentBitmap: image,
     selection,
     lastMagicWandOperation: null,
     history: recordEdit(state.history, version, entry, versionOf(next)),
-    editError: null,
+    editDepth: state.editDepth + 1,
   }
 }
 
@@ -514,14 +560,14 @@ function undoEdit(state: EditorState, action: EditAction<'edit-undone'>): Editor
   const history = recordUndo(state.history, version, entry, versionOf(next))
   if (!history) return state
   return {
-    ...state,
+    ...withEditFeedback(state, null, { kind: 'undone', operation: entry.kind }),
     ...moveContent(state, next, contentShift(entry, -1)),
     document: next,
     documentBitmap: image,
     selection,
     lastMagicWandOperation: magicWandOperation,
     history,
-    editError: null,
+    editDepth: state.editDepth - 1,
   }
 }
 
@@ -533,15 +579,20 @@ function redoEdit(state: EditorState, action: EditAction<'edit-redone'>): Editor
   const history = recordRedo(state.history, version, entry, versionOf(next))
   if (!history) return state
   return {
-    ...state,
+    ...withEditFeedback(state, null, { kind: 'redone', operation: entry.kind }),
     ...moveContent(state, next, contentShift(entry, 1)),
     document: next,
     documentBitmap: image,
     selection,
     lastMagicWandOperation: null,
     history,
-    editError: null,
+    editDepth: state.editDepth + 1,
   }
+}
+
+/** `state` reporting a new edit outcome: an error or a notice (the other is cleared). */
+function withEditFeedback(state: EditorState, error: EditError | null, notice: EditNotice | null): EditorState {
+  return { ...state, editError: error, editNotice: notice, editFeedbackId: state.editFeedbackId + 1 }
 }
 
 function isVersionOf(version: DocumentVersion, document: ImageDocument): boolean {
@@ -556,6 +607,10 @@ function versionOf(document: ImageDocument): DocumentVersion {
  * Whether `next` can follow `current`: the same image, a revision newer than any it has had
  * (revisions only increase, so an earlier document or revision can never come back), its own
  * pixel memory (copy-on-write), and a display image of its size.
+ *
+ * A released display image has no size (releaseDisplayImage), so an action whose image has been
+ * released is never accepted, whatever the state: once app/editDispatch.ts has released the image
+ * of a rejected action, React processing that action again cannot bring the image back.
  */
 function isNewContentState(current: ImageDocument, next: ImageDocument, image: DisplayImage): boolean {
   return (

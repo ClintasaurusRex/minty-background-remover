@@ -12,6 +12,13 @@ export interface ImportSourceDependencies {
   readonly choosePastedImage: (blobs: readonly Blob[]) => Promise<PastedImageChoice | null>
   /** Names a pasted image. */
   readonly namePastedImage: (choice: PastedImageChoice) => string
+  /**
+   * Asked just before an import starts, for every source alike: whether the open image may be
+   * replaced. True (or a promise of true) starts the import; false abandons it, keeping the open
+   * image, its edits and history. Returning a boolean decides at once, so an import that needs no
+   * confirmation starts exactly as before.
+   */
+  readonly confirmReplace: (request: ImportRequest) => boolean | Promise<boolean>
 }
 
 export interface ImportSources {
@@ -32,6 +39,10 @@ export interface ImportSources {
  * action always wins whichever way the image arrived; the runner then does the same
  * for imports already in progress. An action with nothing usable (an empty
  * clipboard, only folders) never starts an import, so it never cancels another.
+ *
+ * Just before an action would start its import, confirmReplace decides whether the open
+ * image may be replaced (it asks the user when the image has unexported edits). Only an
+ * action that has something to open asks; one abandoned there leaves everything as it was.
  */
 export function createImportSources({
   startImport,
@@ -39,18 +50,27 @@ export function createImportSources({
   chooseDroppedFile,
   choosePastedImage,
   namePastedImage,
+  confirmReplace,
 }: ImportSourceDependencies): ImportSources {
   let lastTurn = 0
   /** The turn of the newest action that has started an import. */
   let importingTurn = 0
   const begin = () => {
     const turn = ++lastTurn
+    const isCurrent = () => turn > importingTurn
+    const start = (request: ImportRequest, options?: ImportOptions) => {
+      importingTurn = turn
+      return startImport(request, options)
+    }
     return {
       /** False once a newer action has started importing. */
-      isCurrent: () => turn > importingTurn,
-      startImport: (request: ImportRequest, options?: ImportOptions) => {
-        importingTurn = turn
-        return startImport(request, options)
+      isCurrent,
+      /** Starts the import once confirmReplace allows it, unless a newer action started importing meanwhile. */
+      startImport: async (request: ImportRequest, options?: ImportOptions) => {
+        const allowed = confirmReplace(request)
+        if (allowed === true) return start(request, options)
+        if (allowed === false) return
+        if ((await allowed) && isCurrent()) return start(request, options)
       },
     }
   }

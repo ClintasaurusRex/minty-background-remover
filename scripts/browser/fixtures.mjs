@@ -65,6 +65,69 @@ export async function ensureFixtures({ force = false } = {}) {
   return FIXTURES
 }
 
+export const EDIT_FIXTURE_FILES = ['details.png', 'big50mp.png', 'broken.png']
+const EDIT_VERSION = '1'
+
+/**
+ * The images the editing script (edit-workflow.mjs) needs besides FIXTURE_FILES, generated on
+ * first use, exactly, from Node:
+ *
+ *   details.png   400 × 300 white with 1-pixel lines and dots, three disconnected red squares,
+ *                 a strip of every alpha value, and colour hidden under alpha 0
+ *   big50mp.png   8660 × 5773 (just under 50 megapixels): flat background, objects, an alpha band
+ *   broken.png    a PNG cut off after its header, which the app rejects as truncated
+ */
+export async function ensureEditFixtures() {
+  await ensureFixtures()
+  const stamp = path.join(FIXTURES, 'EDIT_VERSION')
+  const current = fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8') === EDIT_VERSION
+  if (current && EDIT_FIXTURE_FILES.every((file) => fs.existsSync(path.join(FIXTURES, file)))) return FIXTURES
+  const write = (file, bytes) => fs.writeFileSync(path.join(FIXTURES, file), bytes)
+  const details = detailPixels()
+  write('details.png', encodePng(details.width, details.height, details.data))
+  const big = bigPixels()
+  write('big50mp.png', encodePng(big.width, big.height, big.data))
+  write('broken.png', encodePng(details.width, details.height, details.data).subarray(0, 120))
+  fs.writeFileSync(stamp, EDIT_VERSION)
+  return FIXTURES
+}
+
+function detailPixels() {
+  const width = 400
+  const height = 300
+  const data = new Uint8Array(width * height * 4).fill(255)
+  const set = (x, y, r, g, b, a = 255) => data.set([r, g, b, a], (y * width + x) * 4)
+  for (let x = 20; x < 380; x++) set(x, 50, 0, 0, 0)
+  for (let y = 70; y < 160; y++) set(200, y, 0, 0, 0)
+  for (let i = 0; i < 90; i++) set(30 + i, 70 + i, 0, 0, 0)
+  for (let y = 100; y < 160; y += 9) for (let x = 230; x < 380; x += 11) set(x, y, 20, 20, 20)
+  for (const [left, top] of [[40, 180], [140, 200], [250, 170]]) {
+    for (let y = top; y < top + 40; y++) for (let x = left; x < left + 40; x++) set(x, y, 220, 30, 30)
+  }
+  // Every alpha value 1-255 on one colour.
+  for (let y = 262; y < 290; y++) for (let x = 20; x < 275; x++) set(x, y, 40, 200, 90, x - 19)
+  // Colour hidden under alpha 0.
+  for (let y = 180; y < 220; y++) for (let x = 330; x < 370; x++) set(x, y, 12, 34, 56, 0)
+  return { width, height, data }
+}
+
+function bigPixels() {
+  const width = 8660
+  const height = 5773
+  const data = new Uint8Array(width * height * 4)
+  const background = new Uint32Array(data.buffer)
+  background.fill(new Uint32Array(new Uint8Array([230, 235, 240, 255]).buffer)[0])
+  const rect = (left, top, w, h, rgba) => {
+    const value = new Uint32Array(new Uint8Array(rgba).buffer)[0]
+    for (let y = top; y < top + h; y++) background.fill(value, y * width + left, y * width + left + w)
+  }
+  rect(1000, 800, 3000, 2000, [40, 90, 200, 255])
+  rect(5200, 1200, 2400, 3600, [200, 60, 40, 255])
+  rect(600, 3400, 3800, 1600, [30, 30, 30, 255])
+  for (let y = 5300; y < 5500; y++) for (let x = 200; x < 8455; x++) data[(y * width + x) * 4 + 3] = 1 + ((x * 254) / 8455) | 0
+  return { width, height, data }
+}
+
 /** Opaque noise, every alpha value, colour under alpha 0, and a pattern of opaque, half and alpha 1. */
 function alphaPixels() {
   const width = 640

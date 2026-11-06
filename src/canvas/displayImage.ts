@@ -29,7 +29,7 @@ import { toImageData } from './imageData'
  * one level of premultiplied colour). The pixel buffer is wrapped, not copied (toImageData), and
  * never written.
  *
- * Ownership, for the editor commands of Phase 3 Steps 5 and 6:
+ * Ownership (editor commands of Phase 3 Steps 5 and 6):
  *
  * - createDisplayImage returns a new image that only the caller holds. If creation fails,
  *   nothing stays allocated, and the caller keeps the current document and display image.
@@ -42,11 +42,12 @@ import { toImageData } from './imageData'
  *   createDisplayImageOwner per ImageCanvas) after the commit that replaces it, once the
  *   replacement has been drawn. Nothing is released on unmount or in effect clean-ups, which
  *   React Strict Mode runs while the image is still shown; a remounted canvas takes over.
- * - The canvas releases only images it has shown. An image the reducer rejects after dispatch,
- *   or one replaced before any commit showed it, is not released explicitly: only the committed
- *   state tells whether it is in use (React can process a queued action against another state
- *   than the command saw), so releasing it early could blank the canvas. Garbage collection
- *   frees it. Commands keep this rare by checking currency just before dispatching.
+ * - The canvas releases only images it has shown. An image the reducer rejects is released by the
+ *   code that dispatched it, and only once the action is committed: only the committed state tells
+ *   whether it is in use (React can process a queued action against another state than the
+ *   command saw), so releasing it earlier could blank the canvas. Edit, Undo and Redo actions are
+ *   dispatched by app/editDispatch.ts, which commits each with flushSync and then releases a
+ *   rejected action's image; the reducer never accepts a released image (it has no size).
  * - Display images are never kept in history or reused for another revision, and no state may
  *   bring back an image that an earlier state replaced: it may have been released. Undo and Redo
  *   create a new one for the restored pixels, as they create a new revision.

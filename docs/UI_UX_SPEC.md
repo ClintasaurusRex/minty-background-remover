@@ -187,6 +187,11 @@ As implemented (Step 10):
 - Nothing is re-applied before the first click, after Select All, Clear, Invert, Grow or Shrink, or after another image opens; committing then only sets the tolerance for the next click. A failed import keeps the selection and what can be re-applied. Committing the tolerance the selection was made with does nothing.
 - The status bar's selection readout and its announcement update after each re-apply, as after a click.
 
+As implemented (Phase 3 Step 6):
+
+- Delete Selection is the last control in the row, in its own group after Shrink: a delete icon and the visible label "Delete Selection" (also its accessible name, so it is not mistaken for Clear), with the tooltip "Make the selected pixels transparent (Delete)" and `aria-keyshortcuts="Delete"`.
+- It is available whenever something is selected and no other image is opening. Unavailable, it is `aria-disabled` (styled like the other unavailable actions; focus stays on it after a Delete, and clicking does nothing) and its tooltip adds "— nothing to delete". Its label and size never change, so the row never re-wraps or resizes the workspace.
+
 The interface should not expose unnecessary technical terminology.
 
 ---
@@ -381,6 +386,12 @@ Disabled state should be clear when history is unavailable.
 
 Approved for Phase 3 (P3-D9): Ctrl + Z undoes, and Ctrl + Y or Ctrl + Shift + Z redoes, wherever keyboard focus is except in text fields and editable content, where they keep their text-editing meaning. Undo and Redo cover image edits; undoing an edit also brings back the selection from just before it (P3-D3, P3-D7).
 
+As implemented (Phase 3 Step 6):
+
+- The header's Undo and Redo icon buttons name what they would do: "Undo Delete Selection" / "Redo Delete Selection" (accessible name and tooltip, with the shortcut: "Undo Delete Selection (Ctrl+Z)", "Redo … (Ctrl+Y or Ctrl+Shift+Z)"); "Undo" and "Redo" with "— nothing to undo / redo" when unavailable.
+- Unavailable (nothing to undo or redo, no image, or another image opening), they are `aria-disabled` and look disabled, so keyboard focus stays on them after undoing the last edit; clicking does nothing.
+- ⌘ Command works in place of Ctrl. Holding Ctrl + Z or Ctrl + Y repeats. With an image open the keys are taken over even when there is nothing to undo or redo; without one they keep their browser meaning.
+
 ---
 
 ## Keyboard Shortcuts
@@ -407,6 +418,8 @@ Shortcuts must not interfere with text entry controls.
 Selection shortcuts in Phase 2 are limited to Ctrl + A and Escape, plus Shift + Click and Ctrl + Click with the Magic Wand. Additional selection hotkeys are deferred to the planned shortcut work.
 
 Approved for Phase 3 (P3-D9): Delete (Delete Selection; ignored while held down, so it never repeats), Ctrl + Z (Undo), Ctrl + Y and Ctrl + Shift + Z (Redo). Backspace is not a Delete shortcut. None of them act while a text field has focus.
+
+As implemented (Phase 3 Step 6): Delete with any modifier is ignored; the shortcuts work with focus on buttons and on the tolerance slider; the tolerance text field keeps its own Delete and Undo. While the replace confirmation is open, Delete, Undo, Redo, Ctrl + A and Escape (which cancels the dialog) belong to the dialog, and Ctrl + O and Ctrl + V do nothing.
 
 ---
 
@@ -467,6 +480,8 @@ The image is too large to process safely.
 
 Avoid exposing raw internal errors unless useful for development.
 
+As implemented for edits (Phase 3 Step 6): a failed Delete, Undo or Redo shows a dismissible message at the top of the workspace, like an import error, announced as an alert: "The selected pixels could not be deleted." (or "Undo could not be completed." / "Redo could not be completed."), "The image and selection have not changed.", and, when the cause looks like memory, "There may not be enough memory for an image this large." Successful edits, Undo and Redo, and a Delete that changed nothing, are announced politely to assistive technology ("Selection deleted: 31,428 pixels are now transparent.", "Undone: Delete Selection.", "Nothing was deleted: the selected pixels are already transparent."); the image itself is the visible feedback. Each outcome is announced once, and again if it is repeated.
+
 ---
 
 ## Destructive Operations
@@ -479,7 +494,22 @@ Approved for Phase 3:
 
 - Delete Selection needs a selection and clears it afterwards; Undo brings back the pixels and the selection (P3-D3).
 - Edge cleanup and feathering default to 0 px, so Delete alone never alters fine lines or anti-aliasing outside the selection (P3-D4).
-- Before an image with unsaved pixel edits is replaced (by Open, drop or paste), the user is warned (P3-D12). The checkpoint that implements the warning, and its wording, are still to be agreed.
+- Before an image with unsaved pixel edits is replaced (by Open, drop or paste), the user is warned (P3-D12).
+
+As implemented (Phase 3 Step 6): a modal dialog in the dark theme, centred over the dimmed app.
+
+```text
+Discard unexported edits?
+
+The current image has edits that have not been exported. Opening
+“photo.png” will replace it and discard those edits and its Undo history.
+
+                                              [Cancel]  [Continue]
+```
+
+- "the pasted image" replaces the name for a paste. Export does not exist yet, so nothing mentions saving.
+- Cancel has focus first; Escape also cancels. Continue is marked with the error colours (text and border). Focus returns to where it was when the dialog closes. The rest of the page is inert while it is open.
+- Asked only when the open image has unexported edits and another image is about to be opened; never for the first image, an unedited one, or one whose edits have all been undone.
 
 ---
 

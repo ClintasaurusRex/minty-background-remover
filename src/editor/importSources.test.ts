@@ -8,6 +8,12 @@ import { type EditorAction, type EditorState, editorReducer, initialEditorState 
 import { createImageDocument } from './imageDocument'
 import { type ImportOptions, createImportRunner } from './importRunner'
 import { createImportSources } from './importSources'
+import { createReplaceConfirmation } from './replaceConfirmation'
+import { editActionCommand, hasUnexportedEdits } from './editCommands'
+import { documentVersion } from './editorState'
+import { fakeDisplayImages } from './history/testFixtures'
+import { createPixelBuffer } from '../image/pixelBuffer'
+import { createSelectionMask } from '../image/selection/selectionMask'
 
 /** Import sources whose file checks finish only when told to. */
 function setUp() {
@@ -23,6 +29,7 @@ function setUp() {
     chooseDroppedFile: () => new Promise((resolve) => drops.push(resolve)),
     choosePastedImage: () => new Promise((resolve) => pastes.push(resolve)),
     namePastedImage: ({ format }) => `pasted.${format}`,
+    confirmReplace: () => true,
   })
   return { sources, started, actions, drops, pastes }
 }
@@ -207,6 +214,7 @@ describe('createImportSources with the import runner and editor state', () => {
       chooseDroppedFile: async (files) => (files[0] ? { file: files[0], ignoredCount: 0 } : null),
       choosePastedImage: async (blobs) => (blobs[0] ? { blob: blobs[0], format: 'png' } : null),
       namePastedImage: () => pasteName,
+      confirmReplace: () => true,
     })
 
     await sources.openPickedFile(file('original.png'))
@@ -243,6 +251,7 @@ describe('createImportSources with the import runner and editor state', () => {
       chooseDroppedFile: async () => null,
       choosePastedImage: async () => null,
       namePastedImage: () => 'unused',
+      confirmReplace: () => true,
     })
     const picked = sources.openPickedFile(file('large.png'))
     await sources.openPastedImages([])
@@ -255,6 +264,194 @@ describe('createImportSources with the import runner and editor state', () => {
     await picked
     expect(state.document?.name).toBe('large.png')
     expect(state.importError).toBeNull()
+  })
+})
+
+describe('createImportSources: replacing the open image (P3-D12)', () => {
+  /** Sources whose confirmReplace records requests and answers when told to. */
+  function asking() {
+    const asked: ImportRequest[] = []
+    const answers: ((replace: boolean) => void)[] = []
+    const set = setUpWith((request) => {
+      asked.push(request)
+      return new Promise<boolean>((resolve) => answers.push(resolve))
+    })
+    return { ...set, asked, answers }
+  }
+  function setUpWith(confirmReplace: (request: ImportRequest) => boolean | Promise<boolean>) {
+    const started: ImportRequest[] = []
+    const actions: EditorAction[] = []
+    const drops: ((choice: DroppedFileChoice | null) => void)[] = []
+    const pastes: ((choice: PastedImageChoice | null) => void)[] = []
+    const sources = createImportSources({
+      startImport: async (request) => {
+        started.push(request)
+      },
+      dispatch: (action) => actions.push(action),
+      chooseDroppedFile: () => new Promise((resolve) => drops.push(resolve)),
+      choosePastedImage: () => new Promise((resolve) => pastes.push(resolve)),
+      namePastedImage: ({ format }) => `pasted.${format}`,
+      confirmReplace,
+    })
+    return { sources, started, actions, drops, pastes }
+  }
+
+  it('asks just before each source would start, with the image it would open', async () => {
+    const { sources, asked, answers, drops, pastes, started } = asking()
+    const picked = sources.openPickedFile(file('a.png'))
+    expect(asked.map((r) => `${r.source}:${r.name}`)).toEqual(['file-picker:a.png'])
+    answers[0](false)
+    await picked
+    const dropped = sources.openDroppedFiles([file('b.png')], 0)
+    expect(asked).toHaveLength(1)
+    drops[0]({ file: file('b.png'), ignoredCount: 0 })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(asked.map((r) => r.source)).toEqual(['file-picker', 'drop'])
+    answers[1](false)
+    await dropped
+    const pasted = sources.openPastedImages([new Blob(['x'])])
+    pastes[0]({ blob: new Blob(['x']), format: 'webp' })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(asked.at(-1)).toMatchObject({ name: 'pasted.webp', source: 'paste' })
+    answers[2](false)
+    await pasted
+    expect(started).toEqual([])
+  })
+
+  it('Continue starts the import with the same request and options', async () => {
+    const { sources, answers, drops, started } = asking()
+    const chosen = file('b.png')
+    const dropped = sources.openDroppedFiles([chosen], 1)
+    drops[0]({ file: chosen, ignoredCount: 2 })
+    await Promise.resolve()
+    await Promise.resolve()
+    answers[0](true)
+    await dropped
+    expect(started).toEqual([{ blob: chosen, name: 'b.png', source: 'drop' }])
+  })
+
+  it('does not ask when there is nothing to open', async () => {
+    const { sources, asked, drops, pastes, actions } = asking()
+    const dropped = sources.openDroppedFiles([], 1)
+    drops[0](null)
+    await dropped
+    const pasted = sources.openPastedImages([])
+    pastes[0](null)
+    await pasted
+    expect(asked).toEqual([])
+    expect(actions.map((a) => a.type)).toEqual(['import-rejected', 'import-notice-shown'])
+  })
+
+  it('abandons at once, for every source, when confirmReplace refuses straight away (a question is already open)', async () => {
+    const { sources, started, drops, pastes, actions } = setUpWith(() => false)
+    await sources.openPickedFile(file('a.png'))
+    const dropped = sources.openDroppedFiles([file('b.png')], 0)
+    drops[0]({ file: file('b.png'), ignoredCount: 0 })
+    await dropped
+    const pasted = sources.openPastedImages([new Blob(['x'])])
+    pastes[0]({ blob: new Blob(['x']), format: 'png' })
+    await pasted
+    expect(started).toEqual([])
+    expect(actions).toEqual([])
+  })
+
+  it('starts at once, synchronously, when no question is needed', () => {
+    const { sources, started } = setUpWith(() => true)
+    void sources.openPickedFile(file('a.png'))
+    expect(started.map((r) => r.name)).toEqual(['a.png'])
+  })
+
+  it('abandons a confirmed import if a newer one started while asking', async () => {
+    let first = true
+    let answer: (replace: boolean) => void = () => {}
+    const { sources, started } = setUpWith(() => {
+      if (!first) return true
+      first = false
+      return new Promise<boolean>((resolve) => (answer = resolve))
+    })
+    const older = sources.openPickedFile(file('older.png'))
+    await sources.openPickedFile(file('newer.png'))
+    answer(true)
+    await older
+    expect(started.map((r) => r.name)).toEqual(['newer.png'])
+  })
+
+  it('with the editor: Cancel keeps an edited image; a failed import after Continue keeps it too; a successful one replaces it', async () => {
+    let state: EditorState = reduceAll(initialEditorState, [
+      { type: 'workspace-resized', workspace: { size: { width: 1000, height: 600 }, devicePixelRatio: 1 } },
+    ])
+    const dispatch = (action: EditorAction) => {
+      state = editorReducer(state, action)
+    }
+    const runImport = async (request: ImportRequest): Promise<ImportResult> =>
+      request.name.includes('broken')
+        ? { ok: false, error: createImportError('decode-failed') }
+        : {
+            ok: true,
+            // Opaque, so Delete changes them.
+            document: createImageDocument({ name: request.name, format: 'png', source: request.source, fileSizeBytes: 1, pixels: createPixelBuffer(4, 3, new Uint8ClampedArray(48).fill(255)) }),
+          }
+    const startImport = createImportRunner(dispatch, runImport, async (document) => ({ width: document.width, height: document.height, close: () => {} }))
+    const confirmation = createReplaceConfirmation()
+    confirmation.setNeeded(() => hasUnexportedEdits(state))
+    const sources = createImportSources({
+      startImport,
+      dispatch,
+      chooseDroppedFile: async (files) => (files[0] ? { file: files[0], ignoredCount: 0 } : null),
+      choosePastedImage: async (blobs) => (blobs[0] ? { blob: blobs[0], format: 'png' } : null),
+      namePastedImage: () => 'pasted.png',
+      confirmReplace: confirmation.confirmReplace,
+    })
+
+    // The first image and an unedited one open without a question.
+    await sources.openPickedFile(file('first.png'))
+    await sources.openPickedFile(file('second.png'))
+    expect(confirmation.question()).toBeNull()
+    expect(state.document?.name).toBe('second.png')
+
+    // An edit.
+    const selection = createSelectionMask(4, 3, new Uint8Array(12).fill(1))
+    dispatch({ type: 'selection-applied', version: documentVersion(state)!, selection })
+    dispatch(editActionCommand(state, 'delete-selection', fakeDisplayImages().create)!)
+    expect(hasUnexportedEdits(state)).toBe(true)
+    const edited = state
+
+    // Cancel, for every source.
+    for (const open of [
+      () => sources.openPickedFile(file('third.png')),
+      () => sources.openDroppedFiles([file('dropped.png')], 0),
+      () => sources.openPastedImages([new Blob(['x'])]),
+    ]) {
+      const opening = open()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(confirmation.question()).not.toBeNull()
+      confirmation.answer(false)
+      await opening
+      expect(state.document).toBe(edited.document)
+      expect(state.history).toBe(edited.history)
+      expect(state.pendingImportId).toBeNull()
+    }
+
+    // Continue with an image that fails to open: still the edited image and its history.
+    const failing = sources.openPickedFile(file('broken.png'))
+    confirmation.answer(true)
+    await failing
+    expect(state.importError?.code).toBe('decode-failed')
+    expect(state.document).toBe(edited.document)
+    expect(state.history).toBe(edited.history)
+    expect(hasUnexportedEdits(state)).toBe(true)
+
+    // Continue with an image that opens: replaced, history cleared.
+    const replacing = sources.openPastedImages([new Blob(['x'])])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(confirmation.question()).toEqual({ name: 'pasted.png', source: 'paste' })
+    confirmation.answer(true)
+    await replacing
+    expect(state.document?.name).toBe('pasted.png')
+    expect(state.history.undo).toHaveLength(0)
+    expect(hasUnexportedEdits(state)).toBe(false)
   })
 })
 

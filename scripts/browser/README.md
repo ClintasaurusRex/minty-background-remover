@@ -1,8 +1,8 @@
 # Browser regression scripts
 
 Manual checks that need a real browser: what the canvas actually shows, how the browser restores
-lost canvases, and how long display images take to create. They are not part of `npm test` or CI,
-and they need no extra dependencies.
+lost canvases, how long display images take to create, and the Delete / Undo / Redo workflow. They
+are not part of `npm test` or CI, and they need no extra dependencies.
 
 ## Requirements
 
@@ -14,7 +14,9 @@ Each browser starts headless with a new temporary profile, which is deleted afte
 browser windows and profiles are never touched.
 
 The scripts generate the images they open into `scripts/browser/fixtures/`, which Git ignores.
-They do this on first use. Run `node scripts/browser/fixtures.mjs` to regenerate them.
+They do this on first use. Run `node scripts/browser/fixtures.mjs` to regenerate them. The editing
+script also generates `details.png` (1-pixel lines and dots, separate squares, every alpha value,
+hidden colour), `big50mp.png` (8660 × 5773) and `broken.png` (a truncated PNG).
 
 ## Scripts
 
@@ -99,6 +101,56 @@ It then prints median creation times and the time to the first frame for three s
 `transferToImageBitmap`, the canvas-element fallback and `createImageBitmap`. Times depend on the
 machine, so compare strategies and browsers within the same run.
 
+### Delete, Undo and Redo workflow
+
+```sh
+npm run build
+node scripts/browser/edit-workflow.mjs [--browser chrome|firefox|all] [--no-perf] [--no-stress]
+APP_URL=http://127.0.0.1:5173/ node scripts/browser/edit-workflow.mjs --no-perf   # npm run dev: Strict Mode
+```
+
+With real key presses and clicks, on PNG, JPEG, WebP and SVG images (transparent, partially
+transparent, 1-pixel details, disconnected selections, 4K), it checks that:
+
+- Delete makes exactly the selected pixels transparent in the document (every byte compared,
+  hidden colour kept), keeps the view, clears the selection, and the canvas shows the result
+  exactly; only the current display image is live.
+- Ctrl + Z restores every byte, the selection and the Magic Wand click (committed tolerances
+  re-apply as before the Delete); Ctrl + Y and Ctrl + Shift + Z redo; several Deletes, Add and
+  Subtract, the buttons and their names, held keys, the tolerance field, a Delete that changes
+  nothing, failures, and edits while another image opens.
+- The replace confirmation for the file picker, paste and drop: when it is asked, Cancel,
+  Continue, Escape, and that nothing else happens while it is open.
+- No page errors, and no React warnings or console errors.
+
+Then it times Delete, Undo and Redo at 4K and (unless `--no-stress`) near 50 megapixels, splitting
+out display-image creation, and reports history memory and live display images over repeated
+cycles (in Chrome also the JavaScript heap and ArrayBuffers after garbage collection). Timings are
+reported, never checked.
+
+Headless Firefox has no window focus, so focus and Escape in the dialog are checked in Chrome
+only. Paste and drop use synthetic events carrying the file.
+
+### Display-image ownership with real React
+
+```sh
+node scripts/browser/edit-ownership.mjs [--browser chrome|firefox|all] [--mode dev|prod|both]
+```
+
+This runs `edit-ownership/` with the project's reducer, edit commands, `dispatchEditAction` and
+`ImageCanvas`, in development React under Strict Mode and in a production build. It makes actions
+stale on purpose and queues updates of lower priority just before them, which the app never does,
+and checks that:
+
+- An accepted action's image is committed, drawn and kept before `dispatchEditAction` returns.
+- A stale action's image is released at once and never held later, also when React processes the
+  actions again after a transition.
+- Every replaced image ends up released, and no React warnings appear.
+
+It also reports what happens if a selection change is dispatched in a transition before a Delete
+(the app never does this): React returns to the image before the Delete, which is already
+released. That note shows where the ownership argument in `src/app/editDispatch.ts` ends.
+
 ## Maintenance notes
 
 - `lib/app.mjs` finds the editor state through React's internal fiber tree, because the app has
@@ -106,5 +158,7 @@ machine, so compare strategies and browsers within the same run.
   `openApp` fails with a clear message.
 - The scripts dispatch editor actions directly (`zoom-scaled`, `wheel-panned`, and so on). If an
   action is renamed, update the scripts too.
+- `lib/edit.mjs` wraps `transferToImageBitmap`, `putImageData`, `createImageBitmap` and
+  `drawImage` in the page to count live display images and time their creation and drawing.
 - Canvases are read by drawing them onto a separate canvas, never with their own `getImageData`.
   In Chrome, reading a canvas back can move it off the GPU, and then a crash would not affect it.

@@ -279,7 +279,7 @@ Who holds what:
 | --- | --- | --- |
 | The current display image (`documentBitmap`) | The editor state | By `ImageCanvas` (its `createDisplayImageOwner`), after the commit that replaces it, once the replacement is drawn |
 | A display image a command has created but not dispatched | The command | By the command, if it is stale or anything fails (Step 5's history commands create it last, so nothing fails after it) |
-| A display image whose action the reducer rejected, or that was replaced before it was drawn | Nobody | Garbage collection; from Step 6, released by the dispatcher once the action is committed and the image is not current (see Step 5) |
+| A display image whose action the reducer rejected | The dispatcher (`app/editDispatch.ts`, Step 6) | Released right after `flushSync` has committed the action, when the committed state does not hold it. (An image replaced before it was drawn cannot occur: each action is committed on its own.) |
 | Edit history (patches and encoded selections; no images or pixel buffers) | The editor state (`history`) | Garbage collection, when entries are dropped by the limits, Redo is cleared by a new edit, or another image opens |
 | An import's bitmap that lost to a newer import | The import runner | Closed by the runner |
 | Image canvas backing store and checkerboard pattern | `workspaceRenderer` (one per `ImageCanvas` mount) | `dispose()` in the effect clean-up; the pattern is remade on restoration |
@@ -290,10 +290,10 @@ Ownership of display images (for the edit commands of Steps 5 and 6):
 
 - `createDisplayImage` returns an image only its caller holds. A command creates it synchronously in its event handler, right after the edited document, never in a reducer or state updater (React Strict Mode runs those twice), and dispatches both in one action, so the canvas never shows the pixels of another revision. Before dispatching, the command checks that its result is still current (the document version it was computed from is still the open one, as the reducer will check); if it is not, or anything fails after creation, the command releases the image itself. If creation fails, nothing stays allocated and the current document and image stay.
 - Once the editor has accepted it, the editor state holds it and `ImageCanvas` releases it: it draws the new image and only then releases the one it replaced. Nothing is released in effect clean-ups, which React Strict Mode runs while the image is still shown, and the renderer never releases images. A remounted `ImageCanvas` gets a new owner, which takes over the image shown.
-- The canvas releases only images it has shown. An image whose action the reducer rejects after dispatch, or that a later action in the same commit replaces, is not released explicitly: only the committed state tells whether it is in use (React can process a queued action against another state than the command saw), so an earlier release could blank the canvas. Garbage collection frees it; commands keep the case rare by checking currency just before dispatching.
+- The canvas releases only images it has shown. An image whose action the reducer rejects is released by the code that dispatched it, once the action is committed and only the committed state can tell whether it is in use (Step 6: `dispatchEditAction` dispatches inside `flushSync`, then releases the image unless the committed state holds it). Releasing earlier could blank the canvas: React can process a queued action against another state than the command saw. Before Step 6 garbage collection freed such images.
 - Display images are never kept in history or reused for another revision, and no state may bring back an image that an earlier state replaced (it may have been released). Undo and Redo create a new one with the new revision.
 
-Step 5 (edit history in the editor state; not yet called by the application):
+Step 5 (edit history in the editor state; called by the application from Step 6):
 
 ```text
 src/editor/
@@ -317,7 +317,34 @@ src/editor/
 - Undo restores the selection and Magic Wand click from before the edit, the click bound to the new version; Redo restores the selection the edit left, with no click.
 - Limits: 25 entries and 256 MiB over both stacks (`retainedBytes`, shared payloads once), oldest dropped first, newest always kept. A new edit clears Redo; selection changes never touch the history; a successful import clears it and a failed one keeps it.
 
-Planned for later steps (subject to review at each step): `image/edit/` (edge band, cleanup, feather), `image/trim/autoTrim.ts`, `editor/editCommands.ts` (Delete Selection, using `completedEditCommand`) and the edit and Undo / Redo controls and shortcuts.
+Step 6 (Delete Selection, Undo and Redo in the application; the replace confirmation):
+
+```text
+src/
+├── editor/editCommands.ts         availableEditActions (constant time; nothing while an import runs), editActionCommand
+│                                  (the one entry for Delete Selection, Undo and Redo), deleteSelectionCommand,
+│                                  hasUnexportedEdits (editDepth), editShortcut
+├── editor/editFeedback.ts         announcement and error texts
+├── editor/replaceConfirmation.ts  the replace question as a store: confirmReplace for the import sources,
+│                                  question / answer / subscribe for the dialog (useSyncExternalStore)
+├── editor/importSources.ts        confirmReplace asked just before any source starts its import
+├── editor/editorState.ts          editDepth, editNotice, editFeedbackId; edit-unchanged
+├── app/editDispatch.ts            dispatchEditAction: flushSync, then release the image unless held
+├── app/useEditCommands.ts         Delete / Ctrl + Z / Ctrl + Y / Ctrl + Shift + Z, and the controls' callback
+├── app/useImageImport.ts          the confirmation; import-started committed at once (flushSync)
+└── components/                    AppHeader (Undo / Redo), MagicWandOptions (Delete Selection),
+                                   DiscardEditsDialog, Workspace/EditErrorMessage and the announcement region
+
+scripts/browser/                   edit-workflow.mjs (the whole workflow, timings, memory),
+                                   edit-ownership.mjs + edit-ownership/ (display images with real React)
+```
+
+- Every edit, Undo and Redo goes through `editActionCommand` (availability) and `dispatchEditAction` (commit and release). The command computes from the latest committed state (`stateRef`); `flushSync` commits the action, runs the canvas's layout effect (draw the new image, release the replaced one) and updates `stateRef` before the next input is handled, so actions are never computed from a stale state.
+- The reducer's checks decide everything else, and it never accepts a released image (no size), so releasing a rejected action's image is safe even if React processes the action again. React 19 renders pending default- and continuous-priority updates in order inside `flushSync`; only transitions are processed again later, and editor actions must never be dispatched in a transition: a transition-priority selection change queued before a Delete would make React return to the image before the Delete, already released (`scripts/browser/edit-ownership.mjs` shows both).
+- Availability rules that are not permanent (an import in progress) live in the commands, never in the reducer.
+- `import-started` is committed at once, so edits are unavailable from the moment an import starts: together with the confirmation, no edit can slip in between the decision to replace the image and the replacement.
+
+Planned for later steps (subject to review at each step): `image/edit/` (edge band, cleanup, feather), `image/trim/autoTrim.ts` and its tool.
 
 Key rules:
 

@@ -28,6 +28,20 @@ export async function waitFor(fn, { timeout = 20000, what = 'condition', abort =
   }
 }
 
+// Keys the scripts press: DOM key and code, Windows virtual key code (Chrome), WebDriver key value (Firefox).
+const KEYS = {
+  Delete: { key: 'Delete', code: 'Delete', keyCode: 46, webdriver: '\uE017' },
+  Escape: { key: 'Escape', code: 'Escape', keyCode: 27, webdriver: '\uE00C' },
+  Enter: { key: 'Enter', code: 'Enter', keyCode: 13, webdriver: '\uE007' },
+  Control: { key: 'Control', code: 'ControlLeft', keyCode: 17, webdriver: '\uE009' },
+  Shift: { key: 'Shift', code: 'ShiftLeft', keyCode: 16, webdriver: '\uE008' },
+}
+function keyInfo(name) {
+  if (KEYS[name]) return KEYS[name]
+  if (/^[a-z]$/.test(name)) return { key: name, code: `Key${name.toUpperCase()}`, keyCode: name.toUpperCase().charCodeAt(0), webdriver: name }
+  throw new Error(`No key definition for "${name}"`)
+}
+
 /**
  * Starts a browser process; fails fast if the binary is missing or the process exits. Its stderr
  * is only piped when the caller reads it (a full pipe would block the browser).
@@ -155,6 +169,30 @@ export async function launchChrome({ dpr = 1, width = 1400, height = 900, reduce
       async resize(w, h) {
         await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: dpr, mobile: false })
       },
+      /**
+       * Presses `name` (a key from KEYS or a lower-case letter) with modifiers, as real input to
+       * the focused element. `repeat` sends the press as an auto-repeat of a held key.
+       */
+      async press(name, { ctrl = false, shift = false, repeat = false } = {}) {
+        const info = keyInfo(name)
+        const modifiers = (ctrl ? 2 : 0) | (shift ? 8 : 0)
+        const held = [ctrl && KEYS.Control, shift && KEYS.Shift].filter(Boolean)
+        let down = 0
+        for (const modifier of held) {
+          down |= modifier === KEYS.Control ? 2 : 8
+          await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: modifier.key, code: modifier.code, windowsVirtualKeyCode: modifier.keyCode, modifiers: down })
+        }
+        const key = shift && info.key.length === 1 ? info.key.toUpperCase() : info.key
+        const event = { key, code: info.code, windowsVirtualKeyCode: info.keyCode, nativeVirtualKeyCode: info.keyCode, modifiers }
+        await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', autoRepeat: repeat, ...event })
+        await send('Input.dispatchKeyEvent', { type: 'keyUp', ...event })
+        for (const modifier of held.reverse()) {
+          down &= modifier === KEYS.Control ? ~2 : ~8
+          await send('Input.dispatchKeyEvent', { type: 'keyUp', key: modifier.key, code: modifier.code, windowsVirtualKeyCode: modifier.keyCode, modifiers: down })
+        }
+      },
+      /** Runs a Chrome DevTools Protocol command on the page. */
+      cdp: (method, params = {}) => send(method, params),
       close: () => closeBrowser(child, profile, socket, () => send('Browser.close')),
     }
   } catch (error) {
@@ -231,6 +269,24 @@ export async function launchFirefox({ dpr = 1, width = 1400, height = 900, reduc
       async resize(w, h) {
         await send('browsingContext.setViewport', { context, viewport: { width: w, height: h } })
       },
+      /**
+       * Presses `name` with modifiers, as real input. `repeat`: the key is pressed twice without
+       * being released, so the second press is an auto-repeat (WebDriver sets repeat), and it is
+       * left held until the next press or release().
+       */
+      async press(name, { ctrl = false, shift = false, repeat = false } = {}) {
+        const info = keyInfo(name)
+        const held = [ctrl && KEYS.Control, shift && KEYS.Shift].filter(Boolean)
+        const actions = [
+          ...held.map((modifier) => ({ type: 'keyDown', value: modifier.webdriver })),
+          { type: 'keyDown', value: info.webdriver },
+          ...(repeat ? [] : [{ type: 'keyUp', value: info.webdriver }]),
+          ...held.reverse().map((modifier) => ({ type: 'keyUp', value: modifier.webdriver })),
+        ]
+        await send('input.performActions', { context, actions: [{ type: 'key', id: 'keyboard', actions }] })
+      },
+      /** Releases every key and button still held. */
+      release: () => send('input.releaseActions', { context }),
       close: () => closeBrowser(child, profile, socket, () => send('session.end', {})),
     }
   } catch (error) {

@@ -39,6 +39,15 @@
   gap: var(--space-2);
 }
 
+/* Undo and Redo stay focusable when unavailable (aria-disabled) but look like disabled buttons. */
+.app-header .button[aria-disabled='true'],
+.app-header .button[aria-disabled='true']:hover {
+  cursor: not-allowed;
+  color: var(--color-text-disabled);
+  background: transparent;
+  border-color: var(--color-border);
+}
+
 .app-header__divider {
   width: 1px;
   height: 20px;

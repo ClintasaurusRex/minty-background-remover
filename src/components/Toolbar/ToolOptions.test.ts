@@ -15,7 +15,7 @@ import { ToolOptions } from './ToolOptions'
 const ALL: Record<SelectionAction, boolean> = { 'select-all': true, clear: true, invert: true, grow: true, shrink: true }
 const noop = () => {}
 
-function render(activeTool: ToolId | null, settings: MagicWandSettings = DEFAULT_MAGIC_WAND_SETTINGS, available = ALL) {
+function render(activeTool: ToolId | null, settings: MagicWandSettings = DEFAULT_MAGIC_WAND_SETTINGS, available = ALL, canDeleteSelection = true) {
   return renderToStaticMarkup(
     createElement(ToolOptions, {
       activeTool,
@@ -26,6 +26,8 @@ function render(activeTool: ToolId | null, settings: MagicWandSettings = DEFAULT
       onToleranceChange: noop,
       onToleranceCommit: noop,
       onSelectionAction: noop,
+      canDeleteSelection,
+      onDeleteSelection: noop,
     }),
   )
 }
@@ -143,5 +145,37 @@ describe('MagicWandOptions', () => {
     expect(order.every((index) => index >= 0)).toBe(true)
     expect([...order].sort((a, b) => a - b)).toEqual(order)
     expect(markup).not.toContain('tabindex')
+  })
+})
+
+describe('Delete Selection control', () => {
+  /** The opening tag of the Delete Selection button (its content is an icon and the label). */
+  function deleteTag(markup: string): string {
+    const match = /(<button[^>]*>)<svg[^]*?<\/svg>Delete Selection<\/button>/.exec(markup)
+    if (!match) throw new Error('No Delete Selection button')
+    return match[1]
+  }
+
+  it('is offered in the Magic Wand options with an icon, its shortcut and a clear name', () => {
+    const tag = deleteTag(render('magic-wand'))
+    expect(tag).toContain('type="button"')
+    expect(tag).toContain('aria-keyshortcuts="Delete"')
+    expect(tag).toContain('title="Make the selected pixels transparent (Delete)"')
+    expect(tag).toContain('aria-disabled="false"')
+    // The visible label is the accessible name: no aria-label overriding it.
+    expect(tag).not.toContain('aria-label')
+  })
+
+  it('is aria-disabled, never disabled, when nothing can be deleted, with the same label', () => {
+    const tag = deleteTag(render('magic-wand', DEFAULT_MAGIC_WAND_SETTINGS, ALL, false))
+    expect(tag).toContain('aria-disabled="true"')
+    expect(tag).toContain('— nothing to delete')
+    expect(tag).not.toMatch(/\sdisabled(=|\s|>)/)
+  })
+
+  it('comes last, after the selection actions, in its own group', () => {
+    const markup = render('magic-wand')
+    expect(markup.indexOf('Delete Selection</button>')).toBeGreaterThan(markup.indexOf('>Shrink<'))
+    expect(markup).toMatch(/<div class="tool-options__group"><button[^>]*tool-options__delete/)
   })
 })

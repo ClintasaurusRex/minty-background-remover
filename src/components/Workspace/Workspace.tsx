@@ -1,12 +1,14 @@
 import { useCallback, useRef } from 'react'
 import { clientToViewport } from '../../canvas/coordinates'
 import type { DisplayImage } from '../../canvas/displayImage'
-import type { ImportNotice, WorkspaceMetrics } from '../../editor/editorState'
+import type { EditError, EditNotice, ImportNotice, WorkspaceMetrics } from '../../editor/editorState'
+import { editNoticeText } from '../../editor/editFeedback'
 import type { PanGestureEffect } from '../../editor/panGesture'
 import type { PointerPress } from '../../editor/selectionCommands'
 import type { ImageDocument, Point, SelectionMask, ViewportState } from '../../editor/types'
 import type { ImportError } from '../../image/import/errors'
 import { OpenIcon } from '../icons/icons'
+import { EditErrorMessage } from './EditErrorMessage'
 import { EmptyState } from './EmptyState'
 import { ImageCanvas } from './ImageCanvas'
 import { ImportErrorMessage } from './ImportErrorMessage'
@@ -26,8 +28,15 @@ interface WorkspaceProps {
   importing: boolean
   importError: ImportError | null
   importNotice: ImportNotice | null
+  /** The last failed edit, Undo or Redo, shown until dismissed or replaced. */
+  editError: EditError | null
+  /** The last successful edit outcome, announced to assistive technology (the image itself shows it). */
+  editNotice: EditNotice | null
+  /** Changes with every new edit outcome, so a repeated message is announced again. */
+  editFeedbackId: number
   onResize: (workspace: WorkspaceMetrics) => void
   onDismissError: () => void
+  onDismissEditError: () => void
   onDismissNotice: () => void
   onDropFiles: (files: readonly File[], skippedCount: number) => void
   onOpenImage: () => void
@@ -57,8 +66,12 @@ export function Workspace({
   importing,
   importError,
   importNotice,
+  editError,
+  editNotice,
+  editFeedbackId,
   onResize,
   onDismissError,
+  onDismissEditError,
   onDismissNotice,
   onDropFiles,
   onOpenImage,
@@ -137,6 +150,12 @@ export function Workspace({
           )}
         </div>
         {importError && <ImportErrorMessage error={importError} onDismiss={onDismissError} />}
+        {/* A new key per failure, so the same message is announced again. */}
+        {editError && <EditErrorMessage key={editFeedbackId} error={editError} onDismiss={onDismissEditError} />}
+      </div>
+      {/* Announced once per outcome: a new element for each, never on re-renders. */}
+      <div className="visually-hidden" role="status">
+        {editNotice && <span key={editFeedbackId}>{editNoticeText(editNotice)}</span>}
       </div>
     </main>
   )

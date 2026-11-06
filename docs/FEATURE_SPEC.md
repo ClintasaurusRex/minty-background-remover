@@ -52,7 +52,14 @@ When imports overlap (file picker, drop and paste in any combination), the most 
 
 Opening a new image replaces the current one without confirmation while the open image has no pixel edits. Replacing it discards its edits and its Undo / Redo history; a failed import keeps both.
 
-Approved for Phase 3 (P3-D12): when the open image has unsaved pixel edits, the user is warned before another image replaces it. The warning is implemented at a later checkpoint, to be agreed; until then, replacing an edited image does not ask.
+Approved for Phase 3 (P3-D12): when the open image has unsaved pixel edits, the user is warned before another image replaces it. As implemented (Phase 3 Step 6; export does not exist yet, so the edits are called unexported):
+
+- The image has unexported edits when an edit is applied and not undone: each edit and Redo counts one, each Undo takes one away, without comparing images. Undoing every edit returns the image to the file as opened, so there is nothing to lose (even with edits left to redo). The first image of a session and an unedited image are never asked about.
+- The question comes just before another image would replace the edited one, the same way for the file picker, drop and paste, and only when there is an image to open (not for a cancelled picker, an empty clipboard or a drop with nothing usable).
+- A dialog titled "Discard unexported edits?" explains that opening the image (named, or "the pasted image") will replace the current one and discard its edits and Undo history, with Cancel (the default, also Escape) and Continue.
+- Cancel keeps the image, its edits and its history. Continue opens the new image; if that import fails, the edited image and its history stay.
+- One question at a time: while it is open, other images arriving are not opened and the editing shortcuts do nothing.
+- While another image is opening, Delete, Undo and Redo are unavailable, so no edit can be made between the decision and the replacement.
 
 ### Format Detection
 
@@ -299,6 +306,13 @@ Approved for Phase 3:
 - Delete needs a selection, and clears the selection when it is done. Undo restores both the pixels and the selection from before the Delete (P3-D3).
 - Delete behaves the same for every source format (PNG, JPEG, WebP, SVG): all images are edited as 8-bit RGBA, so transparency can be added to a JPEG as to a PNG.
 - The Delete key is ignored while a text field has focus and does not repeat when held (P3-D9).
+
+As implemented (Phase 3 Step 6; details in `IMPLEMENTATION_PLAN.md`):
+
+- Delete (the key) and the Delete Selection control in the Magic Wand options row make every selected pixel fully transparent at once, as one undoable step. The image keeps its size, the view does not move, and the selection and the Magic Wand click that made it are cleared.
+- When every selected pixel is already transparent, nothing changes: no Undo step, the selection stays, and this is announced.
+- Delete is available whenever something is selected and no other image is opening.
+- Exact deletion only: edge cleanup and feathering come later in Phase 3.
 
 ---
 
@@ -551,7 +565,7 @@ Approved for Phase 3:
 - Limits (P3-D8): at most 25 entries and 256 MB of history data. The oldest entries are dropped first. The newest entry is always kept, even when it alone exceeds 256 MB, so the last edit can always be undone.
 - Undo and Redo shortcuts keep their text-editing meaning in text fields.
 
-Phase 3 Step 5 implements the history in the editor state; the controls, shortcuts and the first edit (Delete Selection) that use it come in Step 6. As implemented: Undo restores the pixels, the selection and the Magic Wand click (re-applicable with a new tolerance) from just before the edit; Redo restores the pixels and the selection the edit left (none after Delete). Both replace whatever is selected at the time. An edit, Undo or Redo that fails (for example for lack of memory) changes nothing and is reported.
+Phase 3 Step 5 implements the history in the editor state; Step 6 connects it to the Undo and Redo controls and shortcuts, with Delete Selection as the first edit. As implemented: Undo restores the pixels, the selection and the Magic Wand click (re-applicable with a new tolerance) from just before the edit; Redo restores the pixels and the selection the edit left (none after Delete). Both replace whatever is selected at the time. An edit, Undo or Redo that fails (for example for lack of memory) changes nothing and shows a message saying so. Undo and Redo name the edit they would apply ("Undo Delete Selection"), are unavailable while another image is opening, and repeat while their keys are held.
 
 ---
 

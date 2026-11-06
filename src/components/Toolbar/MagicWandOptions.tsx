@@ -11,6 +11,7 @@ import {
 } from '../../editor/toleranceInput'
 import type { FloodMode, SelectionMode } from '../../editor/types'
 import { MAX_TOLERANCE } from '../../image/selection/colourDistance'
+import { DeleteIcon } from '../icons/icons'
 import './ToolOptions.css'
 
 export interface MagicWandOptionsProps {
@@ -31,6 +32,10 @@ export interface MagicWandOptionsProps {
    */
   onToleranceCommit: (tolerance: number) => void
   onSelectionAction: (action: SelectionAction) => void
+  /** Whether Delete Selection can run: something is selected (and no other image is opening). */
+  canDeleteSelection: boolean
+  /** Makes the selected pixels transparent (the Delete key does the same). */
+  onDeleteSelection: () => void
 }
 
 interface Choice<T> {
@@ -58,10 +63,13 @@ const ACTIONS: readonly { action: SelectionAction; label: string; name: string; 
   { action: 'shrink', label: 'Shrink', name: 'Shrink Selection', title: 'Shrink the selection by 1 pixel' },
 ]
 
+const DELETE_TITLE = 'Make the selected pixels transparent (Delete)'
+
 /**
  * The Magic Wand's contextual options, shown as a second toolbar row while it is the
  * active tool. Options apply to the next Magic Wand click; a finished tolerance adjustment
  * also re-applies the last click. The selection actions change the selection at once.
+ * Delete Selection, last, edits the image: it makes the selected pixels transparent.
  */
 export function MagicWandOptions({
   settings,
@@ -71,6 +79,8 @@ export function MagicWandOptions({
   onToleranceChange,
   onToleranceCommit,
   onSelectionAction,
+  canDeleteSelection,
+  onDeleteSelection,
 }: MagicWandOptionsProps) {
   return (
     <div className="tool-options" role="group" aria-label="Magic Wand options">
@@ -103,6 +113,22 @@ export function MagicWandOptions({
             </button>
           )
         })}
+      </div>
+      <div className="tool-options__group">
+        {/* Its label and size never change, so the row never re-wraps when it becomes available. */}
+        <button
+          type="button"
+          className="button tool-options__action tool-options__delete"
+          aria-disabled={!canDeleteSelection}
+          aria-keyshortcuts="Delete"
+          title={canDeleteSelection ? DELETE_TITLE : `${DELETE_TITLE} — nothing to delete`}
+          onClick={() => {
+            if (canDeleteSelection) onDeleteSelection()
+          }}
+        >
+          <DeleteIcon />
+          Delete Selection
+        </button>
       </div>
     </div>
   )

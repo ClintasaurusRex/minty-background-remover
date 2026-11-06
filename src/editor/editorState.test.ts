@@ -79,6 +79,9 @@ describe('editorReducer: imports', () => {
         retainedBytes: 0,
       },
       editError: null,
+      editDepth: 0,
+      editNotice: null,
+      editFeedbackId: 0,
     })
     expect(isImporting(initialEditorState)).toBe(false)
   })

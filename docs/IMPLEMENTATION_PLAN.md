@@ -324,7 +324,7 @@ Decisions approved by the project owner after review of the Phase 3 architecture
 - P3-D9: Shortcuts: Delete, Ctrl + Z, Ctrl + Y and Ctrl + Shift + Z.
 - P3-D10: The display-image creation strategy is verified in Step 4.
 - P3-D11: Large-image edits stay synchronous initially, pending measurements.
-- P3-D12: Warn before replacing an image that has unsaved pixel edits. Implemented at a later checkpoint, to be agreed.
+- P3-D12: Warn before replacing an image that has unsaved pixel edits. Implemented in Step 6 (approved for checkpoint commit; part of its manual QA deferred), described as unexported edits until export exists.
 - Revision model (correction to the proposal): document revisions are never reused within the session. Every pixel edit, Undo and Redo gets a new revision. Undo still restores the earlier pixels, the selection and the Magic Wand click that can be re-applied; the click is rebound to the new document version rather than restoring a stale version identifier, so stale results can never be accepted.
 
 Phase 3 is implemented in twelve reviewed steps, each stopping for review:
@@ -333,16 +333,16 @@ Phase 3 is implemented in twelve reviewed steps, each stopping for review:
 2. Delete algorithm (pure). Done.
 3. History building blocks: pixel patches, crop patches, selection encoding, byte accounting. Done.
 4. Display image for edited pixels and render invalidation (verifies P3-D10). Done.
-5. Edit history in the editor state. (Implemented; awaiting review.)
-6. Delete Selection, Undo and Redo (first manual checkpoint).
+5. Edit history in the editor state. Done; approved.
+6. Delete Selection, Undo and Redo (first manual checkpoint). Approved for checkpoint commit with outstanding manual QA: 14 of 23 checks passed, 9 deferred (see Step 6).
 7. Edge cleanup prototype and visual comparison (owner decision P3-D5).
-8. Edge cleanup and feathering.
+8. Edge cleanup and feathering. Its manual QA also runs the nine deferred Step 6 checks.
 9. Optional, depending on P3-D4 and P3-D5: re-apply the last Delete when cleanup or feathering changes.
 10. Auto Trim algorithm.
 11. Auto Trim tool (second manual checkpoint).
-12. Final quality assurance, performance, memory and Phase 3 readiness.
+12. Final quality assurance, performance, memory and Phase 3 readiness. Phase 3 sign-off and merge require every deferred Step 6 check to be completed or explicitly dispositioned.
 
-The unsaved-edits warning (P3-D12) needs Undo / Redo (Step 6) to know whether edits exist; its checkpoint is still to be agreed.
+The unsaved-edits warning (P3-D12) is implemented with Step 6, which first gives the editor edits to protect.
 
 #### Step 1: Pixel Buffers and Revisions (done; approved)
 
@@ -524,7 +524,7 @@ Owner decisions (from the first review):
 2. Selection overlay restoration: done in this step (above).
 3. Browser scripts (M6): approved; added under `scripts/browser/`.
 
-#### Step 5: Edit History in the Editor State (implemented; awaiting review)
+#### Step 5: Edit History in the Editor State (done; approved)
 
 The editor state keeps an Undo / Redo history of image edits, and commands turn a completed edit, Undo and Redo into editor actions. Nothing in the application calls the commands yet: Delete Selection and the Undo / Redo controls and shortcuts are Step 6. The application looks and behaves exactly as at the end of Step 4; imports now also clear the (always empty) history.
 
@@ -629,15 +629,178 @@ Known limitations (Step 5):
 - Undo and Redo replace the current selection with the recorded one; a selection made after Undo is lost on Redo (P3-D7: selections are not history).
 - No content check: applicability rests on the version binding, entry identity and sizes. A write into a document's pixels that bypassed copy-on-write would not be detected (the read-only type and the shared-memory checks guard against it). A checksum was considered and not added: it would read the whole changed region on every Undo and Redo.
 - Patch regions are trusted: a `CompletedPixelEdit` whose region misses some changed pixels would make an entry that cannot undo them. Delete Selection's bounds are exact (Step 2 tests); other tools must report correct regions or omit them.
-- Edits are accepted while an import is still running; when it succeeds it replaces the edited image and clears its history. The unsaved-edits warning (P3-D12) is still to be scheduled.
+- Edits are accepted while an import is still running; when it succeeds it replaces the edited image and clears its history. (Step 6: edit actions are unavailable while an import runs, and the unsaved-edits warning is implemented.)
 
-Owner decisions for review:
+Owner decisions (Step 5 was approved; these carried into Step 6):
 
 1. Redo restores the selection recorded just after the edit (none after Delete), replacing any selection made since the Undo; Undo likewise replaces the current selection with the one from before the edit.
-2. The Step 6 safeguard for abandoned display images (`flushSync` dispatch, then release when not current), replacing garbage collection for those images.
+2. The Step 6 safeguard for abandoned display images (`flushSync` dispatch, then release when not current), replacing garbage collection for those images. (Approved as an option to evaluate; evaluated and adopted in Step 6, below. Accepted with the Step 6 approval, together with its restriction that no editor action is ever dispatched in a React transition.)
 3. The provisional view behaviour for crops above, until Step 10.
-4. `editError` records failures in the state only; the message, its wording and where it is shown are Step 6.
+4. `editError` records failures in the state only; the message, its wording and where it is shown are Step 6. (Done in Step 6.)
 5. "256 MB" read as 256 MiB (268,435,456 bytes), matching how sizes are given elsewhere in these documents.
+
+
+#### Step 6: Delete Selection, Undo and Redo (approved for checkpoint commit; manual QA partly deferred)
+
+The first interactive editing checkpoint. Delete Selection, Undo and Redo work from the controls and the keyboard, on every supported format, and the unexported-edits warning (P3-D12) protects edited images. Delete is exact: no edge cleanup or feathering (Steps 7–9).
+
+Modules:
+
+```text
+src/
+├── editor/editCommands.ts        availableEditActions (constant time; nothing while an import runs),
+│                                 editActionCommand (the one entry for Delete Selection, Undo, Redo),
+│                                 deleteSelectionCommand, hasUnexportedEdits, editShortcut
+├── editor/editFeedback.ts        announcement and error texts, edit names
+├── editor/replaceConfirmation.ts the replace question as a small store (no DOM, tested in Node)
+├── app/editDispatch.ts           dispatchEditAction: flushSync, then release the image unless held
+├── app/useEditCommands.ts        the Delete, Ctrl + Z, Ctrl + Y and Ctrl + Shift + Z shortcuts
+├── components/DiscardEditsDialog/  the confirmation (a modal <dialog>)
+└── components/Workspace/EditErrorMessage.tsx
+```
+
+Changed: `editorState.ts` (`editDepth`, `editNotice`, `editFeedbackId`, the `edit-unchanged` action, `changedPixels` on `edit-applied`), `historyCommands.ts` (passes `changedPixels` through; `describeCause` exported), `importSources.ts` (`confirmReplace`), `useImageImport.ts`, `useSelectionShortcuts.ts`, `App.tsx`, `AppHeader`, `MagicWandOptions`, `Workspace`, the icons (a Delete icon). Browser scripts: `edit-workflow.mjs`, `edit-ownership.mjs` and `edit-ownership/`, `lib/edit.mjs`, key presses in `lib/browsers.mjs`, three generated fixtures. No dependency was added or removed.
+
+Delete Selection:
+
+- `deleteSelectionCommand` runs the Step 2 algorithm on the open document and the selection, and records the result through the Step 5 `completedEditCommand`: the deleted pixels' bounds as the patch region, no selection afterwards, and the number of pixels made transparent for the announcement. One copy of the image (copy-on-write), a fresh revision, its display image created last, all in one action, so the document, display image, selection, Magic Wand click and history change together or not at all.
+- Selected pixels get alpha 0 with their colour kept hidden; every other byte stays; the size and the view (zoom and pan) stay. The selection and the click that made it are cleared (Undo brings both back).
+- When every selected pixel is already fully transparent, nothing changes: no entry, no revision, no image, the selection stays, and "Nothing was deleted: the selected pixels are already transparent." is announced (`edit-unchanged`). Deciding this before pressing would mean reading the selected pixels on every render, so the control is available whenever something is selected.
+- Unavailable without an image or a selection, and while another image is opening (that import would replace the image and discard the edit). Selection changes stay available meanwhile.
+
+Controls (UI_UX_SPEC.md, Undo / Redo and Magic Wand UX):
+
+- Delete Selection: last in the Magic Wand options row, in its own group after Shrink, with a delete icon and the visible label "Delete Selection" (also its accessible name), `aria-keyshortcuts="Delete"` and the tooltip "Make the selected pixels transparent (Delete)". Unavailable, it is `aria-disabled` (keyboard focus stays on it after deleting, as for the selection actions) and its tooltip adds "— nothing to delete". Its label and size never change, so the row never re-wraps or resizes the workspace when it becomes available.
+- Undo and Redo in the header: icon buttons whose accessible name says what they would do ("Undo Delete Selection", "Redo Delete Selection"; "Undo" and "Redo" when unavailable), with the shortcuts in their tooltips ("Undo Delete Selection (Ctrl+Z)", "Redo … (Ctrl+Y or Ctrl+Shift+Z)") and in `aria-keyshortcuts`. Unavailable, they are `aria-disabled` and look disabled; focus stays on them.
+- Clicking an unavailable control does nothing. A double click on Delete Selection deletes once: the second click finds no selection.
+
+Shortcuts (P3-D9), wherever focus is except in text fields, editable content and lists, and never while the replace confirmation is open:
+
+| Keys | Action | Notes |
+| --- | --- | --- |
+| Delete | Delete Selection | Ignored while held (auto-repeat) and with any modifier; Backspace is not a shortcut |
+| Ctrl + Z (⌘ Z) | Undo | Repeats while held, as in other editors |
+| Ctrl + Y, Ctrl + Shift + Z (⌘ Y, ⌘ Shift Z) | Redo | Repeats while held |
+
+With an image open, Ctrl + Z / Y / Shift + Z are taken over (default prevented) even when there is nothing to undo or redo, as Ctrl + A is; without an image every key keeps its browser meaning. In the tolerance text field Delete and Ctrl + Z keep their text-editing meaning; on the tolerance slider and buttons the shortcuts work. Space panning, Ctrl + A, Escape and Ctrl + O are unchanged.
+
+Undo and Redo (as Step 5): Undo restores the pixels byte for byte (hidden colour included), the selection and the Magic Wand click from before the edit, bound to the new revision, so a committed tolerance re-applies the click exactly as it would have before (New, Add and Subtract, Contiguous and Global, with the click's previous selection). Redo restores the result and no selection. Every edit, Undo and Redo makes a new revision; a new edit after Undo clears Redo; selection changes make no entry; the 25-entry and 256 MiB limits are unchanged.
+
+Display images (Step 5 decision 2, evaluated and adopted):
+
+- `dispatchEditAction` dispatches every edit, Undo and Redo action inside `flushSync`, then releases the action's display image unless the committed state holds it. Measured in Chrome and Firefox, development (Strict Mode) and production React: `flushSync` returns only after the commit's layout effects ran, so the canvas has drawn the new image and released the one it replaced, and App has recorded the committed state.
+- Commands always compute from the latest committed state, and each action is committed before the next key press or click is handled, so in the application an action is never stale: the release path is a safeguard. It was exercised directly, with real React, by `scripts/browser/edit-ownership.mjs`: actions computed from the same state, and lower-priority updates queued just before them.
+- Why releasing is safe: the reducer never accepts an action whose image has been released. A released bitmap or canvas has no size, and the reducer requires the image to be the new document's size (now stated in `isNewContentState` and tested). So even when React processes the action again later, its image cannot come back.
+- What React 19 does (measured): `flushSync` renders pending default-priority (timers, promises) and continuous-input updates in order with the edit, in the same pass; only transition-priority updates are skipped and processed again later on top of the edit ("rebasing"). The application dispatches no editor action in a transition (none exists in `src/`).
+- The boundary of the argument, shown by the script and documented in `editDispatch.ts`: if a selection change were dispatched as a transition before a Delete, React would process the Delete again after it, find it no longer fits, and return to the image before it, which the canvas has already released. Editor actions must therefore never be dispatched in a transition.
+- Alternatives considered: garbage collection only (the Step 4 status: up to 191 MB per abandoned image at 50 MP, released at an unknown time); releasing in a ledger after each commit (unsafe without `flushSync`: an action can still be queued); creating display images in the canvas instead of the commands (removes the ownership question entirely, but moves display failures after the commit; an architectural change, not made).
+- React Strict Mode: reducers run twice with the same action and both runs hold the same image; nothing is released in effect clean-ups (unchanged since Step 4). No React warnings in either build.
+- Correction found while testing: drops and pastes start their import after a short asynchronous check, where React left `import-started` pending until its next render. A Delete pressed in that gap was computed from a state without the import, accepted, and then discarded by the import without a question. `import-started` is now committed at once (`flushSync`), so edits are unavailable from the moment an import starts.
+
+Unexported edits (P3-D12):
+
+- `editDepth` counts edits away from the opened image: each accepted edit and Redo adds one, each Undo takes one away; opening an image sets it to 0. History is a single line and Undo is exact, so 0 means the pixels are the opened ones. Once the limits have dropped the oldest entries, Undo can no longer bring it back to 0, so the image stays edited. No images are compared. `hasUnexportedEdits` = an image is open and the depth is not 0. Undoing every edit leaves nothing unexported (the image equals the file), even with edits left to redo.
+- Asked just before another image would replace it, the same way for the file picker, drop and paste: only when something would actually be opened (not for a cancelled picker, an empty clipboard or a drop with nothing usable), and never for the first image or an unedited one.
+- A modal dialog: "Discard unexported edits?" — "The current image has edits that have not been exported. Opening “photo.png” will replace it and discard those edits and its Undo history." (for a paste: "the pasted image"). Cancel (focused first) and Continue (marked with the error colours). Escape cancels. Focus returns to where it was. Export does not exist yet, so the wording never mentions saving.
+- Cancel keeps the document, its pixels, selection, history and edits. Continue starts the import; if it fails, the edited image and its history stay (and a later attempt asks again); if it succeeds, the image is replaced and its history cleared.
+- One question at a time: while it is open, another image arriving (paste, drop) is not opened, Ctrl + O does nothing (and the browser's Open dialog is prevented), and Delete, Undo, Redo, Ctrl + A and Escape belong to the dialog. The rest of the page is inert.
+
+Errors and announcements:
+
+- A failed Delete, Undo or Redo (for example for lack of memory) changes nothing and shows a dismissible message in the workspace, in the style of import errors: "The selected pixels could not be deleted." / "Undo could not be completed." / "Redo could not be completed.", then "The image and selection have not changed.", and "There may not be enough memory for an image this large." when the cause looks like memory. It is an alert (announced at once), replaced by the next outcome, and dismissed with its button. The developer detail is logged in development only.
+- Successful outcomes are announced in a visually hidden polite status region: "Selection deleted: 31,428 pixels are now transparent.", "Undone: Delete Selection.", "Redone: Delete Selection.", and the no-op message above. The image change itself is the visible feedback. Each outcome gets a new element (keyed by `editFeedbackId`), so repeating the same action announces again and re-renders never do. The status bar's selection announcement still follows the selection.
+
+Tests: 79 added (1,000 in total, 58 files).
+
+- `editCommands.test.ts` (37): Delete from a real Magic Wand click (alpha 0, hidden colour kept, every other byte, 1-pixel lines and separate squares kept), size, view, revision, entry, patch region, selection and click cleared, one image created and none released, inputs never written, already transparent pixels, the no-op (nothing recorded, selection kept, stale reports ignored), availability (no image, no selection, while importing, after a failed import), failures (display image, algorithm), pressing twice, a Delete computed before a selection change, a released image never accepted; several Deletes undone and redone one at a time with their selections and only new revisions; 30 random images round-tripped bit for bit; Undo restoring the click (committed tolerances re-apply exactly), Add and Subtract with their previous selections; selection changes after Undo; a new Delete clearing Redo; two Undos or Redos from one state; Undo / Redo unavailable while importing; announcements and failures replacing each other; Strict Mode double reducer runs; `availableEditActions`; `hasUnexportedEdits` through edits, Undo, Redo, no-ops, failures, eviction by the limits, imports and failed imports; `editShortcut` (keys, ⌘, held keys, modifiers, Backspace, text fields, editable content, lists, slider, composition); a 1024 × 768 background Delete.
+- `editDispatch.test.ts` (7), with a stand-in for React: accepted images kept; rejected images released once, after the commit; nothing for actions without images; failures while committing; Strict Mode; a released action rejected by every state, including the one it was computed from; Undo and Redo with stale twins.
+- `replaceConfirmation.test.ts` (7), `importSources.test.ts` (7 added: asked per source with its request, Cancel, Continue, nothing to open, immediate refusal, a newer import while asking, and the whole flow with the reducer: Cancel for each source, a failed import after Continue, a successful one), `editFeedback.test.ts` (7), and markup tests for the Delete Selection control (3), the header's Undo and Redo (4), the dialog (3) and the workspace's feedback (4).
+- 21 deliberately introduced defects were each caught (Delete repeating, text fields not protected, edits while importing, the no-op unreported, Delete keeping the selection, unexported edits read from the Undo stack, the pixel count missing, Undo adding depth, imports keeping depth, stale no-op reports accepted, the feedback id not advancing, released images accepted, accepted images released, images never released, released before the commit, overlapping questions, a stale confirmation starting its import, an immediate refusal importing anyway, a weak memory hint, `disabled` instead of `aria-disabled`, generic Undo / Redo names); one only after a test was added (the immediate refusal).
+
+Browser verification (production build unless stated; headless Chrome 157 and Firefox 159, device pixel ratio 1):
+
+- `edit-workflow.mjs`: 515 checks pass (Chrome 259, Firefox 256), with real key presses and clicks. For a PNG and a WebP with an opaque object on transparency, a JPEG and an SVG on white, an SVG with a half-transparent shape, a PNG and a WebP with every alpha value deleted in Global mode (disconnected bands of partial alpha), a PNG of 1-pixel lines and dots, three disconnected squares (Global), and a 4K screenshot: Delete is exact in the document (every byte compared), keeps the view, clears the selection and click, makes one entry and a fresh revision; the canvas shows the document exactly at 100% (opaque exact, transparent exactly the checkerboard, partial alpha within 2 levels); the overlay is gone; the announcement is made; exactly one display image is live. Ctrl + Z restores every byte, the selection, the overlay and the click (committed tolerances re-apply exactly as before the Delete); Ctrl + Y and Ctrl + Shift + Z redo exactly; two more cycles with the Undo button stay exact with fresh revisions. Also: three Deletes undone and redone one at a time, a new Delete clearing Redo, Add and Subtract context, the buttons (availability, names, focus kept in Chrome, a second click), held Delete, Delete and Ctrl + Z in the tolerance field, the no-op, failures of Delete and Undo (error message, nothing changed, dismissal, recovery), Delete and Redo unavailable while an image opens, and the confirmation for the picker, paste and drop (first and unedited images not asked, Cancel, Continue, Escape in Chrome, focus returning in Chrome, Delete / Ctrl + Z / a second image ignored while asking, a failed import after Continue keeping the edits, the replaced image's display image released, no question after undoing every edit). No page errors.
+- The same script against the development server (React Strict Mode), without the timings: 507 checks pass (Chrome 255, Firefox 252), with no React warnings or console errors in either browser.
+- `edit-ownership.mjs`: 52 checks pass (Chrome and Firefox, development with Strict Mode and production).
+- `smoke.mjs` (rendering, Phases 1–2): 340 checks pass, Chrome and Firefox, ratios 1 and 2, as in Step 5. `gpu-crash.mjs --kill-test-gpu-process`: 23 checks pass.
+- Not checked headless: Escape in the dialog and focus return in Firefox (headless Firefox has no window focus); real clipboard and drag-and-drop (synthetic events carrying files are used; Firefox's event constructors ignore the files given, so the script sets them on the event).
+
+Measurements (production build, headless, this machine; times are the whole synchronous handler, from the key press until the commit and its layout effects, including the canvas draw call; "creation" is the display image's `putImageData` plus `transferToImageBitmap`):
+
+| | Selected | Delete | Undo | Redo | Display image creation | History kept |
+| --- | --- | --- | --- | --- | --- | --- |
+| Chrome, 3840 × 2160 screenshot background | 7.27 M pixels | 98–131 ms | 61–64 ms | 44–51 ms | 13–15 ms | 937 KB |
+| Firefox, same | 7.27 M pixels | 89–105 ms | 69–86 ms | 50–55 ms | 22–37 ms (transfer 10–16) | 937 KB |
+| Chrome, 8660 × 5773 flat background | 27.96 M pixels | 509–634 ms | 232–242 ms | 311–326 ms | 77–86 ms | 197 KB |
+| Firefox, same | 27.96 M pixels | 464–482 ms | 308–323 ms | 265–317 ms | 138–170 ms (transfer 67–98) | 197 KB |
+
+- Drawing: Chrome defers the work (the draw call takes under 0.1 ms; the next frame starts 11–15 ms later at 4K and 31–41 ms later at 50 MP); Firefox's draw call takes 1–4 ms. The 4K entry is mostly the selection from before the Delete: the background around anti-aliased text is a complicated mask.
+- Memory (Chrome, JavaScript heap and ArrayBuffers after garbage collection): 36.1 MB with the 4K image open, 37.1 MB after each of 5 cycles; 195.2 MB with the 50 MP image open, 195.4 MB after each of 3 cycles: one image-sized buffer and the history, no growth. One live display image after every operation, in both browsers. Whole-browser resident memory (Linux, indicative only: caches and shared pages count): over 20 cycles at 4K, Chrome 1.49 GB at opening and 1.81–1.93 GB afterwards, Firefox 1.24 GB and 1.61–1.84 GB; over 5 cycles at 50 MP, Chrome levels at 2.63–2.67 GB and Firefox varies between 1.96 and 2.67 GB as garbage collection runs. No upward trend.
+
+Known limitations (Step 6):
+
+- Large images pause the page: near 50 MP a Delete takes about half a second and Undo or Redo about a quarter to a third of a second, with no progress indication, since the work is synchronous (P3-D11) and nothing is painted until it ends. At 4K and below everything stays near or under 0.1 s. See owner decision 1.
+- Exact deletion leaves anti-aliased edge pixels that the Magic Wand did not select (a faint outline around a deleted object at tolerance 20); removing them is the edge cleanup of Steps 7 and 8.
+- Delete Selection is offered whenever something is selected, even if every selected pixel is already transparent; pressing it then changes nothing and says so.
+- The display-image ownership argument relies on no editor action being dispatched in a React transition (see above). Nothing enforces this; `edit-ownership.mjs` shows what would go wrong.
+- The edited state is not shown anywhere (no "edited" marker), and closing or reloading the tab with unexported edits does not warn (only opening another image does).
+- Not verified headless: Escape and focus return in Firefox's dialog, the real clipboard and drag-and-drop, screen readers. WebKitGTK remains for desktop testing.
+
+Owner decisions (decisions 2–7 accepted with the Step 6 approval; decision 1 still awaiting review):
+
+1. Large images: keep Delete, Undo and Redo synchronous for now (P3-D11), or add a "Processing…" indication (which needs the work to start after a frame is painted) or a Worker. Recommendation: keep synchronous for Phase 3 and revisit in the Step 12 performance review; the history-patch and selection-encoding costs that dominate at 50 MP (Step 3 limitations) can be reduced first. (Awaiting review: not covered by the Step 6 approval. The implementation is synchronous in the meantime.)
+2. Unexported edits are counted from the opened image, so undoing every edit means nothing is unexported (no question), even with Redo history; Phase 6 will count from the last export. (Accepted.)
+3. The question appears after the image to open is chosen (picker), dropped or pasted, for all three alike, rather than before the file picker opens. (Accepted.)
+4. Delete, Undo and Redo are unavailable while another image is opening. (Accepted.)
+5. A Delete that would change nothing keeps the selection and is announced, not shown visibly. (Accepted.)
+6. Undo and Redo repeat while their keys are held; Delete never does. (Accepted.)
+7. The visible label "Delete Selection" (other actions use short labels such as "Clear"), so it is not confused with clearing the selection. (Accepted.)
+
+Manual QA results (owner, desktop): approved for a checkpoint commit with deferred testing. This is not a complete pass: 14 of the 23 checks were performed and passed, 9 were intentionally skipped, and none failed.
+
+- Passed (14): 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 17, 18.
+- Deferred, intentionally skipped (9): 12, 14, 15, 16, 19, 20, 21, 22, 23. They keep the numbers and descriptions below.
+- Failed: none reported.
+
+Deferred checks schedule: run the nine deferred checks after the next substantive coding round, preferably together with the Step 8 manual QA. Each must be completed or explicitly dispositioned by the owner (for example accepted as a known limitation, or moved to a later phase) before final Phase 3 sign-off and merge (Step 12).
+
+| Check | Description (summary; full text below) | Status |
+|---|---|---|
+| 12 | Steps 1, 3 and 4 with JPEG, WebP, SVG, soft-edged transparent PNG and a 1-pixel-line screenshot | Deferred |
+| 14 | Delete on an already-transparent selection changes nothing and keeps the selection | Deferred |
+| 15 | 4K and near-50 MP responsiveness of Delete, Undo and Redo | Deferred |
+| 16 | No question when there are no edits, or after every edit is undone (button, drop, paste) | Deferred |
+| 19 | While the dialog is open, other shortcuts, paste and drop do nothing; focus returns afterwards | Deferred |
+| 20 | Continue with an invalid file: error shown, edits and Undo history kept | Deferred |
+| 21 | Screen reader (Orca): announcements, Undo/Redo button names, dialog title and text | Deferred |
+| 22 | Window about 640 px wide: options row, header and dialog fit | Deferred |
+| 23 | Steps 1, 3, 9, 10 and 17 repeated in Firefox | Deferred |
+
+Manual QA checklist (owner, desktop; results above):
+
+1. Open a PNG with a solid background. Click the background with the Magic Wand, press Delete: the background becomes the checkerboard at once, the selection outline disappears, the status bar shows "No selection", and the view does not move.
+2. Look closely at the result at 400–800%: thin lines and small details next to the deleted area are unchanged; a faint anti-aliased outline may remain (expected until edge cleanup).
+3. Press Ctrl + Z: the background comes back exactly and the same selection reappears (marching ants). Press Ctrl + Y, then Ctrl + Z, then Ctrl + Shift + Z: the image alternates correctly every time.
+4. After Ctrl + Z, drag the tolerance slider and release it: the selection is re-applied from the original click exactly as before the Delete. Repeat with an Add (Shift + Click) and a Subtract (Ctrl + Click) selection.
+5. Delete three separate regions one after another; undo them one at a time (each selection returns), then redo all three.
+6. Undo once, make a new selection and Delete: Redo is no longer available.
+7. Use the Delete Selection button instead of the key, and the header's Undo and Redo buttons. Hover them: tooltips name the edit and the shortcut. Check that unavailable buttons look disabled, and that a double click on Delete Selection deletes only once.
+8. Keyboard only: Tab to Delete Selection and press Enter or Space; focus stays on the button. Tab to Undo and press Enter until nothing is left; focus stays on Undo.
+9. Hold Delete with a selection: one Delete only. Hold Ctrl + Z after several Deletes: they are undone one after another.
+10. Click in the tolerance number field, press Delete and Ctrl + Z: they edit the text only; the image does not change. Press Escape to restore the value.
+11. Hold Space and drag to pan, zoom with Ctrl + wheel, then Delete, Undo and Redo: the view stays where it is and the overlay stays aligned.
+12. Repeat steps 1, 3 and 4 with a JPEG, a WebP, a supported SVG, a PNG with transparency and soft (partially transparent) edges, and a screenshot with 1-pixel lines.
+13. Use Global mode to select disconnected areas of one colour and delete them together.
+14. Select an area that is already transparent and press Delete: nothing changes, the selection stays (a screen reader announces "Nothing was deleted…").
+15. A 4K image: Delete, Undo and Redo feel prompt. If practical, a large image near 50 megapixels: note how long each pause feels.
+16. With no edits, open another image (button, drag and drop, Ctrl + V): no question. After Undo of every edit: no question.
+17. After a Delete, open another image with the button: the dialog appears. Read the wording. Cancel: the edited image, its selection state and Undo history are unchanged. Repeat and press Escape: the same.
+18. Repeat step 17 with drag and drop and with Ctrl + V; then choose Continue: the new image opens, Undo is unavailable.
+19. While the dialog is open, press Delete, Ctrl + Z, Ctrl + O and Ctrl + V, and try dropping a file: nothing else happens and no second dialog appears. After closing the dialog, focus is back where it was.
+20. After a Delete, choose Continue for a file that is not a valid image: the error appears and the edited image and its Undo history are still there.
+21. With a screen reader (Orca on Linux): Delete, Undo and Redo are announced once each; the Undo and Redo buttons announce "Undo Delete Selection" / "Redo Delete Selection"; the dialog announces its title and text.
+22. Narrow the window to about 640 px: the options row wraps with Delete Selection as one unit, the header stays usable, the dialog fits.
+23. In Firefox as well as Chrome, repeat steps 1, 3, 9, 10 and 17 (Escape and focus return could not be checked in headless Firefox).
 
 ---
 

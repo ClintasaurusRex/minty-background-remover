@@ -28,11 +28,12 @@ import type { DocumentVersion, ImageDocument, PixelBuffer, Rectangle, SelectionM
  * Display images (canvas/displayImage.ts, ownership contract): each command creates the image for
  * its new revision synchronously, as its last step, so nothing can fail once it exists, and hands
  * it to the editor in its action. If anything fails before, the command returns a failure report
- * and nothing stays allocated. The commands never release images. One whose action the reducer
- * rejects is left to garbage collection until Step 6, where the code that dispatches the action
- * releases it once it is committed and not current (IMPLEMENTATION_PLAN.md, Phase 3 Step 5).
+ * and nothing stays allocated. The commands never release images: the code that dispatches the
+ * action releases one the committed state does not hold (app/editDispatch.ts).
  *
- * These are not connected to the application yet (Phase 3 Step 6).
+ * The application runs them through editCommands.ts (availability) and app/editDispatch.ts
+ * (dispatch and display-image release), from the Delete Selection, Undo and Redo controls and
+ * shortcuts (Phase 3 Step 6).
  */
 
 /**
@@ -47,6 +48,8 @@ interface CompletedEditBase {
   readonly version: DocumentVersion
   /** The selection the edit leaves (null for Delete, which clears it), the size of the edited image. */
   readonly selection: SelectionMask | null
+  /** How many pixels the edit changed, when the tool knows (Delete's count), for the announcement. */
+  readonly changedPixels?: number
 }
 
 /** An edit that keeps the image's size, such as Delete Selection. */
@@ -126,9 +129,10 @@ export function completedEditCommand(
       document: next,
       image,
       selection: edit.selection,
+      ...(edit.changedPixels === undefined ? {} : { changedPixels: edit.changedPixels }),
     }
   } catch (cause) {
-    return { type: 'edit-failed', error: { operation: edit.kind, detail: describe(cause) } }
+    return { type: 'edit-failed', error: { operation: edit.kind, detail: describeCause(cause) } }
   }
 }
 
@@ -158,7 +162,7 @@ export function undoCommand(state: EditorState, createImage: CreateDisplayImage 
     const image = createImage(restored.pixels)
     return { type: 'edit-undone', version, entry, document: restored, image, selection, magicWandOperation }
   } catch (cause) {
-    return { type: 'edit-failed', error: { operation: 'undo', detail: describe(cause) } }
+    return { type: 'edit-failed', error: { operation: 'undo', detail: describeCause(cause) } }
   }
 }
 
@@ -186,7 +190,7 @@ export function redoCommand(state: EditorState, createImage: CreateDisplayImage 
     const image = createImage(redone.pixels)
     return { type: 'edit-redone', version, entry, document: redone, image, selection }
   } catch (cause) {
-    return { type: 'edit-failed', error: { operation: 'redo', detail: describe(cause) } }
+    return { type: 'edit-failed', error: { operation: 'redo', detail: describeCause(cause) } }
   }
 }
 
@@ -214,6 +218,7 @@ function requireMaskSize(mask: SelectionMask | null, document: ImageDocument): v
   if (mask) requireSize(mask, document, 'A restored selection')
 }
 
-function describe(cause: unknown): string {
+/** A failure's cause as developer-facing text (EditError.detail). */
+export function describeCause(cause: unknown): string {
   return cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)
 }

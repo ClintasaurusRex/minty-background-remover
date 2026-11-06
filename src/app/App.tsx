@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import { AppHeader } from '../components/AppHeader/AppHeader'
+import { DiscardEditsDialog } from '../components/DiscardEditsDialog/DiscardEditsDialog'
 import { StatusBar } from '../components/StatusBar/StatusBar'
 import { ToolOptions } from '../components/Toolbar/ToolOptions'
 import { Toolbar } from '../components/Toolbar/Toolbar'
@@ -11,6 +12,7 @@ import {
   initialEditorState,
   isImporting,
 } from '../editor/editorState'
+import { availableEditActions, hasUnexportedEdits } from '../editor/editCommands'
 import type { PanGestureEffect } from '../editor/panGesture'
 import {
   type PointerPress,
@@ -23,23 +25,35 @@ import {
 } from '../editor/selectionCommands'
 import type { FloodMode, Point, SelectionMode, ToolId } from '../editor/types'
 import { createPointerPositionStore } from './pointerPosition'
+import { useEditCommands } from './useEditCommands'
 import { IMAGE_FILE_ACCEPT, useImageImport } from './useImageImport'
 import { useSelectionShortcuts } from './useSelectionShortcuts'
 import './App.css'
 
 function App() {
   const [state, dispatch] = useReducer(editorReducer, initialEditorState)
-  const { inputRef, openFilePicker, handleFileChange, openDroppedFiles } = useImageImport(dispatch)
   const viewport = displayViewport(state)
 
   // The latest committed state, for input handlers that compute from it (Magic Wand
-  // clicks, selection shortcuts) without being re-created on every change.
+  // clicks, selection and edit shortcuts) without being re-created on every change.
   const stateRef = useRef(state)
   useLayoutEffect(() => {
     stateRef.current = state
   })
+  // Read when an import is about to replace the open image (P3-D12).
+  const shouldConfirmReplace = useCallback(() => hasUnexportedEdits(stateRef.current), [])
+  const { inputRef, openFilePicker, handleFileChange, openDroppedFiles, question, answerQuestion, isConfirming } =
+    useImageImport(dispatch, shouldConfirmReplace)
   const [pointer] = useState(createPointerPositionStore)
-  useSelectionShortcuts(stateRef, dispatch)
+  // While the replace confirmation is open, keyboard shortcuts belong to it.
+  useSelectionShortcuts(stateRef, dispatch, isConfirming)
+  const runEditAction = useEditCommands(stateRef, dispatch, isConfirming)
+  const deleteSelection = useCallback(() => runEditAction('delete-selection'), [runEditAction])
+  const undo = useCallback(() => runEditAction('undo'), [runEditAction])
+  const redo = useCallback(() => runEditAction('redo'), [runEditAction])
+  const cancelReplace = useCallback(() => answerQuestion(false), [answerQuestion])
+  const continueReplace = useCallback(() => answerQuestion(true), [answerQuestion])
+  const editActions = availableEditActions(state)
 
   const handleResize = useCallback(
     (workspace: WorkspaceMetrics) => dispatch({ type: 'workspace-resized', workspace }),
@@ -47,6 +61,7 @@ function App() {
   )
   const dismissImportError = useCallback(() => dispatch({ type: 'import-error-dismissed' }), [])
   const dismissImportNotice = useCallback(() => dispatch({ type: 'import-notice-dismissed' }), [])
+  const dismissEditError = useCallback(() => dispatch({ type: 'edit-error-dismissed' }), [])
   const zoomWithWheel = useCallback(
     (anchor: Point, factor: number) => dispatch({ type: 'zoom-scaled', anchor, factor }),
     [],
@@ -100,16 +115,27 @@ function App() {
   }, [])
 
   // Developer detail (sizes, causes) is kept out of the UI but logged in development.
-  const { importError } = state
+  const { importError, editError } = state
   useEffect(() => {
     if (import.meta.env.DEV && importError?.detail) {
       console.warn(`Import failed (${importError.code}): ${importError.detail}`)
     }
   }, [importError])
+  useEffect(() => {
+    if (import.meta.env.DEV && editError?.detail) {
+      console.warn(`Edit failed (${editError.operation}): ${editError.detail}`)
+    }
+  }, [editError])
 
   return (
     <div className="app">
-      <AppHeader onOpenImage={openFilePicker} />
+      <AppHeader
+        onOpenImage={openFilePicker}
+        undo={editActions.undo}
+        redo={editActions.redo}
+        onUndo={undo}
+        onRedo={redo}
+      />
       <div className="app__toolbars">
         <Toolbar activeTool={state.activeTool} imageOpen={state.document !== null} onSelectTool={selectTool} />
         <ToolOptions
@@ -121,6 +147,8 @@ function App() {
           onToleranceChange={changeTolerance}
           onToleranceCommit={commitTolerance}
           onSelectionAction={runSelectionAction}
+          canDeleteSelection={editActions.deleteSelection}
+          onDeleteSelection={deleteSelection}
         />
       </div>
       <Workspace
@@ -132,8 +160,12 @@ function App() {
         importing={isImporting(state)}
         importError={state.importError}
         importNotice={state.importNotice}
+        editError={state.editError}
+        editNotice={state.editNotice}
+        editFeedbackId={state.editFeedbackId}
         onResize={handleResize}
         onDismissError={dismissImportError}
+        onDismissEditError={dismissEditError}
         onDismissNotice={dismissImportNotice}
         onDropFiles={openDroppedFiles}
         onOpenImage={openFilePicker}
@@ -164,6 +196,14 @@ function App() {
         tabIndex={-1}
         onChange={handleFileChange}
       />
+      {question && (
+        <DiscardEditsDialog
+          imageName={question.name}
+          source={question.source}
+          onCancel={cancelReplace}
+          onContinue={continueReplace}
+        />
+      )}
     </div>
   )
 }
