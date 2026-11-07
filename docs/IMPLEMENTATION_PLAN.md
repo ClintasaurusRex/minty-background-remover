@@ -318,7 +318,7 @@ Decisions approved by the project owner after review of the Phase 3 architecture
 - P3-D3: Delete needs a selection and clears it; Undo restores it.
 - P3-D4: Edge cleanup and feathering default to 0 px, to protect fine 2D technical graphics. Whether they run as part of Delete or as a separate action is decided with P3-D5. (Resolved after Step 7: both run as part of Delete Selection, one history entry, 0–5 px each, default 0.)
 - P3-D5: The cleanup algorithm stays undecided until the prototype comparison (Step 7). (Resolved: Candidate B, background-colour decontamination, approved by the owner after reviewing the Step 7 comparison; implemented in Step 8.)
-- P3-D6: Auto Trim uses alpha-based visible bounds and adjustable padding. The threshold, padding at the image edge, and the effect on the selection and the view are confirmed in Step 10.
+- P3-D6: Auto Trim uses alpha-based visible bounds and adjustable padding. The threshold, padding at the image edge, and the effect on the selection and the view are confirmed in Step 10. (Step 10 implemented the algorithm with a provisional threshold of 0, every alpha of 1 or more visible, and padding clipped at each image edge. Both still await owner confirmation; the selection and view after Auto Trim belong to the Step 11 integration and are still open. See Step 10.)
 - P3-D7: Undo / Redo covers image edits, not individual selection changes.
 - P3-D8: History limits: 25 entries and 256 MB, always keeping the newest entry even if it alone exceeds the budget.
 - P3-D9: Shortcuts: Delete, Ctrl + Z, Ctrl + Y and Ctrl + Shift + Z.
@@ -337,8 +337,8 @@ Phase 3 is implemented in twelve reviewed steps, each stopping for review:
 6. Delete Selection, Undo and Redo (first manual checkpoint). Approved for checkpoint commit with outstanding manual QA: 14 of 23 checks passed, 9 deferred (see Step 6).
 7. Edge cleanup prototype and visual comparison (owner decision P3-D5). Done; Candidate B approved.
 8. Edge cleanup and feathering. Its manual QA also runs the nine deferred Step 6 checks. Implemented; awaiting owner manual QA.
-9. Re-apply the last Delete when cleanup or feathering changes. Implemented; awaiting owner review (Step 8 manual QA still outstanding).
-10. Auto Trim algorithm.
+9. Re-apply the last Delete when cleanup or feathering changes. Provisionally approved and committed as a checkpoint; its manual QA, like Step 8's, is still outstanding.
+10. Auto Trim algorithm. Implemented; awaiting owner review (not connected to the application).
 11. Auto Trim tool (second manual checkpoint).
 12. Final quality assurance, performance, memory and Phase 3 readiness. Revisits Step 6 owner decision 1 (synchronous Delete, Undo and Redo on large images). Phase 3 sign-off and merge require every deferred Step 6 check to be completed or explicitly dispositioned.
 
@@ -939,7 +939,7 @@ Carried forward from Step 6 (still deferred; the owner decides each before Phase
 | 22 | Window about 640 px wide | The options row wraps with Delete Selection (and now each amount control) as one unit; the header stays usable; the dialog fits | — |
 | 23 | In Firefox as well as Chrome, repeat Step 6 checks 1, 3, 9, 10 and 17 | All behave as in Chrome, including Escape and focus return in the dialog | Not checkable in headless Firefox |
 
-#### Step 9: Re-applying the Last Delete When Edge Settings Change (provisionally approved; review correction implemented, awaiting checkpoint)
+#### Step 9: Re-applying the Last Delete When Edge Settings Change (provisionally approved; committed as a checkpoint; manual QA outstanding)
 
 Right after a Delete, a finished change of Edge cleanup or Feather updates that Delete instead of only setting the next one: the Delete is made again, from the image as it was before it and the selection it deleted, with the amounts now set. It stays one edit with one Undo step. Step 8's algorithms, its synchronous processing and its session-wide amounts are unchanged; Step 8's manual QA, including the nine deferred Step 6 checks, is still outstanding and is not affected by this step's own checklist below.
 
@@ -1073,6 +1073,192 @@ Manual QA checklist (owner, desktop, Chrome and Firefox). Not yet run: none is m
 | 9.15 Redo with other amounts shown | `edge-hmi.png`: Edge cleanup 1, Feather 0; click the background, Delete; Ctrl + Z; set Edge cleanup 3 and Feather 2 (the selection is back: only the next Delete); Ctrl + Y. Then keyboard only: Tab from Shrink through both sliders and fields to Delete Selection and Shift + Tab back; in a field type the same number and Enter; type another and Escape; on a slider press Right and Left together and release | The image never changes (the Delete stays at 1 / 0) and nothing is announced. Then change Feather to 0 and Enter: the Delete updates once, to 3 / 0 |
 | 9.16 Status bar note | After 9.1, click the image to select; then Escape; then Ctrl + Z, Ctrl + Y; narrow the window below 800 px | The note disappears on selecting and stays away after Escape; it is back after Ctrl + Y; below 800 px it is hidden and the toolbar and status bar do not change height |
 | 9.14 Real assets | Your VTScada screenshots: Delete at 0 / 0, then try Edge cleanup 1–2 and Feather 1 | Easier tuning than Undo and Delete; note anything surprising |
+
+#### Step 10: Auto Trim Algorithm (implemented; awaiting owner review)
+
+The Auto Trim algorithm as pure functions, tested on their own. Nothing in the application calls them yet: the Auto Trim tool, its padding controls, Trim Tight, its edit, Undo / Redo integration in the editor, the selection and view after a trim, and its messages are Step 11. The manual QA of Steps 8 and 9 (with the nine deferred Step 6 checks) is still outstanding and is not affected: no existing module changed.
+
+Modules:
+
+```text
+src/image/trim/
+├── autoTrim.ts              findVisibleBounds, planAutoTrim, autoTrimPixels, validatePadding,
+│                            validateAlphaThreshold; DEFAULT_ALPHA_THRESHOLD (0), MAX_ALPHA_THRESHOLD (254)
+├── autoTrim.test.ts         bounds, padding, crops, every edge case, random properties, read counts,
+│                            4K to 50 MP and the widest and tallest images allowed
+└── autoTrimHistory.test.ts  Auto Trim results through the existing crop patches, history commands and reducer
+```
+
+No other source file changed, and no dependency was added or removed. The trimmed pixels come from the existing `cropPixels` (`editor/history/cropPatch.ts`, Step 3), the function the history's Redo uses, so there is one crop in the code base.
+
+API (all three validate their input before reading any pixel, throwing a RangeError, and never write it):
+
+| Function | Returns |
+| --- | --- |
+| `findVisibleBounds(pixels, alphaThreshold = 0)` | The smallest rectangle containing every pixel whose alpha is above the threshold, or null when there is none |
+| `planAutoTrim(pixels, { padding, alphaThreshold? })` | `{ kind: 'nothing-visible' }`, `{ kind: 'unchanged', visible }` or `{ kind: 'crop', visible, kept }`; reads alpha only and allocates nothing proportional to the image |
+| `autoTrimPixels(pixels, options)` | The same, with the trimmed image (`pixels`) added to a crop |
+
+Visibility (P3-D6; provisional, awaiting owner confirmation):
+
+- A pixel is visible when its alpha is above the threshold. The threshold is 0 unless one is given, so every pixel with alpha 1 or more is content, however faint: anti-aliased edges, 1-pixel lines, feathered edges and soft shadows are kept whole.
+- Only alpha bytes are read (the tests count every read: no colour byte is ever read), so colour hidden under alpha 0 by Delete (P3-D2) is never mistaken for content, whatever it is.
+- The pure functions accept a threshold from 0 to 254 (254: only fully opaque pixels count). The application will pass none unless the owner decides otherwise. A threshold above 0 can remove visible content: a faint pixel outside the content found is cut off with the border. The measurements below quantify this.
+- Isolated pixels count like any other. One faint speck far from the content, even at alpha 1, keeps that side from being trimmed. A threshold would help here (two alpha 1–2 specks near the corners: nothing trimmed beyond them at 0, both cut at 2), which is the case for considering one.
+- Transparent holes inside the content make no difference: only the outermost visible pixel on each side counts.
+
+Padding:
+
+- Up to `padding` pixels of the image are kept around the visible bounds on each side, each side clipped at the image's edge on its own. Content touching the left edge keeps no padding on the left and the full padding elsewhere, so the padding of a result can be uneven.
+- The image is never enlarged and no pixel is invented: the result is always a rectangle of the original. This follows FEATURE_SPEC ("the canvas is then reduced to those bounds plus padding") and the brief's "remove unnecessary transparent space"; a crop patch also cannot record added pixels.
+- Any whole number of 0 or more is accepted; a padding larger than the space available keeps everything on that side. The algorithm has no default: the default of 5 px, the presets 0, 5, 10, 20 and Custom, and Trim Tight at 0 (PROJECT_BRIEF, FEATURE_SPEC §10, UI_UX_SPEC) are Step 11, as is the range allowed for Custom.
+
+Nothing to do (no-op contract):
+
+- `nothing-visible`: no pixel is above the threshold. This covers a fully transparent image of any size, including 1 × 1, whatever colour is hidden in it. No rectangle is returned at all, so no zero-size document can come from Auto Trim. Step 11 is to say there is nothing visible to trim (IMAGE_PROCESSING_SPEC) and change nothing.
+- `unchanged`: the kept rectangle would be the whole image. This happens when the content with its padding reaches every edge: a fully opaque image, content at all four edges, or an image already trimmed with this padding or more. `visible` is returned, but no crop is made and nothing is allocated.
+- Trimming is idempotent and composes. Trimming a result again with the same or a larger padding is `unchanged`; with a smaller padding it gives exactly what trimming the original with that padding gives (random images, byte for byte).
+- Even if the whole image were passed on as a crop, `completedEditCommand` returns null (no entry, revision or display image): no meaningless edit can be recorded.
+
+The crop:
+
+- `kept` is in whole pixels, within the image, at least 1 × 1, smaller than the image in at least one direction, and contains `visible`. `kept.x` and `kept.y` are where the trimmed image's top-left pixel was.
+- `autoTrimPixels` copies exactly the kept rectangle, row by row, into new memory of exactly `kept.width × kept.height × 4` bytes. Every byte is unchanged, including colour hidden in transparent pixels that are kept (holes, padding). Nothing is resampled, smoothed, recoloured, scaled or moved by less than a pixel. The source is never written (the tests compare every byte; at 50 MP a fingerprint of the whole image).
+
+Reading the pixels:
+
+- Rows are read from the top until the first visible pixel and from the bottom until the last. Then each row in between is read only to the left and to the right of the columns found so far. Pixels inside the bounds found are never read.
+- Each pixel is read at most once, apart from at most two per row. The tests count reads: at most width × height + 2 × height, never a colour byte.
+- A fully transparent image must be read entirely, which is the worst case. A fully opaque one takes 3 reads, and the 200 by 120 test image with a transparent border reads exactly its border plus 3.
+- Reading bytes measured faster than reading 32-bit words (40 against 46 ms for a transparent 50 MP image, median of 7 runs in a separate comparison). A plain scan of every pixel took 53–74 ms at 50 MP whatever the content.
+
+History compatibility (for Step 11; demonstrated in tests, not connected):
+
+- A `crop` plan's `kept` is all an Auto Trim edit needs: `{ kind: 'auto-trim', change: 'crop', version, kept, selection }` is the existing `CompletedCrop`.
+- `completedEditCommand` then records the crop patch: the original size, the kept rectangle, and every removed pixel, hidden colour included. It also makes the trimmed pixels with the same `cropPixels`, a new revision and its display image. Undo is `restoreCroppedPixels` and Redo is `cropPixels`.
+- `autoTrimHistory.test.ts` drives the real commands and reducer through these cases:
+  - A trim, then Undo and Redo three times: the original size and every byte back after each Undo (removed pixels and their hidden colours, each pixel's hidden colour distinct), the trim byte for byte after each Redo, a new revision every time.
+  - A real Magic Wand click, Delete with Edge cleanup 1 and Feather 1, then Auto Trim: two Undos give the opened pixels exactly, the selection and the click (re-appliable, bound to the new version); two Redos give the trim.
+  - A Delete of a photograph's surroundings (varied hidden colour), a trim, then two Undos: the original exactly.
+  - 4K images with a border of transparent black or one hidden colour: under 4 KB retained.
+  - Random trims, also two in a row, all undone and redone.
+- Why the removed hidden colour must be kept: an earlier Delete's patch restores colour by flipping alpha only. If a trim's patch stored transparent black instead, undoing the trim and then the Delete would show wrong colours. This is what makes a trim of a deleted photographic background expensive to record (limitations below).
+- After an Auto Trim, Step 9's adjustable Delete no longer applies: `adjustableAfter` gives null for an `auto-trim` entry, and the Delete is no longer the next Undo.
+
+Tests: 43 added (1,152 in total, 65 files).
+
+- `autoTrim.test.ts` (37). Bounds:
+  - a single pixel at every position, alpha 1 counted, hidden colour never counted or read, transparent images of every shape;
+  - opaque images, frames and edge midpoints;
+  - 1-pixel lines along every row and column, islands whose extremes lie in middle rows;
+  - content at each edge, holes, soft anti-aliased edges;
+  - every threshold boundary, 16,384 × 1 and 1 × 16,384;
+  - 600 random images and thresholds against a per-pixel reference, read counts, input never written, invalid input.
+
+  Planning:
+  - padding on each side, clipping at each edge on its own, content touching one side;
+  - no removable border, nothing visible, all four sides at once;
+  - 600 random cases checking exact geometry, what a threshold cuts, idempotence and composition (300 random cases), invalid padding and thresholds rejected before any read.
+
+  Cropping:
+  - every byte with hidden colour, every visible pixel at its place (400 random cases), new memory of exact size, one crop and none for no-ops, 1 × 1 results;
+  - thin lines, a hairline and single pixels after Delete with four edge settings;
+  - the eight Step 7 / 8 scenes after Magic Wand and Delete at five edge settings and two paddings.
+
+  Large images:
+  - 50 MP with a deleted background, a faint pixel and a 1-pixel line at the extremes;
+  - transparent, opaque and two-corner-pixel 50 MP images;
+  - 16,384 × 3,051 and 3,051 × 16,384.
+- `autoTrimHistory.test.ts` (6): the cases above.
+- Mutation testing: 25 deliberately introduced defects in `autoTrim.ts` were each caught. They covered threshold off by one, colour bytes read, unclipped or off-by-one padding on each side, off-by-one bounds, the middle, bottom and top row logic, early exits, the no-op checks, validation, the default and the cropped rectangle.
+- Three temporary defects in the crop history path (`cropPatch.ts`) were also caught by the new tests alone: Undo dropping hidden colour, a crop shifted by a column, and Undo misplacing rows. Every file was restored and checked identical.
+- Two of the first defects made the test runner crash instead of failing, because a failing 50 MP assertion printed a result holding the image. Those assertions now compare summaries, and the same defects fail cleanly.
+
+Measurements (Node 24, x64, i7-14700HX; median of 5–21 runs in one process; padding 5; every transparent pixel hides a colour; the browser timings come with the tool in Step 11):
+
+| Image | Content | Visible bounds | Plain scan (reference) | `autoTrimPixels` | Result | Crop patch (the edit) | Patch | Undo | Redo |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 64 × 64 | Object | 0.01 ms | 0.02 ms | 0.01 ms | 44 × 44 | 0.02 ms | 8 B | 0.02 ms | 0.01 ms |
+| 256 × 256 | Object | 0.06 ms | 0.08 ms | 0.08 ms | 140 × 140 | 0.06 ms | 8 B | 0.1 ms | 0.03 ms |
+| 1920 × 1080 | Object | 0.9 ms | 2.4 ms | 1.6 ms | 972 × 552 | 1.9 ms | 8 B | 0.9 ms | 0.2 ms |
+| 3840 × 2160 | Object | 3.7 ms | 9.4 ms | 4.8 ms | 1932 × 1092 | 11 ms | 8 B | 10 ms | 1.7 ms |
+| | HMI | 1.0 ms | 12 ms | 11 ms | 3466 × 1954 | 2.8 ms | 8 B | 4.9 ms | 4.0 ms |
+| | Sparse | 3.7 ms | 8.9 ms | 4.9 ms | 1899 × 1084 | 11 ms | 8 B | 4.2 ms | 1.1 ms |
+| | Transparent | 4.8 ms | 8.9 ms | 4.8 ms | Nothing visible | | | | |
+| | Opaque | 0.00 ms | 11 ms | 0.00 ms | Unchanged | | | | |
+| | Deleted photo | 3.7 ms | 9.5 ms | 4.8 ms | 1932 × 1092 | 52 ms | 23.6 MB | 5.0 ms | 1.4 ms |
+| 8660 × 5773 (50 MP) | Object | 22 ms | 57 ms | 41 ms | 4342 × 2899 | 65 ms | 8 B | 60 ms | 19 ms |
+| | HMI | 6.2 ms | 74 ms | 66 ms | 7804 × 5207 | 17 ms | 8 B | 72 ms | 60 ms |
+| | Sparse | 22 ms | 53 ms | 41 ms | 4268 × 2880 | 65 ms | 8 B | 60 ms | 18 ms |
+| | Two corner pixels | 0.05 ms | 53 ms | 0.05 ms | Unchanged | | | | |
+| | Transparent | 29 ms | 53 ms | 32 ms | Nothing visible | | | | |
+| | Opaque | 0.00 ms | 66 ms | 0.00 ms | Unchanged | | | | |
+| | Deleted photo | 22 ms | 57 ms | 41 ms | 4342 × 2899 | 339 ms | 142.7 MB | 74 ms | 19 ms |
+| 16384 × 3051 | Object | 22 ms | 57 ms | 40 ms | 8204 × 1539 | 61 ms | 8 B | 60 ms | 19 ms |
+| | Transparent | 29 ms | 53 ms | 29 ms | Nothing visible | | | | |
+| 3051 × 16384 | Object | 23 ms | 57 ms | 43 ms | 1539 × 8204 | 62 ms | 8 B | 61 ms | 20 ms |
+| | Transparent | 29 ms | 53 ms | 29 ms | Nothing visible | | | | |
+
+The content kinds:
+
+- Object: a dense opaque block over the middle quarter, ringed by a 1-pixel line at alpha 1, on a background deleted to one hidden colour.
+- HMI: shapes and 1-pixel lines filling the image to within 5% of each edge.
+- Sparse: 200 isolated pixels of random alpha over the middle half.
+- Deleted photo: the object on a background whose every pixel hides a different colour.
+
+In a new process, before the JavaScript engine has optimised the code, the first call takes longer:
+
+- Planning a 50 MP image takes 40–54 ms, and `autoTrimPixels` 60–75 ms.
+- The whole computation of a Step 11 edit (plan, patch, crop) takes 25 ms at 4K and 138 ms at 50 MP on a flat background, and 70 ms and 426 ms after a deleted photo background.
+- The browser adds the display image: 13–26 ms at 4K and 77–138 ms at 50 MP (Step 4).
+
+Memory (Node, resident high-water mark above the open image, each case in its own process):
+
+| Case | Peak | Kept |
+| --- | --- | --- |
+| Visible bounds or plan, 4K or 50 MP, any content | 3 MB, the same at both sizes: nothing proportional to the image | 3 MB |
+| `autoTrimPixels`, 50 MP object (48 MB result) / HMI (155 MB result) | 51 / 156 MB | 51 / 156 MB |
+| Edit computation, flat background: 4K / 50 MP | 11 / 51 MB | 11 / 51 MB |
+| Edit computation, deleted photo background: 4K / 50 MP | 58 / 339 MB | 41 / 196 MB (result and patch) |
+| Undo, 50 MP | 191 MB (the restored image) | 191 MB |
+| Redo, 50 MP object | 48 MB | 48 MB |
+
+Threshold study: what an alpha threshold would cut. The table counts visible pixels outside the kept rectangle, at padding 0 / padding 5, with the highest alpha cut. The images are the Step 7 / 8 scenes and the thin-line scene after Magic Wand and Delete at 0 / 0, 1 / 0, 0 / 3 and 5 / 5, plus two transparent PNG cases:
+
+| Image | Threshold 0 | 1–16 | 32 | 64 |
+| --- | --- | --- | --- | --- |
+| Nine Delete results × four edge settings | Nothing | Nothing | Up to 48 outermost feathered pixels (alpha ≤ 26) at padding 0; none at 5 | Up to 48 (alpha ≤ 43) at 0; none at 5 |
+| An icon with a soft drop shadow | Nothing | 48 (at 1) to 488 (at 16) shadow pixels at 0; none at 5 | 800 / 128 | 1,355 / 496 |
+| Content with alpha 1 and 2 specks near two corners | Nothing cut; trimmed only to the specks | Specks cut (one at 1, both from 2); trimmed to the content | As 2 | As 2 |
+
+Known limitations (Step 10):
+
+- History size of a trim after deleting a photographic background. The removed pixels' hidden colours are stored exactly (4 bytes per removed pixel): 143 MB for a 50 MP image trimmed to a quarter. Creating it peaks at 339 MB and takes 0.34–0.43 s. Exact Undo needs it (above). It fits the 256 MiB budget, but drops older entries. Flat, transparent and single-colour backgrounds cost a few bytes.
+- At threshold 0, a single faint stray pixel blocks trimming on its side, and Auto Trim cannot tell it from content.
+- Clipped padding can leave a result's padding uneven, and there is no way to add transparent space beyond the image.
+- Measured in Node only; browser timings, the display image and the whole edit's time come with Step 11.
+- `cropPixels` stays in `editor/history/cropPatch.ts`, so `image/trim/autoTrim.ts` is the first application module under `image/` to import from `editor/history/`. Moving it to `image/` would be a separate refactor; it was not done.
+
+Owner decisions before Step 11:
+
+1. Visibility threshold: keep 0 (recommended: nothing visible is ever cut; the study shows thresholds up to 16 change nothing on Delete results, but cut soft shadows), or offer a threshold, and if so where and how it is described.
+2. Padding at the image's edges: clip each side (implemented and recommended), or extend the image with transparent pixels to give full padding (a new kind of edit, larger than Step 11).
+3. Padding presets and default: the brief already gives 5 px by default, presets 0, 5, 10, 20 and Custom, and Trim Tight at 0. Still open: the range allowed for Custom, and whether the last padding is remembered for the session (ARCHITECTURE, Persistence, lists "Last Auto Trim padding").
+4. Selection after Auto Trim (P3-D6): cleared, as for crops in IMAGE_PROCESSING_SPEC, or cropped to the kept rectangle. Undo restores the selection from before the trim either way.
+5. View after Auto Trim (P3-D6): the provisional crop behaviour from Step 5 (zoom kept, the kept pixels stay where they were on screen, kept reachable) or Fit.
+6. Messages: wording for nothing visible, nothing to trim, and the trim itself. `editFeedback.ts` already has "Auto Trim applied." and "Auto Trim changed nothing." from Step 6.
+7. The history cost of trimming a deleted photographic background near 50 MP (about 143 MB): accept, or add a warning.
+8. Whether Auto Trim shows the kept rectangle before applying it (UI_UX_SPEC: "Where practical, the user should see changes before permanently applying them"). This would also reveal a stray pixel that blocks trimming.
+
+Step 11 integration notes (not decisions):
+
+- The command should call `planAutoTrim` and pass `plan.kept` to `completedEditCommand`, which crops once. `autoTrimPixels` would crop a second time; it is for callers that need the pixels themselves.
+- A plan is computed from one document version and is only valid for it, like every other edit (the version tag already guarantees this).
+- These belong to Step 11:
+  - the tool's place (the toolbar's `auto-trim` tool exists but is unavailable), its options row, Trim and Trim Tight;
+  - shortcuts and availability (no image, an import in progress);
+  - focus after trimming and announcements;
+  - the selection and view (decisions 4 and 5), and browser timings and manual QA.
 
 ---
 

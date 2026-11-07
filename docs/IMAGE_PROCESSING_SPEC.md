@@ -588,11 +588,45 @@ The chosen threshold must be documented and tested.
 
 Approved for Phase 3 (P3-D6): visible bounds come from alpha alone, with adjustable padding. The threshold value is fixed and tested in Phase 3 Step 10 (recommendation: alpha > 0, so faint anti-aliasing is never cut off).
 
+Phase 3 Step 10 (provisional, awaiting owner confirmation of P3-D6): the threshold is 0, so every pixel with alpha 1 or more is visible. The pure functions also accept a whole-number threshold from 0 to 254, which nothing in the application passes.
+
+- Above 0, a threshold can cut off visible content. Faint pixels outside the content found (soft shadows, the outermost feathered edge pixels) are removed with the border.
+- A threshold helps only against faint stray specks, which at 0 stop that side from being trimmed.
+- Measured: thresholds up to 16 cut nothing from Magic Wand and Delete results at any edge setting; threshold 1 already cuts the rim of a soft drop shadow.
+
+Only alpha is read: colour hidden under alpha 0 (Delete Selection, P3-D2) is never content.
+
 ### Fully Transparent Image
 
 If no visible pixels are found, Auto Trim must not create invalid dimensions.
 
 The UI should inform the user that there is nothing visible to trim.
+
+Phase 3 Step 10: such an image gives the result `nothing-visible`, with no rectangle at all, so no image of zero size can be made. An image whose content with its padding already reaches every edge, for example one already trimmed with that padding, gives `unchanged`. Neither is an edit.
+
+### Implementation (Phase 3 Step 10)
+
+`image/trim/autoTrim.ts`, pure and synchronous like the other pixel algorithms. Nothing in the application calls it yet; the tool is Phase 3 Step 11.
+
+- `findVisibleBounds(pixels, alphaThreshold = 0)`: the smallest rectangle containing every visible pixel, or null.
+  - It reads rows from the top and from the bottom until the first visible pixel, then each row in between only outside the columns found so far.
+  - Pixels inside the content are never read, and each pixel is read at most once (apart from two per row).
+  - A fully transparent image must be read entirely, which is the worst case: about 30 ms at 50 MP in Node. A fully opaque one takes 3 reads.
+- `planAutoTrim(pixels, { padding, alphaThreshold? })`: `nothing-visible`, `unchanged` (with the visible bounds), or `crop` with the visible bounds and the rectangle to keep.
+  - Padding is a whole number of pixels, 0 or more, kept around the visible bounds on each side where the image has them.
+  - Each side is clipped at the image's edge on its own: the image is never enlarged and no pixel is invented, so the padding of a result can be uneven.
+  - The default (5 px) and presets belong to the tool.
+- `autoTrimPixels(pixels, options)`: the plan, with the trimmed image for a crop.
+  - The image is cut at whole pixels from the original by `cropPixels` (`editor/history/cropPatch.ts`, the crop the history's Redo uses), into new memory of exactly the kept size.
+  - Every byte is unchanged, including colour hidden in kept transparent pixels. Nothing is resampled, recoloured or scaled.
+- The input is validated before any pixel is read (RangeError), and never written. Planning allocates nothing proportional to the image.
+
+For history, a `crop` plan's kept rectangle is what an Auto Trim edit records (`CompletedCrop.kept`): a crop patch with the original size, the kept rectangle and every removed pixel (see History / Undo).
+
+- The removed pixels' hidden colour must be kept exactly. An earlier Delete's patch restores colour by flipping alpha only, so undoing a trim and then that Delete would otherwise show wrong colours.
+- A removed border of transparent black or one hidden colour therefore costs a few bytes. A deleted photographic background costs 4 bytes per removed pixel: about 143 MB for a 50 MP image trimmed to a quarter of its area.
+
+Measurements, tests and the threshold study: `IMPLEMENTATION_PLAN.md`, Phase 3 Step 10.
 
 ---
 

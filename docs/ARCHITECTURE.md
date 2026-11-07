@@ -389,7 +389,21 @@ scripts/browser/edge-adjust.mjs      drags, held keys, typing, exact results aga
 - The controls commit only actual changes (review correction): `finishAdjustment` compares a finished adjustment with the amount its interaction started from (focus, slider press, previous adjustment), kept per control in a ref; an unchanged finish only sets the amount (`edge-settings-changed`). `App` computes `adjustableDelete` once per render for the controls' tooltips and the status bar's `LastDeleteNote`.
 - Committing an amount dispatches `edge-settings-changed` (always) and, unless the replace confirmation is open, the adjustment computed from the committed state with the full new amounts, inside `flushSync` like every edit. React 19 renders the queued amount change and the adjustment in order in that pass. The edit depth does not change.
 
-Planned for later steps (subject to review at each step): `image/trim/autoTrim.ts` and its tool.
+Step 10 (Auto Trim algorithm; not yet called by the application):
+
+```text
+src/image/trim/
+└── autoTrim.ts   findVisibleBounds (alpha above a threshold, 0 by default; reads alpha bytes only,
+                  never the content's inside), planAutoTrim ('nothing-visible' | 'unchanged' |
+                  'crop' with the visible and kept rectangles; padding clipped at each edge),
+                  autoTrimPixels (the plan plus the trimmed image, cut by cropPixels)
+```
+
+- Pure like the other pixel algorithms: `PixelBuffer` in, plain data or a new `PixelBuffer` out. Planning allocates nothing proportional to the image; only a crop allocates, exactly the kept size. The input is never written.
+- The trimmed pixels come from `cropPixels` in `editor/history/cropPatch.ts`, so the edit, its Undo (`restoreCroppedPixels`) and its Redo (`cropPixels`) share one crop. It is the first module under `image/` to import from `editor/history/`; moving `cropPixels` to `image/` would be a separate refactor.
+- A `crop` plan's `kept` rectangle is what the existing `CompletedCrop` takes, so Step 11 needs no new history type. `completedEditCommand` records the crop patch, makes the trimmed pixels, a new revision and its display image. The reducer, version binding, limits and display-image ownership are unchanged. A whole-image rectangle records nothing (`createCropPatch` returns null). `autoTrimHistory.test.ts` shows the round trips through the real commands and reducer.
+
+Planned for later steps (subject to review at each step): the Auto Trim tool (Step 11).
 
 Key rules:
 

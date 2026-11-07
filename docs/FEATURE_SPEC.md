@@ -388,6 +388,16 @@ for visible content.
 
 The canvas is then reduced to those bounds plus padding.
 
+Algorithm implemented in Phase 3 Step 10, not yet available in the application (the tool is Step 11). The threshold and the edge behaviour below are provisional until the owner confirms P3-D6:
+
+- Visible means alpha of 1 or more (threshold 0), so faint anti-aliasing, feathered edges, 1-pixel lines and soft shadows are never cut off. Colour hidden under fully transparent pixels by Delete never counts.
+- One faint stray pixel far from the content therefore keeps that side from being trimmed.
+- Padding keeps up to that many pixels of the image on each side, each side stopping at the image's edge. Auto Trim never makes the image larger and never adds pixels: content touching an edge gets no padding on that side.
+- Every kept pixel stays exactly as it was. Nothing is resampled, blurred, recoloured or scaled.
+- A fully transparent image has nothing visible to trim. An image whose content with its padding already reaches every edge (for example one already trimmed) has nothing to trim. Neither changes the image or adds an Undo step.
+- An Auto Trim is one Undo step. Undo restores the original size and every pixel exactly; Redo trims again.
+- Still open for Step 11: whether a threshold is ever offered, the range for custom padding, and the selection and view after a trim.
+
 ### Padding
 
 Required options:
