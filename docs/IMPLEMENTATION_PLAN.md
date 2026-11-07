@@ -316,8 +316,8 @@ Decisions approved by the project owner after review of the Phase 3 architecture
 - P3-D1: Copy-on-write pixel buffers. An edit writes a copy and becomes a new document revision; buffers are never written once they belong to a document.
 - P3-D2: Delete sets alpha to 0 and keeps the RGB values internally, hidden, for compact Undo. Hidden colour never becomes visible again, and export (Phase 6) writes fully transparent pixels as 0, 0, 0, 0.
 - P3-D3: Delete needs a selection and clears it; Undo restores it.
-- P3-D4: Edge cleanup and feathering default to 0 px, to protect fine 2D technical graphics. Whether they run as part of Delete or as a separate action is decided with P3-D5.
-- P3-D5: The cleanup algorithm stays undecided until the prototype comparison (Step 7).
+- P3-D4: Edge cleanup and feathering default to 0 px, to protect fine 2D technical graphics. Whether they run as part of Delete or as a separate action is decided with P3-D5. (Resolved after Step 7: both run as part of Delete Selection, one history entry, 0–5 px each, default 0.)
+- P3-D5: The cleanup algorithm stays undecided until the prototype comparison (Step 7). (Resolved: Candidate B, background-colour decontamination, approved by the owner after reviewing the Step 7 comparison; implemented in Step 8.)
 - P3-D6: Auto Trim uses alpha-based visible bounds and adjustable padding. The threshold, padding at the image edge, and the effect on the selection and the view are confirmed in Step 10.
 - P3-D7: Undo / Redo covers image edits, not individual selection changes.
 - P3-D8: History limits: 25 entries and 256 MB, always keeping the newest entry even if it alone exceeds the budget.
@@ -335,8 +335,8 @@ Phase 3 is implemented in twelve reviewed steps, each stopping for review:
 4. Display image for edited pixels and render invalidation (verifies P3-D10). Done.
 5. Edit history in the editor state. Done; approved.
 6. Delete Selection, Undo and Redo (first manual checkpoint). Approved for checkpoint commit with outstanding manual QA: 14 of 23 checks passed, 9 deferred (see Step 6).
-7. Edge cleanup prototype and visual comparison (owner decision P3-D5).
-8. Edge cleanup and feathering. Its manual QA also runs the nine deferred Step 6 checks.
+7. Edge cleanup prototype and visual comparison (owner decision P3-D5). Done; Candidate B approved.
+8. Edge cleanup and feathering. Its manual QA also runs the nine deferred Step 6 checks. Implemented; awaiting owner manual QA.
 9. Optional, depending on P3-D4 and P3-D5: re-apply the last Delete when cleanup or feathering changes.
 10. Auto Trim algorithm.
 11. Auto Trim tool (second manual checkpoint).
@@ -801,6 +801,143 @@ Manual QA checklist (owner, desktop; results above):
 21. With a screen reader (Orca on Linux): Delete, Undo and Redo are announced once each; the Undo and Redo buttons announce "Undo Delete Selection" / "Redo Delete Selection"; the dialog announces its title and text.
 22. Narrow the window to about 640 px: the options row wraps with Delete Selection as one unit, the header stays usable, the dialog fits.
 23. In Firefox as well as Chrome, repeat steps 1, 3, 9, 10 and 17 (Escape and focus return could not be checked in headless Firefox).
+
+#### Step 7: Edge Cleanup Prototype and Comparison (done; Candidate B approved)
+
+An investigation outside the repository (nothing in the application changed). Three candidates were prototyped on 14 fixtures, 13 with exact ground truth (an icon on white, an anti-aliased logo on colour, 1-pixel lines, an HMI pump graphic, text and sharp corners, a JPEG photo, a gradient background, a partially transparent PNG, a rasterised SVG, shapes touching the border, sub-pixel text, hard-edged art, an HMI JPEG and a soft-focus photo), and compared on a local page and with quantitative measures (worst-case composite error over any background, thin-line survival, corners, border, timing and memory at 4K and 50 MP):
+
+- A, conservative fringe removal (alpha only, all or nothing, with a topology guard); B, background-colour decontamination; H, a crisp hybrid of both; plus inward feathering, plain and with thin features protected.
+- B was the only one to improve every fixture with a fringe (mean edge error 11.88 → 6.89 at 1 px over the 13 fixtures) while keeping all 14 test lines and their faint anti-aliasing, the image border and hard-edged art; antialiased graphics gain nothing beyond 1 px, a soft photo up to 4 px, nothing beyond 4 px.
+- Owner decisions (after reviewing the comparison and screenshots of all 14 fixtures): Candidate B approved for Step 8; it runs as part of Delete Selection with one history entry; Edge cleanup and Feather 0–5 px each, both 0 by default. The Feathering comparison was not yet approved visually: the thin-feature-protected approach is preferred if it protects fine detail (see Step 8).
+
+The prototype, the comparison page and the report are kept by the owner outside the repository (`~/minty-step7-review`).
+
+#### Step 8: Edge Cleanup and Feathering (implemented; awaiting owner manual QA)
+
+Delete Selection now applies the Edge cleanup and Feather amounts set beside it, as one edit with one Undo step. Both default to 0 px, and then Delete is byte for byte the Step 6 Delete. Step 9 (re-applying the last Delete when an amount changes) is not implemented.
+
+Modules:
+
+```text
+src/image/edit/
+├── deleteSelection.ts   deleteSelectedPixelData: the Step 2 Delete returning its still-writable copy
+│                        (deleteSelectedPixels wraps it; behaviour unchanged)
+├── deleteWithEdges.ts   deleteSelectionWithEdges(pixels, selection, { cleanup, feather }): Delete, then
+│                        cleanup, then feathering, on one copy; MAX_EDGE_PIXELS (5), validation
+├── edgeBand.ts          strips with a halo, the 32-bit seed scan, changed-bounds tracking (shared)
+├── edgeCleanup.ts       Candidate B (cleanSelectionEdges)
+├── feather.ts           inward feathering with thin features protected (featherSelectionEdges)
+└── edgeTestFixtures.ts  test scenes with exact ground truth (supersampled shapes, a JPEG-like block
+                         quantiser), Magic Wand selections, the Step 7 error measure
+```
+
+Changed: `editorState.ts` (`edgeSettings`, the `edge-settings-changed` action, `edgePixels` in the announcement), `editCommands.ts` (Delete uses `deleteSelectionWithEdges` with the state's settings), `historyCommands.ts` (passes `edgePixels` through), `editFeedback.ts`, `toleranceInput.ts` (the text-field logic takes a range: 0–100 for the tolerance, 0–5 for the amounts), `MagicWandOptions.tsx` and `ToolOptions.css` (the two controls), `App.tsx`. Browser scripts: `edge-cleanup.mjs`, `lib/source.mjs` (imports `src/` modules into the Node scripts), `lib/png.mjs` (a decoder), `lib/browsers.mjs` (more keys, typing), `fixtures.mjs` (the edge fixtures). No dependency was added or removed.
+
+Edge cleanup (Candidate B; IMAGE_PROCESSING_SPEC.md, Edge Cleanup):
+
+- The production code is the prototype's decontamination mode, reviewed and restructured (the other candidates, ablations and statistics removed): same model, same constants, same arithmetic. On the 14 Step 7 fixtures, 60 random images, every combination of cleanup and feather from 0 to 5 and five strip sizes, its output was compared byte for byte with the Step 7 prototype followed by the feather prototype: 13,140 comparisons, no difference, and the reported bounds always contained every changed pixel.
+- It runs after Delete on the same copy and reads the original pixels and the selection; only unselected, not fully transparent pixels within the distance change; alpha never rises; selected pixels stay exactly as Delete leaves them; pixels it makes transparent keep their colour hidden; the image border and transparency already in the image are never background.
+
+Feathering (IMAGE_PROCESSING_SPEC.md, Feathering):
+
+- Investigated first, as asked, on the Step 7 fixtures. Plain inward feathering damages 13 of 14 test lines at 1 px and erases 12 at 2 px. The Step 7 "thin features protected" rule (skip pixels with no deeper neighbour) keeps 12 of 14 but splits two anti-aliased lines and still fades 136 pixels of the medium-size text and 15 of the 9 px text in the text fixture at 3 px.
+- Implemented instead: the same inward fade, limited by the shape's local thickness (the deepest point reachable uphill from the pixel): fade over min(feather, thickness − 1.5) px, nothing for features up to about 3–4 px across. On the Step 7 fixtures at 1, 2, 3 and 5 px: all 14 lines intact with no faint pixel lost and no split; the medium and 9 px text unchanged; the bold title's edges and thick shapes feathered as intended. It is new: the owner has not yet seen it in the comparison (decision 1 below).
+- Alpha only, inward only, never raised, within the feather distance of the selection; never starts at the image border or at existing transparency; a pixel faded to alpha 0 gets its original colour back, hidden.
+- Known effect: on shapes thicker than about 4 px every edge pixel fades, including an outline drawn along the shape's edge (the HMI pump's dark rim, a box border), so a wire attached to an outlined shape can look detached where the outline fades.
+
+Integration (Delete, history, Undo / Redo):
+
+- `deleteSelectionCommand` passes `state.edgeSettings` to `deleteSelectionWithEdges`. One copy of the image, one new revision, one display image, one history entry; the patch region is the smallest rectangle containing every changed pixel, edge pixels included, and the existing XOR patches store colour as well as alpha changes, so Undo restores every byte and Redo reproduces the result exactly (tested in Node and in both browsers).
+- Unchanged: version checks, selection and Magic Wand click cleared after Delete and restored by Undo (a committed tolerance re-applies the click exactly), the no-op (a selection of only transparent pixels changes nothing, whatever the amounts: the colours behind it are not known), failures (an exception changes nothing and shows the Delete error), display-image ownership and Strict Mode behaviour.
+- The announcement adds the edge pixels: "Selection deleted: 31,428 pixels are now transparent. 1,204 edge pixels were cleaned up or feathered."
+- The amounts are kept for the session like the Magic Wand options (across Deletes, Undo, Redo and imports; not saved between sessions) and apply only to the next Delete. Changing them computes nothing.
+
+Controls (UI_UX_SPEC.md, Magic Wand UX): between Shrink and Delete Selection, "Edge cleanup" and "Feather", each a 0–5 slider (step 1) and a text field with the unit "px", built with the tolerance control's conventions (typing, Enter, Escape, arrows; the slider applies at once). The slider's accessible name is its label and its value text "2 px"; the field is "Edge cleanup in pixels, 0 to 5" / "Feather in pixels, 0 to 5". Tooltips say what each does and that it applies to the next Delete. Each control wraps as one unit.
+
+Tests: 65 added (1,065 in total, 61 files): `edgeCleanup.test.ts` (23: guarantees over the scenes and 120 random images, hidden colour never read, strip independence, inputs never written, accuracy against ground truth for an icon, a logo on colour, lines, a gradient, a half-transparent background, the border, corners, JPEG artefacts, colour as well as alpha corrected, thin lines and small text kept, corners restored, hard-edged art unchanged, twin and monotone rules, a pixel no neighbour explains), `feather.test.ts` (9), `deleteWithEdges.test.ts` (12: 0/0 identical to Step 6 on 200 random cases, tight bounds, Undo / Redo patches, one copy, no-op, existing transparency, Global selections, validation, a regression lock of exact outputs, a 1200 × 800 image), editor tests (7 command tests, 5 reducer tests, 4 field-range tests, 1 announcement test, 4 markup tests). 16 deliberately introduced defects were each caught; two only after a test was added (existing transparency next to the selection; the hidden colour of a pixel cleaned and then faded out).
+
+Browser verification (production build, headless Chrome and Firefox, device pixel ratio 1; `scripts/browser/edge-cleanup.mjs`):
+
+- 1,109 checks with `--step7`, all passing (Chrome and Firefox). Controls: defaults, names, units, Tab order, slider keys, typing, clamping, Escape, Delete inside the field, nothing computed while adjusting, values kept across Delete, Undo and imports, 640 px wrapping. For 10 generated fixtures (HMI pump PNG and JPEG, thin lines and wiring, a logo on colour, text and corners, a gradient, a partially transparent PNG, shapes touching the border, a soft JPEG photo, an SVG) at cleanup / feather 0/0, 1/0, 3/0, 5/0, 0/2, 2/2 and 5/5 set with the controls: the document is byte for byte what the application's algorithm gives in Node for the same pixels and selection (so Chrome, Firefox and Node agree exactly), 0/0 is the Step 6 Delete, one entry, selection cleared, the announcement, the canvas shows the result, Undo restores every byte and the selection, Redo the result.
+- The 14 Step 7 fixtures, opened in the browsers and deleted with their recorded Magic Wand clicks at 0, 1, 2 and 4 px: identical bytes to Node, and the same mean edge error as the Step 7 report (to 0.005 level) for every fixture with ground truth, except the partially transparent PNG: both browsers import it with other colour bytes than the file holds in 103 (Chrome) and 142 (Firefox) partially transparent pixels (the import's canvas stores colour premultiplied; a Phase 1 behaviour, not changed here), so its figures are not comparable with Step 7's (they differ by up to 0.01 level) and are reported, not checked.
+- In headless Firefox the window has no focus and no blur event fires, so "leaving an emptied field restores its value" is checked in Chrome only (as in Step 6).
+- Development server (React Strict Mode): the same checks without timings and Step 7 fixtures, 885 passing, and `edit-workflow.mjs` 507 (as in Step 6), with no React warnings or console errors. Regression in production: `edit-workflow.mjs` 511 checks (production, without the 50 MP stress run), `edit-ownership.mjs` 52, `smoke.mjs` 340, `gpu-crash.mjs` 23, all passing.
+
+Measurements (production build, headless, this machine; the whole synchronous Delete handler, key press to commit, including the display image; edge-dense tiled HMI images are a worst case):
+
+| Image | Browser | 0 / 0 | Cleanup 1 | Cleanup 3 | Cleanup 5 | Feather 1 | Feather 5 | 2 / 2 | 5 / 5 | Undo, Redo |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 3840 × 2160 HMI, tiled | Chrome | 87 ms | 210 ms | 280 ms | 298 ms | 168 ms | 222 ms | 359 ms | 428 ms | 35–65 ms |
+| | Firefox | 92 ms | 212 ms | 261 ms | 282 ms | 183 ms | 248 ms | 346 ms | 451 ms | 49–74 ms |
+| 3840 × 2160 screenshot | Chrome | 97 ms | 236 ms | 294 ms | 311 ms | 163 ms | 183 ms | 348 ms | 399 ms | 44–67 ms |
+| | Firefox | 88 ms | 229 ms | 283 ms | 307 ms | 167 ms | 198 ms | 361 ms | 409 ms | 51–81 ms |
+| 8660 × 5773 HMI, tiled | Chrome | 524 ms | 1,057 ms | 1,364 ms | 1,468 ms | 939 ms | 1,279 ms | 1,773 ms | 2,224 ms | 209–267 ms |
+| | Firefox | 510 ms | 1,221 ms | 1,573 ms | 1,669 ms | 1,021 ms | 1,414 ms | 2,087 ms | 2,609 ms | 287–370 ms |
+| 8660 × 5773 flat background | Chrome | 626 ms | 609 ms | 768 ms | 784 ms | 596 ms | 637 ms | 849 ms | 829 ms | 235–331 ms |
+| | Firefox | 481 ms | 614 ms | 635 ms | 634 ms | 596 ms | 654 ms | 762 ms | 811 ms | 261–343 ms |
+
+- History kept per Delete: 4K HMI 354 KB at 0/0, 739 KB at cleanup 1, 1.08 MB at 5, 1.76 MB at 5/5; 50 MP HMI 2.1 MB, 4.5 MB, 6.6 MB and 10.6 MB; the flat 50 MP background 197–339 KB.
+- Memory: one live display image after every operation; Chrome's JavaScript heap 3.8–3.9 MB and ArrayBuffers 42–43 MB (4K) and 245–255 MB (50 MP) after garbage collection, over ten Delete / Undo / Redo cycles each, with no growth beyond the history entry. Transient memory during the Delete (Node, resident high-water mark at 50 MP, edge-dense): 191 MB for Delete's copy alone; cleanup adds 48–94 MB, feathering 22–26 MB, both 85–96 MB, released afterwards. Work is done in strips of 256 rows, so scratch memory follows the image width, not its size.
+- Undo and Redo times are unchanged by the amounts (they apply the patch); the display image takes 13–15 ms (Chrome) and 22–27 ms (Firefox) at 4K, 77–89 ms and 137–177 ms at 50 MP, as before.
+
+Known limitations (Step 8):
+
+- Colour that was flattened onto the background cannot be recovered (a semi-transparent object saved onto an opaque background stays opaque); the remaining error on the Step 7 transparent-PNG fixture is all of that kind.
+- Cleanup trusts the selection: a Magic Wand selection that leaked into the object enlarges the damage, and pixels Delete removed are never brought back.
+- A solid mid-grey part next to a dark outline is protected only while the cleanup distance stays inside it: once the distance reaches the outline, the grey column touching it is taken for a grey-and-black blend and loses about half its alpha (Step 7: 24 such pixels on the rasterised SVG at 2 px and more; JPEG artwork: 48 at 1 px, more at higher amounts). 1 px suits screenshots and vector art; 2–4 px only soft photographs.
+- Feathering fades every edge of shapes thicker than about 4 px, outlines included (see above), and is not a quality fix: against ground truth it always increases the error, by design.
+- Large images pause the page: near 50 MP up to about 2.2–2.6 s at 5 / 5 on edge-dense images (about 1.1–1.7 s for cleanup alone), synchronous, with no progress indication (Step 6 decision 1, revisited in Step 12).
+- The browsers' import changes the colour bytes of some partially transparent pixels (premultiplied canvas); cleanup works on the pixels as imported.
+- Sub-pixel (LCD) text fringes cannot be represented in RGBA and are not removed.
+
+Owner decisions raised (Step 8):
+
+1. Feathering: ship the thickness-limited feathering as implemented (protects lines and text up to about 3–4 px; fades outlines of thicker shapes), or hide the Feather control until its visual results are reviewed, or another variant.
+2. Should the amounts be kept for the session (as implemented, like the Magic Wand options), or reset to 0 when another image is opened, so that settings chosen for a photo never apply to the next technical graphic by surprise?
+3. Large images: the synchronous pause grows to about 1–2.6 s near 50 MP with cleanup or feathering; keep synchronous until Step 12 (as Step 6 decision 1) or plan a progress indication.
+4. The announcement wording ("… 1,204 edge pixels were cleaned up or feathered.").
+
+Manual QA checklist (owner, desktop, Chrome and Firefox). Not yet run: none of these is marked passed. Images: `node scripts/browser/fixtures.mjs` writes the generated ones (`edge-*.png`, `edge-*.jpg`, `edge-svg.svg`) to `scripts/browser/fixtures/`; real VTScada screenshots and equipment photos are just as important. Look at results at 400–800% over the checkerboard.
+
+| Check | Action | Passes when | Known limitation |
+| --- | --- | --- | --- |
+| 8.1 Defaults | Open any image and look at the options row | Between Shrink and Delete Selection: "Edge cleanup" and "Feather", each a slider and a field showing 0 and "px" | — |
+| 8.2 0 / 0 is Step 6 | `edge-hmi.png`, Magic Wand tolerance 10 on the grey background, Delete | Exactly as in Step 6: the background goes, a faint grey fringe stays around the wires, pump and box; Ctrl + Z restores it | The fringe is expected at 0 px |
+| 8.3 Cleanup on HMI art | Undo; type 1 in Edge cleanup, Enter; click the background again; Delete | The grey fringe is gone from the wires, the pump's and box's edges and the LED glow; wires stay continuous and dark; the 9 px "TAG-0042" text stays readable; nothing else changes | A soft glow keeps a faint edge where it is not a blend of its colour and the background |
+| 8.4 Undo / Redo exact | After 8.3: Ctrl + Z, Ctrl + Y, Ctrl + Z, then the header buttons | The original (fringe included) and the selection come back exactly; Redo gives the cleaned result; one Undo step per Delete | — |
+| 8.5 Re-apply after Undo | After Ctrl + Z, drag the tolerance slider and release | The selection is re-applied from the original click, as before the Delete | — |
+| 8.6 Thin lines | `edge-lines.png`, Global, click the white, Edge cleanup 5, Delete | Every line, the hairline, the red and blue wires, the dots and the 1 px box remain whole and dark; their light fringe is gone | — |
+| 8.7 Feather spares thin features | Undo; Edge cleanup 0, Feather 5; Delete | Nothing on the lines changes at all | — |
+| 8.8 Feather on thick shapes | `edge-hmi.png`, Edge cleanup 0, Feather 3, Delete | Pump, pipes and box edges fade inward over about 3 px; wires and small text unchanged; nothing further than 3 px from the deleted area changes; no new halo | The pump's rim and the box border fade with the edge, so the black wire can look detached from the box (decision 1) |
+| 8.9 Combined on a photo | `edge-photo.jpg`, tolerance 25, click the background; Edge cleanup 2, Feather 2; Delete | Softer edges with no grey or noisy halo; the red ring stays a ring; Undo exact | Background left unselected by the wand stays |
+| 8.10 Logo on colour | `edge-logo.png`, tolerance 10; Edge cleanup 1; Delete (also click inside the ring with Shift) | No blue outline remains around the white ring, orange triangle or text over the checkerboard | — |
+| 8.11 Corners and text | `edge-corners.png`, Global; Edge cleanup 1; Delete | Diamond, star and spike corners stay sharp; all three text sizes stay readable and crisp | The wand may select a spike's faintest tip pixels; cleanup cannot bring them back |
+| 8.12 Partially transparent PNG | `edge-alpha.png`, tolerance 10, click the half-transparent panel; Edge cleanup 2; Delete | The orange circle and white text keep their colours, without a dark rim | Flattened semi-transparent colour cannot be separated |
+| 8.13 Image border | `edge-border.png`, Global, click the white middle; Edge cleanup 5; Delete | Shapes cut by the image edges keep full strength along the border | — |
+| 8.14 JPEG artwork | `edge-hmi.jpg`, tolerance 12; Edge cleanup 1, then (after Undo) 3 | The fringe and JPEG noise around edges are reduced at 1 px | At higher amounts a solid grey column next to a dark outline can turn semi-transparent |
+| 8.15 SVG | `edge-svg.svg`, tolerance 20; Edge cleanup 1, then 5 | Edges of the grey circle, the orange box and the thin lines are clean at 1 px | At 4–5 px the grey column touching the dark stroke can lose about half its alpha |
+| 8.16 Keyboard | Tab from Shrink; arrows, Home, End on each slider; in each field type 9 + Enter, "abc" + Enter, 2 then Escape; Delete and Backspace in a field; Tab away from an emptied field | Tab order: Edge cleanup slider, field, Feather slider, field, Delete Selection; arrows step by 1, Home / End give 0 / 5, the field follows; 9 becomes 5, "abc" and Escape restore the previous value; Delete only edits the text; leaving an emptied field restores the value (please check this in Firefox: not checkable headless) | — |
+| 8.17 Nothing while adjusting | With a selection, drag both sliders back and forth and type values | The image, selection and Undo do not change; only the next Delete uses the amounts | — |
+| 8.18 Kept for the session | Set 2 / 1; Delete, Undo, Redo; open another image | The controls still show 2 and 1, and the next Delete uses them; reloading the page resets them to 0 | Decision 2 |
+| 8.19 No-op | Undo a Delete made with cleanup 5, keep the amounts, select an area that is already fully transparent (for example in `edge-alpha.png` outside the panel) and press Delete | Nothing changes, the selection stays; a screen reader hears "Nothing was deleted…" | — |
+| 8.20 Screen reader (Orca) | Delete with Edge cleanup 1; move through the two controls | "Selection deleted: … pixels are now transparent. … edge pixels were cleaned up or feathered." is read once; the sliders read "Edge cleanup" / "Feather" with "0 px"; the fields read their names with "0 to 5" | — |
+| 8.21 Narrow window | About 640 px wide | Edge cleanup and Feather each wrap as one unit; Delete Selection stays whole; no horizontal scrolling | — |
+| 8.22 Large images | `edge-hmi-4k.png` and `edge-hmi-50mp.png` (tolerance 10 at the top-left): Delete at 0 / 0, cleanup 1, 3 and 5, feather 5 and 5 / 5, then Undo and Redo | 4K: about 0.1 s at 0 / 0, 0.2–0.45 s with the amounts; 50 MP: about 0.5 s at 0 / 0, 1–1.7 s with cleanup, up to about 2.6 s at 5 / 5; Undo / Redo 0.2–0.35 s; no error; Undo exact | The page pauses with no indication (decision 3) |
+| 8.23 Real assets | Your VTScada screenshots and equipment photos: cleanup 1 for screenshots and vector art, 2–4 for soft photos, feather 1–2 where wanted | Fringes reduced, fine lines, text and small symbols intact; note any case where cleanup or feathering makes things worse | — |
+
+Carried forward from Step 6 (still deferred; the owner decides each before Phase 3 sign-off). Their numbers and meaning are unchanged; run them with both amounts at 0 unless stated:
+
+| Step 6 check | Action | Passes when | Known limitation |
+| --- | --- | --- | --- |
+| 12 | Repeat Step 6 checks 1, 3 and 4 with a JPEG, a WebP, a supported SVG, a PNG with transparency and soft edges, and a screenshot with 1-pixel lines | Each deletes as in check 1, undoes exactly with the selection (check 3), and re-applies the tolerance after Undo (check 4) | — |
+| 14 | Select an already transparent area and press Delete | Nothing changes, the selection stays; "Nothing was deleted…" is announced | — |
+| 15 | A 4K image, and if practical one near 50 MP: Delete, Undo, Redo (now also with the amounts, as in 8.22) | They feel prompt at 4K; note how long each pause feels near 50 MP | Synchronous pauses (Step 6 decision 1) |
+| 16 | With no edits, open another image by button, drag and drop and Ctrl + V; then edit, undo every edit and open again | No question in either case | — |
+| 19 | While the "Discard unexported edits?" dialog is open: Delete, Ctrl + Z, Ctrl + O, Ctrl + V, drop a file; then close it | Nothing else happens, no second dialog; focus returns where it was | — |
+| 20 | After a Delete, Continue with a file that is not a valid image | The error appears; the edited image and its Undo history remain | — |
+| 21 | Orca: Delete, Undo, Redo; the Undo / Redo buttons; the dialog | Each announced once; buttons read "Undo Delete Selection" / "Redo Delete Selection"; the dialog reads its title and text | — |
+| 22 | Window about 640 px wide | The options row wraps with Delete Selection (and now each amount control) as one unit; the header stays usable; the dialog fits | — |
+| 23 | In Firefox as well as Chrome, repeat Step 6 checks 1, 3, 9, 10 and 17 | All behave as in Chrome, including Escape and focus return in the dialog | Not checkable in headless Firefox |
 
 ---
 

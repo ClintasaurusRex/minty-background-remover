@@ -10,6 +10,16 @@ describe('editNoticeText', () => {
     )
   })
 
+  it('adds the edge pixels changed by edge cleanup and feathering, when there were any', () => {
+    expect(editNoticeText({ kind: 'applied', operation: 'delete-selection', changedPixels: 31428, edgePixels: 1204 })).toBe(
+      'Selection deleted: 31,428 pixels are now transparent. 1,204 edge pixels were cleaned up or feathered.',
+    )
+    expect(editNoticeText({ kind: 'applied', operation: 'delete-selection', changedPixels: 2, edgePixels: 1 })).toBe(
+      'Selection deleted: 2 pixels are now transparent. 1 edge pixel was cleaned up or feathered.',
+    )
+    expect(editNoticeText({ kind: 'applied', operation: 'delete-selection', changedPixels: 2, edgePixels: 0 })).toBe('Selection deleted: 2 pixels are now transparent.')
+  })
+
   it('announces edits without a count, Undo and Redo by name', () => {
     expect(editNoticeText({ kind: 'applied', operation: 'delete-selection', changedPixels: null })).toBe('Delete Selection applied.')
     expect(editNoticeText({ kind: 'applied', operation: 'auto-trim', changedPixels: null })).toBe('Auto Trim applied.')

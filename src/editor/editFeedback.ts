@@ -22,7 +22,10 @@ export function editNoticeText(notice: EditNotice): string {
     case 'applied': {
       const count = notice.changedPixels
       if (notice.operation === 'delete-selection' && count !== null) {
-        return `Selection deleted: ${count.toLocaleString('en-CA')} ${count === 1 ? 'pixel is' : 'pixels are'} now transparent.`
+        const deleted = `Selection deleted: ${count.toLocaleString('en-CA')} ${count === 1 ? 'pixel is' : 'pixels are'} now transparent.`
+        const edge = notice.edgePixels ?? 0
+        if (edge === 0) return deleted
+        return `${deleted} ${edge.toLocaleString('en-CA')} edge ${edge === 1 ? 'pixel was' : 'pixels were'} cleaned up or feathered.`
       }
       return `${editName(notice.operation)} applied.`
     }

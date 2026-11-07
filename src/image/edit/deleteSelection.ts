@@ -33,11 +33,32 @@ export interface DeleteSelectionResult {
  * size or whose bounds do not lie within it.
  */
 export function deleteSelectedPixels(pixels: PixelBuffer, selection: SelectionMask | null): DeleteSelectionResult | null {
+  const result = deleteSelectedPixelData(pixels, selection)
+  return result && { pixels: createPixelBuffer(pixels.width, pixels.height, result.data), count: result.count, bounds: result.bounds }
+}
+
+/** deleteSelectedPixels' result before it is wrapped as a pixel buffer. */
+export interface DeletedPixelData {
+  /**
+   * The edited bytes: new memory, the input's size. Still writable, for an edit that goes on
+   * changing the same copy before wrapping it (deleteWithEdges.ts); nothing else may write it.
+   */
+  readonly data: Uint8ClampedArray<ArrayBuffer>
+  readonly count: number
+  readonly bounds: Readonly<Rectangle>
+}
+
+/**
+ * deleteSelectedPixels, returning the edited bytes unwrapped so that edge cleanup and feathering
+ * can continue on the same copy (Phase 3 Step 8) instead of copying the image again. Identical
+ * in every other respect: the same checks, the same single copy, the same bytes, count and bounds.
+ */
+export function deleteSelectedPixelData(pixels: PixelBuffer, selection: SelectionMask | null): DeletedPixelData | null {
   validatePixelBuffer(pixels)
   if (!selection) return null
   validateSelectionFits(selection, pixels)
 
-  const { width, height } = pixels
+  const { width } = pixels
   const mask = selection.data
   const left = selection.bounds.x
   const right = left + selection.bounds.width
@@ -77,7 +98,7 @@ export function deleteSelectedPixels(pixels: PixelBuffer, selection: SelectionMa
   }
 
   return {
-    pixels: createPixelBuffer(width, height, edited),
+    data: edited,
     count,
     bounds: { x: minX, y: firstY, width: maxX - minX + 1, height: maxY - firstY + 1 },
   }

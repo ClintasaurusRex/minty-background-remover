@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   type ToleranceFieldEvent,
   type ToleranceSliderEvent,
+  EDGE_PIXEL_RANGE,
   NO_KEYS_HELD,
   SLIDER_ADJUSTMENT_KEYS,
+  TOLERANCE_RANGE,
   clampTolerance,
   committedToleranceInput,
   exactToleranceInput,
@@ -381,5 +383,56 @@ describe('toleranceFieldEvent', () => {
       expect(Number.isInteger(field.tolerance) && field.tolerance >= 0 && field.tolerance <= 100).toBe(true)
     }
     expect(field.commits.length).toBeGreaterThan(100)
+  })
+})
+
+describe('the same field behaviour for the Delete edge amounts (0–5 px)', () => {
+  const range = EDGE_PIXEL_RANGE
+
+  it('uses 0–100 with Page steps of 10 for the tolerance by default, and 0–5 with steps of 1 for the edge amounts', () => {
+    expect(TOLERANCE_RANGE).toEqual({ max: 100, pageStep: 10 })
+    expect(EDGE_PIXEL_RANGE).toEqual({ max: 5, pageStep: 1 })
+  })
+
+  it('applies 0–5 as typed, waits for anything larger, and clamps it to 5 when committed', () => {
+    expect([0, 1, 5].map((n) => exactToleranceInput(String(n), range))).toEqual([0, 1, 5])
+    expect(exactToleranceInput('6', range)).toBeNull()
+    expect(exactToleranceInput('20', range)).toBeNull()
+    expect(committedToleranceInput('20', range)).toBe(5)
+    expect(committedToleranceInput('2.6', range)).toBe(3)
+    expect(committedToleranceInput('-4', range)).toBe(0)
+    expect(committedToleranceInput('px', range)).toBeNull()
+    expect(clampTolerance(7, range)).toBe(5)
+  })
+
+  it('steps by 1 with the arrows and Page keys, within 0–5', () => {
+    expect(steppedTolerance(4, 'ArrowUp', range)).toBe(5)
+    expect(steppedTolerance(5, 'ArrowUp', range)).toBe(5)
+    expect(steppedTolerance(0, 'ArrowDown', range)).toBe(0)
+    expect(steppedTolerance(2, 'PageUp', range)).toBe(3)
+    expect(steppedTolerance(2, 'PageDown', range)).toBe(1)
+    expect(steppedTolerance(2, 'Home', range)).toBeNull()
+  })
+
+  it('runs the whole entry: typing, Enter with an out-of-range value, Escape and text that is not a number', () => {
+    let state = initialToleranceFieldState(0)
+    const send = (event: ToleranceFieldEvent, value: number) => {
+      const result = toleranceFieldEvent(state, event, value, range)
+      state = result.state
+      return result
+    }
+    expect(send({ type: 'focus' }, 0)).toEqual({ state: initialToleranceFieldState(0) })
+    expect(send({ type: 'input', text: '3' }, 0).change).toBe(3)
+    expect(send({ type: 'key-down', key: 'Enter' }, 3).commit).toBe(3)
+    expect(send({ type: 'input', text: '9' }, 3).change).toBeUndefined()
+    expect(send({ type: 'key-down', key: 'Enter' }, 3).commit).toBe(5)
+    expect(send({ type: 'input', text: '1' }, 5).change).toBe(1)
+    const escaped = send({ type: 'key-down', key: 'Escape' }, 1)
+    expect(escaped.commit).toBe(5)
+    expect(escaped.handled).toBe(true)
+    expect(send({ type: 'input', text: 'x' }, 5).change).toBeUndefined()
+    expect(send({ type: 'blur' }, 5).commit).toBe(5)
+    expect(send({ type: 'key-down', key: 'ArrowDown' }, 5).change).toBe(4)
+    expect(send({ type: 'key-up', key: 'ArrowDown' }, 4).commit).toBe(4)
   })
 })

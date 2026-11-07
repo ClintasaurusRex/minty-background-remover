@@ -1,17 +1,34 @@
+import { MAX_EDGE_PIXELS } from '../image/edit/deleteWithEdges'
 import { MAX_TOLERANCE } from '../image/selection/colourDistance'
 
 /*
  * The Magic Wand's tolerance controls: what text typed into the field means, and when an
  * adjustment of the slider or the field is finished. The field keeps whatever the user
  * types while they edit.
+ *
+ * The Delete Selection edge amounts (edge cleanup and feather, 0–5 px; Phase 3 Step 8) use the
+ * same text field behaviour with their own range. They re-apply nothing: a value only sets what
+ * the next Delete uses.
  */
 
-/** A whole number from 0 to 100 typed exactly: applied as the user types, so the slider follows. */
-export function exactToleranceInput(text: string): number | null {
+/** The whole numbers a slider and text field pair accepts, from 0 to `max`. */
+export interface WholeNumberRange {
+  readonly max: number
+  /** Step of Page Up / Page Down in the text field, as on the slider. */
+  readonly pageStep: number
+}
+
+export const TOLERANCE_RANGE: WholeNumberRange = { max: MAX_TOLERANCE, pageStep: 10 }
+
+/** Edge cleanup and feather, in pixels. */
+export const EDGE_PIXEL_RANGE: WholeNumberRange = { max: MAX_EDGE_PIXELS, pageStep: 1 }
+
+/** A whole number from 0 to 100 (the range's maximum) typed exactly: applied as the user types, so the slider follows. */
+export function exactToleranceInput(text: string, range: WholeNumberRange = TOLERANCE_RANGE): number | null {
   const trimmed = text.trim()
   if (!/^\d{1,3}$/.test(trimmed)) return null
   const value = Number(trimmed)
-  return value <= MAX_TOLERANCE ? value : null
+  return value <= range.max ? value : null
 }
 
 /**
@@ -19,33 +36,33 @@ export function exactToleranceInput(text: string): number | null {
  * number, rounded to a whole number and clamped to 0–100. Null for text that is not a
  * number (including an empty field), which restores the current tolerance instead.
  */
-export function committedToleranceInput(text: string): number | null {
+export function committedToleranceInput(text: string, range: WholeNumberRange = TOLERANCE_RANGE): number | null {
   const trimmed = text.trim()
   if (trimmed === '') return null
   const value = Number(trimmed)
   if (!Number.isFinite(value)) return null
-  return clampTolerance(value)
+  return clampTolerance(value, range)
 }
 
-/** Rounds to a whole number and clamps to 0–100, the rule the editor applies to every tolerance. */
-export function clampTolerance(value: number): number {
-  return Math.min(MAX_TOLERANCE, Math.max(0, Math.round(value)))
+/** Rounds to a whole number and clamps to 0–100 (the range's maximum), the rule the editor applies to every tolerance. */
+export function clampTolerance(value: number, range: WholeNumberRange = TOLERANCE_RANGE): number {
+  return Math.min(range.max, Math.max(0, Math.round(value)))
 }
 
 /**
  * Keyboard steps in the text field, like the slider's: Up / Down arrows by 1, Page Up /
  * Page Down by 10. Null for other keys (Home and End keep moving the text cursor).
  */
-export function steppedTolerance(current: number, key: string): number | null {
+export function steppedTolerance(current: number, key: string, range: WholeNumberRange = TOLERANCE_RANGE): number | null {
   switch (key) {
     case 'ArrowUp':
-      return clampTolerance(current + 1)
+      return clampTolerance(current + 1, range)
     case 'ArrowDown':
-      return clampTolerance(current - 1)
+      return clampTolerance(current - 1, range)
     case 'PageUp':
-      return clampTolerance(current + 10)
+      return clampTolerance(current + range.pageStep, range)
     case 'PageDown':
-      return clampTolerance(current - 10)
+      return clampTolerance(current - range.pageStep, range)
     default:
       return null
   }
@@ -56,8 +73,8 @@ export function steppedTolerance(current: number, key: string): number | null {
  * typed number, rounded and clamped, or the current tolerance when the field was not
  * edited or holds text that is not a number.
  */
-export function toleranceToCommit(draft: string | null, current: number): number {
-  return (draft === null ? null : committedToleranceInput(draft)) ?? current
+export function toleranceToCommit(draft: string | null, current: number, range: WholeNumberRange = TOLERANCE_RANGE): number {
+  return (draft === null ? null : committedToleranceInput(draft, range)) ?? current
 }
 
 /*
@@ -208,6 +225,7 @@ export function toleranceFieldEvent(
   state: ToleranceFieldState,
   event: ToleranceFieldEvent,
   tolerance: number,
+  range: WholeNumberRange = TOLERANCE_RANGE,
 ): ToleranceFieldResult {
   // Without an entry in progress, the current tolerance is the committed one: an entry
   // beginning now is cancelled back to it.
@@ -218,15 +236,15 @@ export function toleranceFieldEvent(
 
     case 'input': {
       const next = { ...state, draft: event.text, committed }
-      const exact = exactToleranceInput(event.text)
+      const exact = exactToleranceInput(event.text, range)
       return exact === null ? { state: next } : { state: next, change: exact }
     }
 
     case 'key-down': {
-      if (event.key === 'Enter') return finishField(toleranceToCommit(state.draft, tolerance))
+      if (event.key === 'Enter') return finishField(toleranceToCommit(state.draft, tolerance, range))
       // Handled here, so Escape does not also clear the selection.
       if (event.key === 'Escape') return { ...finishField(committed), handled: true }
-      const stepped = steppedTolerance(committedToleranceInput(state.draft ?? '') ?? tolerance, event.key)
+      const stepped = steppedTolerance(committedToleranceInput(state.draft ?? '', range) ?? tolerance, event.key, range)
       if (stepped === null) return { state }
       const held = pressAdjustmentKey(state.held, event.key, FIELD_ADJUSTMENT_KEYS)
       return { state: { draft: null, committed, held }, change: stepped, handled: true }
@@ -239,7 +257,7 @@ export function toleranceFieldEvent(
     }
 
     case 'blur':
-      return finishField(toleranceToCommit(state.draft, tolerance))
+      return finishField(toleranceToCommit(state.draft, tolerance, range))
   }
 }
 

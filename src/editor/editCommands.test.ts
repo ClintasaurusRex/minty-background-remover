@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { DisplayImage } from '../canvas/displayImage'
 import { createImportError } from '../image/import/errors'
+import { deleteSelectedPixels } from '../image/edit/deleteSelection'
+import { deleteSelectionWithEdges } from '../image/edit/deleteWithEdges'
+import { edgeCases } from '../image/edit/edgeTestFixtures'
 import { createPixelBuffer } from '../image/pixelBuffer'
 import { createMagicWandSelection } from '../image/selection/magicWand'
 import { combineSelections, selectAll } from '../image/selection/selectionOperations'
@@ -624,3 +627,109 @@ describe('Delete Selection at 1024 × 768', () => {
   })
 })
 
+
+describe('Delete Selection with edge cleanup and feathering (Step 8)', () => {
+  /** The anti-aliased logo scene (Step 7 kind), opened and clicked like the user would. */
+  function logoSelected(): EditorState {
+    const logo = edgeCases().find((c) => c.name === 'anti-aliased logo on blue')!
+    return click(withOptions(start(logo.observed), { tolerance: 10 }), 0, 0)
+  }
+  const withEdges = (state: EditorState, cleanup: number, feather: number) => reduce(state, { type: 'edge-settings-changed', settings: { cleanup, feather } })
+
+  it('deletes with the settings in the editor: exactly deleteSelectionWithEdges, one entry, one image, selection cleared', () => {
+    for (const [cleanup, feather] of [[1, 0], [3, 0], [0, 2], [2, 2], [5, 5]]) {
+      const before = withEdges(logoSelected(), cleanup, feather)
+      const created = images.created.length
+      const action = command(before, 'delete-selection')!
+      const deleted = accepted(before, action)
+      const expected = deleteSelectionWithEdges(before.document!.pixels, before.selection, { cleanup, feather })!
+      expect(sameBytes(deleted.document!.pixels, expected.pixels), `${cleanup}/${feather}`).toBe(true)
+      expect(expected.edgePixels).toBeGreaterThan(0)
+      expect(images.created).toHaveLength(created + 1)
+      expect(deleted.documentBitmap).toBe(images.created.at(-1))
+      expect(deleted.history.undo).toHaveLength(1)
+      expect(deleted.selection).toBeNull()
+      expect(deleted.lastMagicWandOperation).toBeNull()
+      expect(deleted.edgeSettings).toEqual({ cleanup, feather })
+      expect(deleted.editNotice).toEqual({ kind: 'applied', operation: 'delete-selection', changedPixels: expected.count, edgePixels: expected.edgePixels })
+    }
+  })
+
+  it('with both settings at 0 (the default) deletes exactly as in Step 6', () => {
+    const before = logoSelected()
+    expect(before.edgeSettings).toEqual({ cleanup: 0, feather: 0 })
+    const deleted = run(before, 'delete-selection')
+    expect(sameBytes(deleted.document!.pixels, deleteSelectedPixels(before.document!.pixels, before.selection)!.pixels)).toBe(true)
+    expect(deleted.editNotice).toEqual({ kind: 'applied', operation: 'delete-selection', changedPixels: before.selection!.count })
+  })
+
+  it('records every changed colour and alpha byte: Undo restores the image, selection and click exactly; Redo the result', () => {
+    for (const [cleanup, feather] of [[1, 0], [5, 0], [0, 5], [5, 5]]) {
+      const before = withEdges(logoSelected(), cleanup, feather)
+      const original = copyBytes(before.document!.pixels)
+      const deleted = run(before, 'delete-selection')
+      const result = copyBytes(deleted.document!.pixels)
+      const undone = run(deleted, 'undo')
+      expect(undone.document!.pixels.data).toEqual(original)
+      expect(sameSelection(undone.selection, before.selection)).toBe(true)
+      expect(undone.lastMagicWandOperation?.tolerance).toBe(10)
+      expect(undone.document!.revision).toBeGreaterThan(deleted.document!.revision)
+      // The restored click re-applies exactly as before the Delete.
+      const reapplied = commit(commit(undone, 30), 10)
+      expect(sameSelection(reapplied.selection, before.selection)).toBe(true)
+      const redone = run(undone, 'redo')
+      expect(redone.document!.pixels.data).toEqual(result)
+      expect(redone.selection).toBeNull()
+      // And again: still exact, with fresh revisions.
+      const again = run(run(redone, 'undo'), 'redo')
+      expect(again.document!.pixels.data).toEqual(result)
+      expect(again.document!.revision).toBeGreaterThan(redone.document!.revision)
+    }
+  })
+
+  it('changes nothing when the selected pixels are already transparent, whatever the settings', () => {
+    const before = withEdges(logoSelected(), 5, 5)
+    const deleted = run(before, 'delete-selection')
+    // Select the deleted area again and press Delete.
+    const again = select(deleted, selectAll(deleted.document!.width, deleted.document!.height))
+    const transparentOnly = select(again, before.selection)
+    const action = command(transparentOnly, 'delete-selection')
+    expect(action).toEqual({ type: 'edit-unchanged', version: documentVersion(transparentOnly), operation: 'delete-selection' })
+    const after = reduce(transparentOnly, action!)
+    expect(after.document).toBe(transparentOnly.document)
+    expect(after.selection).toBe(transparentOnly.selection)
+    expect(after.history.undo).toHaveLength(1)
+  })
+
+  it('keeps the settings for the session: unchanged by Delete, Undo, Redo and opening another image', () => {
+    const before = withEdges(logoSelected(), 3, 2)
+    const deleted = run(before, 'delete-selection')
+    const undone = run(deleted, 'undo')
+    const redone = run(undone, 'redo')
+    for (const state of [deleted, undone, redone, opened(picture(), redone)]) expect(state.edgeSettings).toEqual({ cleanup: 3, feather: 2 })
+  })
+
+  it('React Strict Mode: running the reducer twice on a Delete with edge settings gives the same state and image', () => {
+    const before = withEdges(logoSelected(), 2, 2)
+    const action = command(before, 'delete-selection')!
+    const created = images.created.length
+    const once = editorReducer(before, action)
+    const twice = editorReducer(before, action)
+    expect(images.created).toHaveLength(created)
+    expect(twice.document).toBe(once.document)
+    expect(twice.documentBitmap).toBe(once.documentBitmap)
+    expect(twice.history.undo).toEqual(once.history.undo)
+    expect(images.created.every((image) => !image.released)).toBe(true)
+  })
+
+  it('reports a failure of the edge passes like any Delete failure, changing nothing', () => {
+    // Settings outside 0–5 cannot come from the reducer; forced here to make the algorithm throw.
+    const before = { ...logoSelected(), edgeSettings: { cleanup: 9, feather: 0 } }
+    const action = command(before, 'delete-selection')
+    expect(action).toMatchObject({ type: 'edit-failed', error: { operation: 'delete-selection', detail: expect.stringMatching(/^RangeError/) } })
+    const after = reduce(before, action!)
+    expect(after.document).toBe(before.document)
+    expect(after.selection).toBe(before.selection)
+    expect(images.created.every((image) => !image.released)).toBe(true)
+  })
+})

@@ -69,6 +69,7 @@ describe('editorReducer: imports', () => {
       importNotice: null,
       activeTool: null,
       magicWand: { tolerance: 20, floodMode: 'contiguous', selectionMode: 'new' },
+      edgeSettings: { cleanup: 0, feather: 0 },
       selection: null,
       lastMagicWandOperation: null,
       history: {
@@ -1376,5 +1377,56 @@ describe('editorReducer: Magic Wand operations', () => {
     )
     expect(moved.lastMagicWandOperation).toBe(clicked.lastMagicWandOperation)
     expect(moved.selection).toBe(clicked.selection)
+  })
+})
+
+describe('editorReducer: Delete edge settings (Step 8)', () => {
+  const edges = (state: EditorState, settings: Partial<{ cleanup: number; feather: number }>) =>
+    reduce(state, { type: 'edge-settings-changed', settings })
+  let importId = 500
+  /** `state` (by default measured) with a 400 × 200 image opened. */
+  function opened(state: EditorState = measured) {
+    const id = importId++
+    return reduce(state, { type: 'import-started', importId: id }, { type: 'import-finished', importId: id, result: succeeded(400, 200) })
+  }
+
+  it('starts at 0 px for both, and sets either amount or both', () => {
+    expect(initialEditorState.edgeSettings).toEqual({ cleanup: 0, feather: 0 })
+    expect(edges(opened(), { cleanup: 3 }).edgeSettings).toEqual({ cleanup: 3, feather: 0 })
+    expect(edges(opened(), { feather: 5 }).edgeSettings).toEqual({ cleanup: 0, feather: 5 })
+    expect(edges(opened(), { cleanup: 1, feather: 2 }).edgeSettings).toEqual({ cleanup: 1, feather: 2 })
+  })
+
+  it('rounds to whole pixels and clamps to 0–5', () => {
+    const cleanup = (value: number) => edges(initialEditorState, { cleanup: value }).edgeSettings.cleanup
+    expect(cleanup(2.4)).toBe(2)
+    expect(cleanup(2.5)).toBe(3)
+    expect(cleanup(9)).toBe(5)
+    expect(cleanup(-1)).toBe(0)
+    expect(Object.is(cleanup(-0.4), -0)).toBe(false)
+  })
+
+  it('ignores values that are not finite, and returns the same state when nothing changes', () => {
+    const state = edges(opened(), { cleanup: 2, feather: 1 })
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(edges(state, { cleanup: value })).toBe(state)
+      expect(edges(state, { feather: value })).toBe(state)
+    }
+    expect(edges(state, {})).toBe(state)
+    expect(edges(state, { cleanup: 2, feather: 1.2 })).toBe(state)
+  })
+
+  it('changes nothing else: no document, selection, history or view change', () => {
+    const state = opened()
+    const next = edges(state, { cleanup: 4, feather: 4 })
+    expect({ ...next, edgeSettings: state.edgeSettings }).toEqual(state)
+  })
+
+  it('keeps the settings across image imports, successful or failed, like the Magic Wand options', () => {
+    const state = edges(initialEditorState, { cleanup: 2, feather: 3 })
+    const imported = opened(state)
+    expect(imported.edgeSettings).toEqual({ cleanup: 2, feather: 3 })
+    const failedImport = reduce(imported, { type: 'import-started', importId: 77 }, { type: 'import-finished', importId: 77, result: failed })
+    expect(failedImport.edgeSettings).toEqual({ cleanup: 2, feather: 3 })
   })
 })

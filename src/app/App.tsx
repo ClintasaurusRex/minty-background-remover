@@ -24,6 +24,7 @@ import {
   selectionActionCommand,
 } from '../editor/selectionCommands'
 import type { FloodMode, Point, SelectionMode, ToolId } from '../editor/types'
+import type { EdgeSettings } from '../image/edit/deleteWithEdges'
 import { createPointerPositionStore } from './pointerPosition'
 import { useEditCommands } from './useEditCommands'
 import { IMAGE_FILE_ACCEPT, useImageImport } from './useImageImport'
@@ -99,6 +100,11 @@ function App() {
     // changed the selection or the image since.
     for (const action of commitToleranceCommand(stateRef.current, tolerance)) dispatch(action)
   }, [])
+  // Edge cleanup and feather apply to the next Delete only; changing them computes nothing.
+  const changeEdgeSettings = useCallback(
+    (settings: Partial<EdgeSettings>) => dispatch({ type: 'edge-settings-changed', settings }),
+    [],
+  )
   const runSelectionAction = useCallback((selectionAction: SelectionAction) => {
     // Computed here, outside the reducer, from the latest committed state and tagged with
     // the document version it used.
@@ -147,6 +153,8 @@ function App() {
           onToleranceChange={changeTolerance}
           onToleranceCommit={commitTolerance}
           onSelectionAction={runSelectionAction}
+          edgeSettings={state.edgeSettings}
+          onEdgeSettingsChange={changeEdgeSettings}
           canDeleteSelection={editActions.deleteSelection}
           onDeleteSelection={deleteSelection}
         />

@@ -505,6 +505,17 @@ Potential techniques may include:
 
 Do not implement an overly complex edge-matting system without clear need.
 
+Decided after the Step 7 comparison (owner): background-colour decontamination (Candidate B), run as part of Delete Selection, 0–5 px, default 0. Implemented in Phase 3 Step 8 (`image/edit/edgeCleanup.ts`, called through `deleteSelectionWithEdges` in `image/edit/deleteWithEdges.ts`):
+
+- Model: in premultiplied RGBA (colour × alpha, and alpha, 0–255), an edge pixel is a blend v = a · F + (1 − a) · B + r of a foreground colour F and the local background B with coverage a.
+- B comes from the original colours of the selected pixels nearby (Delete keeps them hidden, and cleanup runs inside Delete with the source pixels): the mean of the "core" selected pixels (all 8 neighbours selected) within 2 px, else of the selected 8-neighbours; their spread gives a noise level ν = max(6, 2.5 σ). Already transparent selected pixels count as transparent background; their hidden colour is never read.
+- The band: unselected, not fully transparent pixels up to the distance in 8-connected steps from the selection, entered only while the contrast to B does not drop by more than ν (an outline protects what lies behind it).
+- F: from the pixel's unselected neighbours, a deeper band pixel offering its own estimate (so estimates propagate outward from solid material), any other neighbour its colour (a transparent one "transparent material"). A neighbour counts only if it contrasts with B by 24 or more and explains the pixel within max(2ν, 8% of the contrast); the most foreground-like wins. A neighbour farther from the selection with the pixel's own colour (within ν) means solid material: the pixel is left alone (the twin rule).
+- Result per band pixel: unchanged without a reliable estimate, within noise of the foreground, or for twins; fully transparent (colour kept hidden) within noise of the background or when its new alpha rounds to 0; otherwise colour F + r and alpha a · alpha(F + r), never above its own alpha.
+- Guarantees: only band pixels change; alpha never increases; selected and fully transparent pixels are never changed; the image border is never background; inputs are never written; the result does not depend on the strips (256 rows with a halo) the region is processed in.
+- Verified identical, byte for byte, to the Step 7 prototype on the 14 Step 7 fixtures at every distance, and in Chrome and Firefox to the same code in Node. Accuracy as in the Step 7 report (mean edge error over 13 fixtures with ground truth: 11.88 after exact Delete, 6.89 at 1 px, 6.50 at 4 px; all 14 thin lines and their faint anti-aliasing kept).
+- Limits: colour flattened onto the background cannot be recovered; cleanup trusts the selection and never restores deleted pixels; a solid mid-grey part next to a dark outline is protected only while the distance stays inside it (at larger distances the grey column touching the outline is taken for a blend); sub-pixel (LCD) text fringes are not representable. Measurements: `IMPLEMENTATION_PLAN.md`, Phase 3 Step 8.
+
 ---
 
 ## Feathering
@@ -522,6 +533,14 @@ Because many target assets are technical or flat graphics, crisp edges are prefe
 Feathering should be optional.
 
 Feathering must respect the hidden-colour rule under Delete Selection: it may not raise the alpha of a deleted pixel without setting its colour.
+
+Implemented in Phase 3 Step 8 (`image/edit/feather.ts`), run as part of Delete Selection after edge cleanup, 0–5 px, default 0:
+
+- d: each kept pixel's distance (centre to centre) to the nearest selected pixel, measured through kept pixels (unselected, not fully transparent in the source) by vector propagation. Only the deleted selection starts a feather; the image border and transparency already in the image do not.
+- Thin features are protected by the shape's local thickness h, the largest d reachable by stepping uphill (to neighbours at least 0.5 px deeper; a neighbour beyond feather + 2 counts as unlimited). The fade runs over L = min(feather, h − 1.5) px: alpha × clamp((d − 0.5) / L, 0, 1), and nothing when L ≤ 0. Features up to about 3–4 px across (lines, wiring, small text, dots) are never feathered; every shape keeps its middle at full alpha.
+- Why not plain feathering (alpha × clamp((d − 0.5) / feather)): it fades every 1-pixel line (Step 7: 13 of 14 test lines damaged at 1 px). The Step 7 "thin features protected" rule (skip pixels with no deeper neighbour) still split 2 anti-aliased lines and faded small text. The thickness rule keeps all 14 lines and the small text at 1–5 px.
+- Alpha only ever decreases and colour is never changed, except that a pixel faded to 0 gets its original colour back, hidden. Changes stay within the feather distance of the selection; the result does not depend on the strips.
+- Known effect: shapes thicker than about 4 px fade along every deleted edge, outlines drawn on that edge included.
 
 ---
 
@@ -787,6 +806,8 @@ Potential future performance tools:
 - Chunked processing
 
 Do not introduce these until profiling demonstrates a need.
+
+Phase 3 Step 8: edge cleanup and feathering add to Delete's time in proportion to the edge length, not the image size: at 4K about 0.1 s more at 1 px and up to about 0.35 s more at 5 / 5; near 50 MP on an edge-dense image 0.5–0.7 s more at cleanup 1, 0.9–1.2 s at 5, and 1.7–2.1 s more at 5 / 5 (Chrome and Firefox; a flat 50 MP background: at most about 0.35 s more). Undo and Redo times do not change. Work is done in strips of 256 rows, so scratch memory (about 25–95 MB at 50 MP besides Delete's copy) follows the image width. Details: `IMPLEMENTATION_PLAN.md`, Phase 3 Step 8.
 
 Phase 3 (P3-D11): pixel edits start synchronous on the main thread, like Phase 2 selection work, and are measured at 4K and 50 MP before anything else is decided. Measured in Step 6 (Delete Selection above): about 0.1 s at 4K in both browsers, about 0.5–0.65 s for a Delete and 0.23–0.33 s for Undo or Redo near 50 MP. Whether large images need a progress indication or a Worker is an open owner decision (`IMPLEMENTATION_PLAN.md`, Phase 3 Step 6). Copy-on-write buffers can be handed to a Web Worker later without changing the algorithms. How the display image is rebuilt after an edit (P3-D10) was verified in Phase 3 Step 4: synchronously through `OffscreenCanvas` (see Display Images), 13–15 ms at 4K and 77 ms at 50 MP in Chrome, 23–26 ms and 138 ms in Firefox.
 

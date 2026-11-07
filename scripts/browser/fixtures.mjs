@@ -175,7 +175,208 @@ const screenshot = `
     x.fillStyle = '#6b7280'; for (let l = 0; l < 4; l++) x.fillText('Some secondary text, line ' + (l + 1), left + 24, top + 190 + l * 30)
   }`
 
+export const EDGE_FIXTURE_FILES = [
+  'edge-hmi.png',
+  'edge-hmi.jpg',
+  'edge-lines.png',
+  'edge-logo.png',
+  'edge-corners.png',
+  'edge-gradient.png',
+  'edge-alpha.png',
+  'edge-border.png',
+  'edge-photo.jpg',
+  'edge-svg.svg',
+  'edge-hmi-4k.png',
+  'edge-hmi-50mp.png',
+]
+const EDGE_VERSION = '1'
+
+/**
+ * The images the edge cleanup and feathering script (edge-cleanup.mjs) opens, drawn with
+ * Chrome's canvas (anti-aliased shapes and text), generated on first use:
+ *
+ *   edge-hmi.png        480 × 320 HMI pump graphic on grey: shaded pipes and pump, 2 px outlines,
+ *                       1 px wiring (straight and anti-aliased), a glowing status light, text
+ *   edge-hmi.jpg        the same at JPEG quality 0.8
+ *   edge-lines.png      300 × 200 white: aliased and anti-aliased 1 px lines, a hairline, a 2 px
+ *                       line, a 1 px box, coloured wires, single pixels and a sub-pixel dot
+ *   edge-logo.png       320 × 200 anti-aliased logo shapes and text on solid blue
+ *   edge-corners.png    360 × 240 white: bold, medium and 9 px text, sharp corners and spikes
+ *   edge-gradient.png   320 × 240 an arrow and a gauge ring on a vertical gradient
+ *   edge-alpha.png      320 × 200 partially transparent: a half-transparent panel carrying
+ *                       opaque shapes, on full transparency
+ *   edge-border.png     240 × 160 white: shapes and text cut by every image border
+ *   edge-photo.jpg      400 × 300 soft (blurred) objects on an uneven, noisy background, JPEG 0.85
+ *   edge-svg.svg        320 × 200 SVG: shapes, strokes and a 1 px line on white
+ *   edge-hmi-4k.png     edge-hmi.png repeated to 3840 × 2160
+ *   edge-hmi-50mp.png   edge-hmi.png repeated to 8660 × 5773 (just under 50 megapixels)
+ */
+export async function ensureEdgeFixtures() {
+  fs.mkdirSync(FIXTURES, { recursive: true })
+  const stamp = path.join(FIXTURES, 'EDGE_VERSION')
+  const current = fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8') === EDGE_VERSION
+  if (current && EDGE_FIXTURE_FILES.every((file) => fs.existsSync(path.join(FIXTURES, file)))) return FIXTURES
+  const write = (file, bytes) => fs.writeFileSync(path.join(FIXTURES, file), bytes)
+  write(
+    'edge-svg.svg',
+    '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200"><rect width="320" height="200" fill="#ffffff"/>' +
+      '<circle cx="90" cy="100" r="60" fill="#7f8c99" stroke="#1d2733" stroke-width="3"/>' +
+      '<rect x="170" y="40" width="110" height="70" rx="10" fill="#e8a33d" stroke="#5a3a10" stroke-width="2"/>' +
+      '<path d="M170 150 L290 130" stroke="#000000" stroke-width="1"/>' +
+      '<path d="M30 185 Q160 120 300 185" fill="none" stroke="#c0392b" stroke-width="1.5"/></svg>',
+  )
+  const browser = await launchChrome()
+  try {
+    await browser.open('about:blank')
+    // Draws with `draw` on a 2D context `x` of a w × h canvas; returns its pixels (exact, straight RGBA).
+    const pixels = async (w, h, draw) => {
+      const base64 = await browser.eval(`(async () => {
+        const c = new OffscreenCanvas(${w}, ${h}), x = c.getContext('2d')
+        ${draw}
+        const bytes = new Uint8Array(x.getImageData(0, 0, ${w}, ${h}).data.buffer)
+        let out = ''
+        for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000))
+        return btoa(out)
+      })()`)
+      return { width: w, height: h, data: new Uint8Array(Buffer.from(base64, 'base64')) }
+    }
+    const jpeg = async (file, w, h, draw, quality) => {
+      const base64 = await browser.eval(`(async () => {
+        const c = new OffscreenCanvas(${w}, ${h}), x = c.getContext('2d')
+        ${draw}
+        const bytes = new Uint8Array(await (await c.convertToBlob({ type: 'image/jpeg', quality: ${quality} })).arrayBuffer())
+        let out = ''
+        for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000))
+        return btoa(out)
+      })()`)
+      write(file, Buffer.from(base64, 'base64'))
+    }
+    const png = (file, image) => write(file, encodePng(image.width, image.height, image.data))
+    const hmi = await pixels(480, 320, HMI)
+    png('edge-hmi.png', hmi)
+    await jpeg('edge-hmi.jpg', 480, 320, HMI, 0.8)
+    png('edge-lines.png', await pixels(300, 200, LINES))
+    png('edge-logo.png', await pixels(320, 200, LOGO))
+    png('edge-corners.png', await pixels(360, 240, CORNERS))
+    png('edge-gradient.png', await pixels(320, 240, GRADIENT))
+    png('edge-alpha.png', await pixels(320, 200, ALPHA))
+    png('edge-border.png', await pixels(240, 160, BORDER))
+    await jpeg('edge-photo.jpg', 400, 300, PHOTO, 0.85)
+    png('edge-hmi-4k.png', tile(hmi, 3840, 2160))
+    png('edge-hmi-50mp.png', tile(hmi, 8660, 5773))
+  } finally {
+    await browser.close()
+  }
+  fs.writeFileSync(stamp, EDGE_VERSION)
+  return FIXTURES
+}
+
+function tile(image, width, height) {
+  const source = new Uint32Array(image.data.buffer, image.data.byteOffset, image.width * image.height)
+  const data = new Uint8Array(width * height * 4)
+  const out = new Uint32Array(data.buffer)
+  for (let y = 0; y < height; y++) {
+    const row = (y % image.height) * image.width
+    for (let x = 0; x < width; x++) out[y * width + x] = source[row + (x % image.width)]
+  }
+  return { width, height, data }
+}
+
+const HMI = `
+  x.fillStyle = '#c8c8c8'; x.fillRect(0, 0, 480, 320)
+  const pipe = (y0, h) => { const g = x.createLinearGradient(0, y0, 0, y0 + h); g.addColorStop(0, '#80858e'); g.addColorStop(0.45, '#f1f3f6'); g.addColorStop(1, '#5f646d'); return g }
+  x.fillStyle = pipe(150, 30); x.fillRect(0, 150, 160, 30)
+  x.fillStyle = pipe(90, 26); x.fillRect(250, 90, 180, 26)
+  x.fillStyle = '#4a4d55'; x.fillRect(430, 80, 12, 46)
+  x.fillStyle = '#6e737c'; x.fillRect(236, 70, 10, 30)
+  const body = x.createRadialGradient(200, 140, 8, 220, 165, 84); body.addColorStop(0, '#f4f5f7'); body.addColorStop(1, '#70757e')
+  x.fillStyle = body; x.beginPath(); x.arc(220, 165, 80, 0, Math.PI * 2); x.fill()
+  x.lineWidth = 2; x.strokeStyle = '#2b2d33'; x.stroke()
+  x.fillStyle = '#26282d'; x.beginPath(); x.moveTo(195, 125); x.lineTo(265, 165); x.lineTo(195, 205); x.closePath(); x.fill()
+  x.fillStyle = '#2a5aa0'; x.beginPath(); x.roundRect(150, 20, 72, 50, 6); x.fill(); x.lineWidth = 2; x.strokeStyle = '#1b2433'; x.stroke()
+  x.lineWidth = 1
+  x.strokeStyle = '#000000'; x.beginPath(); x.moveTo(224, 40.5); x.lineTo(440.5, 40.5); x.lineTo(440.5, 72); x.stroke()
+  x.strokeStyle = '#c00000'; x.beginPath(); x.moveTo(224, 60.5); x.lineTo(400, 60.5); x.stroke()
+  x.strokeStyle = '#109040'; x.beginPath(); x.moveTo(20, 20); x.lineTo(148, 40); x.stroke()
+  const led = x.createRadialGradient(380, 230, 3, 380, 230, 16); led.addColorStop(0, '#30f070'); led.addColorStop(0.45, '#20c050'); led.addColorStop(1, 'rgba(32, 192, 80, 0)')
+  x.fillStyle = led; x.fillRect(360, 210, 40, 40)
+  x.fillStyle = '#ffffff'; x.fillRect(300, 270, 150, 34); x.strokeStyle = '#555555'; x.strokeRect(300.5, 270.5, 149, 33)
+  x.fillStyle = '#111111'; x.font = 'bold 13px sans-serif'; x.fillText('P-101  RUN', 314, 292)
+  x.fillStyle = '#333333'; x.font = '9px sans-serif'; x.fillText('TAG-0042 FLOW 12.5', 20, 300)`
+
+const LINES = `
+  x.fillStyle = '#ffffff'; x.fillRect(0, 0, 300, 200)
+  const line = (colour, width, x0, y0, x1, y1) => { x.strokeStyle = colour; x.lineWidth = width; x.beginPath(); x.moveTo(x0, y0); x.lineTo(x1, y1); x.stroke() }
+  line('#000000', 1, 10, 10.5, 290, 10.5)
+  line('#000000', 1, 10.5, 20, 10.5, 190)
+  line('#000000', 1, 20, 30, 280, 125)
+  line('#000000', 1, 20, 140, 280, 163)
+  line('#000000', 0.6, 30, 175, 280, 192)
+  line('#000000', 2, 150, 40, 150, 120)
+  x.lineWidth = 1; x.strokeStyle = '#000000'; x.strokeRect(200.5, 40.5, 60, 40)
+  line('#d00000', 1, 30, 60.5, 140, 60.5)
+  line('#0040d0', 1, 30, 70, 140, 90)
+  x.fillStyle = '#000000'; for (const [px, py] of [[40, 110], [60, 112], [80, 114], [270, 20]]) x.fillRect(px, py, 1, 1)
+  x.beginPath(); x.arc(100.5, 110.5, 0.4, 0, Math.PI * 2); x.fill()`
+
+const LOGO = `
+  x.fillStyle = '#2a6fdb'; x.fillRect(0, 0, 320, 200)
+  x.strokeStyle = '#ffffff'; x.lineWidth = 6; x.beginPath(); x.arc(70, 100, 44, 0, Math.PI * 2); x.stroke()
+  x.fillStyle = '#ff9a1f'; x.beginPath(); x.moveTo(70, 66); x.lineTo(98, 120); x.lineTo(42, 120); x.closePath(); x.fill()
+  x.fillStyle = '#ffffff'; x.font = 'bold 40px sans-serif'; x.fillText('MINTY', 128, 112)
+  x.font = '12px sans-serif'; x.fillText('background remover', 132, 136)`
+
+const CORNERS = `
+  x.fillStyle = '#ffffff'; x.fillRect(0, 0, 360, 240)
+  x.fillStyle = '#000000'; x.font = 'bold 28px sans-serif'; x.fillText('PUMP P-101 STATUS', 14, 40)
+  x.fillStyle = '#1f4fa0'; x.font = '16px sans-serif'; x.fillText('Flow 12.5 m³/h   Δp 0.8 bar', 14, 68)
+  x.fillStyle = '#333333'; x.font = '9px sans-serif'; x.fillText('TAG-0042 (9 px label)', 14, 86)
+  x.fillStyle = '#000000'
+  const poly = (points) => { x.beginPath(); points.forEach(([px, py], i) => (i ? x.lineTo(px, py) : x.moveTo(px, py))); x.closePath(); x.fill() }
+  poly([[60, 110], [100, 150], [60, 190], [20, 150]])
+  x.fillStyle = '#c0141e'; poly([[150, 110], [158, 200], [142, 200]])
+  x.fillStyle = '#000000'
+  const star = []; for (let i = 0; i < 10; i++) { const r = i % 2 ? 16 : 42, t = -Math.PI / 2 + (i * Math.PI) / 5; star.push([240 + r * Math.cos(t), 155 + r * Math.sin(t)]) }
+  poly(star)
+  x.fillRect(300, 120, 40, 60)`
+
+const GRADIENT = `
+  const g = x.createLinearGradient(0, 0, 0, 240); g.addColorStop(0, '#e6eef8'); g.addColorStop(1, '#bccbe0')
+  x.fillStyle = g; x.fillRect(0, 0, 320, 240)
+  x.fillStyle = '#f2c230'; x.strokeStyle = '#3a2f0a'; x.lineWidth = 2
+  x.beginPath(); x.moveTo(30, 100); x.lineTo(150, 100); x.lineTo(150, 70); x.lineTo(200, 120); x.lineTo(150, 170); x.lineTo(150, 140); x.lineTo(30, 140); x.closePath(); x.fill(); x.stroke()
+  x.strokeStyle = '#c62828'; x.lineWidth = 8; x.beginPath(); x.arc(258, 120, 40, 0, Math.PI * 2); x.stroke()`
+
+const ALPHA = `
+  x.clearRect(0, 0, 320, 200)
+  x.fillStyle = 'rgba(40, 40, 48, 0.5)'; x.beginPath(); x.roundRect(20, 20, 280, 160, 14); x.fill()
+  x.fillStyle = '#ff8c1a'; x.beginPath(); x.arc(100, 100, 46, 0, Math.PI * 2); x.fill()
+  x.fillStyle = '#ffffff'; x.font = 'bold 30px sans-serif'; x.fillText('ALARM', 160, 112)
+  x.strokeStyle = '#ffffff'; x.lineWidth = 1; x.beginPath(); x.moveTo(160, 130.5); x.lineTo(280, 130.5); x.stroke()`
+
+const BORDER = `
+  x.fillStyle = '#ffffff'; x.fillRect(0, 0, 240, 160)
+  x.fillStyle = '#1b3a6b'; x.beginPath(); x.arc(0, 80, 40, 0, Math.PI * 2); x.fill()
+  x.fillStyle = '#000000'; x.fillRect(60, 150, 120, 10)
+  x.fillStyle = '#b02020'; x.beginPath(); x.moveTo(200, 0); x.lineTo(240, 0); x.lineTo(240, 50); x.closePath(); x.fill()
+  x.fillStyle = '#000000'; x.font = 'bold 20px sans-serif'; x.fillText('EDGE', 90, 12)`
+
+const PHOTO = `
+  const g = x.createRadialGradient(140, 90, 20, 200, 150, 320); g.addColorStop(0, '#d9dde3'); g.addColorStop(1, '#8e959f')
+  x.fillStyle = g; x.fillRect(0, 0, 400, 300)
+  const noise = x.getImageData(0, 0, 400, 300); let seed = 7
+  for (let i = 0; i < noise.data.length; i += 4) { seed = (seed * 1103515245 + 12345) >>> 0; const n = ((seed >>> 24) % 13) - 6; for (let k = 0; k < 3; k++) noise.data[i + k] += n }
+  x.putImageData(noise, 0, 0)
+  x.filter = 'blur(1.5px)'
+  x.fillStyle = '#3b5f8a'; x.fillRect(170, 150, 70, 120)
+  x.strokeStyle = '#c0392b'; x.lineWidth = 9; x.beginPath(); x.arc(205, 105, 48, 0, Math.PI * 2); x.stroke()
+  x.fillStyle = '#2d3a46'; x.fillRect(60, 200, 90, 50)
+  x.filter = 'none'`
+
 if (import.meta.main) {
   const dir = await ensureFixtures({ force: true })
   for (const file of FIXTURE_FILES) console.log(`${file}  ${fs.statSync(path.join(dir, file)).size} bytes`)
+  fs.rmSync(path.join(dir, 'EDGE_VERSION'), { force: true })
+  await ensureEdgeFixtures()
+  for (const file of EDGE_FIXTURE_FILES) console.log(`${file}  ${fs.statSync(path.join(dir, file)).size} bytes`)
 }

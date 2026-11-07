@@ -314,6 +314,8 @@ As implemented (Phase 3 Step 6; details in `IMPLEMENTATION_PLAN.md`):
 - Delete is available whenever something is selected and no other image is opening.
 - Exact deletion only: edge cleanup and feathering come later in Phase 3.
 
+As implemented (Phase 3 Step 8): Delete applies the Edge cleanup and Feather amounts set beside it (§9) to the edge it leaves, in the same single Undo step. With both at 0, the default, Delete is exactly as above.
+
 ---
 
 ## 9. Edge Cleanup
@@ -340,6 +342,18 @@ Approved for Phase 3:
 
 - Cleanup and feathering both default to 0 px, so fine lines and anti-aliasing in 2D technical graphics are never changed unless the user asks (P3-D4). With both at 0, Delete changes only selected pixels.
 - The cleanup algorithm is not decided. It is chosen after a prototype comparison on representative images (Phase 3 Step 7; P3-D5). Whether cleanup and feathering run as part of Delete or as a separate action is decided with it.
+
+Decided after the Step 7 comparison (owner): background-colour decontamination (Candidate B), run as part of Delete Selection with one history entry; Edge cleanup 0–5 px and Feather 0–5 px, both 0 by default.
+
+As implemented (Phase 3 Step 8; details in `IMAGE_PROCESSING_SPEC.md` and `IMPLEMENTATION_PLAN.md`):
+
+- Two controls beside Delete Selection, "Edge cleanup" and "Feather", each 0–5 px in whole pixels. They only set what the next Delete does: changing them never changes the image, and an edit already made is not re-applied (that would be Step 9).
+- Edge cleanup removes the deleted background's colour from the unselected edge pixels up to that many pixels in: their alpha is lowered and their colour corrected, so the edge looks right over any background. Pixels it cannot explain as a blend of the object and the background are left alone. 1 px suits screenshots, icons and vector art; 2–4 px soft photographs.
+- Feather fades the object's edge inward over that many pixels. Lines, wiring, small text and other features up to about 3–4 px across are never feathered, and every shape keeps its middle at full strength; thicker shapes' edges fade, outlines included.
+- Neither ever restores deleted pixels, grows the object, raises alpha or shows deleted colour; the image border and transparency already in the image are never treated as deleted background.
+- Delete, cleanup and feathering are one edit: one Undo step restores every pixel exactly, and Redo repeats it.
+- Limits: colour flattened onto the background in the file cannot be recovered; cleanup trusts the selection (a selection that leaked into the object makes the damage larger); at larger amounts a solid grey part next to a dark outline can be taken for a blend. Near 50 megapixels Delete with these amounts can take one to a few seconds.
+- The amounts are kept for the session, like the Magic Wand options.
 
 ---
 

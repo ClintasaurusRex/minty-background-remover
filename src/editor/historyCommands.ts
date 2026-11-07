@@ -50,6 +50,8 @@ interface CompletedEditBase {
   readonly selection: SelectionMask | null
   /** How many pixels the edit changed, when the tool knows (Delete's count), for the announcement. */
   readonly changedPixels?: number
+  /** Edge pixels Delete's cleanup and feathering changed besides, when there were any, for the announcement. */
+  readonly edgePixels?: number
 }
 
 /** An edit that keeps the image's size, such as Delete Selection. */
@@ -130,6 +132,7 @@ export function completedEditCommand(
       image,
       selection: edit.selection,
       ...(edit.changedPixels === undefined ? {} : { changedPixels: edit.changedPixels }),
+      ...(edit.edgePixels ? { edgePixels: edit.edgePixels } : {}),
     }
   } catch (cause) {
     return { type: 'edit-failed', error: { operation: edit.kind, detail: describeCause(cause) } }

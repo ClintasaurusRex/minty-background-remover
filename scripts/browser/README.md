@@ -16,7 +16,11 @@ browser windows and profiles are never touched.
 The scripts generate the images they open into `scripts/browser/fixtures/`, which Git ignores.
 They do this on first use. Run `node scripts/browser/fixtures.mjs` to regenerate them. The editing
 script also generates `details.png` (1-pixel lines and dots, separate squares, every alpha value,
-hidden colour), `big50mp.png` (8660 × 5773) and `broken.png` (a truncated PNG).
+hidden colour), `big50mp.png` (8660 × 5773) and `broken.png` (a truncated PNG). The edge cleanup
+script generates `edge-*.png`, `edge-*.jpg` and `edge-svg.svg` (an HMI pump graphic, thin lines and
+wiring, a logo on colour, text and corners, a gradient, a partially transparent PNG, shapes touching
+the border, a soft photo, an SVG, and the HMI graphic repeated to 4K and to 50 megapixels); they are
+also useful for manual checks.
 
 ## Scripts
 
@@ -151,6 +155,35 @@ It also reports what happens if a selection change is dispatched in a transition
 (the app never does this): React returns to the image before the Delete, which is already
 released. That note shows where the ownership argument in `src/app/editDispatch.ts` ends.
 
+### Edge cleanup and feathering (Phase 3 Step 8)
+
+```sh
+npm run build
+node scripts/browser/edge-cleanup.mjs [--browser chrome|firefox|all] [--no-perf] [--no-stress]
+     [--step7 ~/minty-step7-review/out/fixtures] [--sheets <folder>]
+APP_URL=http://127.0.0.1:5173/ node scripts/browser/edge-cleanup.mjs --no-perf   # npm run dev: Strict Mode
+```
+
+With real clicks, typing and key presses, it checks that:
+
+- The Edge cleanup and Feather controls start at 0 px with their labels, units and range; Tab
+  reaches them between Shrink and Delete Selection; the sliders' keys, typing, clamping and Escape
+  work; Delete inside a field edits only its text; adjusting computes nothing; the amounts are kept
+  across Deletes and images; a 640 px window wraps each control as one unit.
+- For ten images at several cleanup and feather amounts set with the controls, Delete produces
+  exactly the bytes the application's own algorithm produces in Node for the same pixels and
+  selection (`lib/source.mjs` imports `src/` into the script), and with both amounts at 0 exactly
+  the Step 6 Delete; one history entry, the selection cleared, the announcement, the canvas
+  showing the result; Undo restores every byte and the selection, Redo the result.
+- With `--step7`, the Step 7 fixtures are deleted with their recorded Magic Wand clicks and
+  compared with Node and with the Step 7 report's accuracy figures.
+- With `--sheets`, it writes before / after PNGs of each image's detail area, 4× enlarged.
+
+Then (unless `--no-perf`) it times Delete, Undo and Redo at each amount at 4K and (unless
+`--no-stress`) near 50 megapixels, and reports history size and memory. Timings are reported, never
+checked. Headless Firefox has no window focus and fires no blur events, so leaving an emptied field
+is checked in Chrome only.
+
 ## Maintenance notes
 
 - `lib/app.mjs` finds the editor state through React's internal fiber tree, because the app has
@@ -160,5 +193,7 @@ released. That note shows where the ownership argument in `src/app/editDispatch.
   action is renamed, update the scripts too.
 - `lib/edit.mjs` wraps `transferToImageBitmap`, `putImageData`, `createImageBitmap` and
   `drawImage` in the page to count live display images and time their creation and drawing.
+- `lib/source.mjs` runs the app's TypeScript in Node 24 by type stripping, adding `.ts` to the
+  app's extensionless imports. It needs the erasable-only TypeScript the project already uses.
 - Canvases are read by drawing them onto a separate canvas, never with their own `getImageData`.
   In Chrome, reading a canvas back can move it off the GPU, and then a crash would not affect it.

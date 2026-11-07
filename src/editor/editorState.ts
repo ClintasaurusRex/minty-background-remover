@@ -2,6 +2,7 @@ import { snapToDevicePixels } from '../canvas/devicePixels'
 import type { DisplayImage } from '../canvas/displayImage'
 import { keepImageReachable, limitPan } from '../canvas/pan'
 import { clampZoom, fitViewport, nextZoomStep, panBy, resizeViewport, zoomAt } from '../canvas/viewport'
+import { type EdgeSettings, MAX_EDGE_PIXELS, NO_EDGE_TREATMENT } from '../image/edit/deleteWithEdges'
 import type { ImportError } from '../image/import/errors'
 import { sharesPixelMemory } from '../image/pixelBuffer'
 import type { MagicWandOptions } from '../image/selection/magicWand'
@@ -85,6 +86,12 @@ export interface EditorState {
   /** Magic Wand options. Kept for the session, across image imports and tool changes. */
   readonly magicWand: MagicWandSettings
   /**
+   * Edge cleanup and feather amounts for the next Delete Selection (Phase 3 Step 8), whole
+   * pixels from 0 to 5, both 0 by default (P3-D4). Like the Magic Wand options, kept for the
+   * session and never applied to an edit already made.
+   */
+  readonly edgeSettings: EdgeSettings
+  /**
    * The selected pixels of the open document, or null for no selection. Always the
    * document's size. Cleared when another image is opened; kept on tool changes.
    */
@@ -129,8 +136,16 @@ export interface EditorState {
 
 /** What a successful edit, Undo or Redo did, or an edit that changed nothing. */
 export type EditNotice =
-  /** `changedPixels`: how many pixels the edit changed, when the tool reports it. */
-  | { readonly kind: 'applied'; readonly operation: EditKind; readonly changedPixels: number | null }
+  /**
+   * `changedPixels`: how many pixels the edit changed, when the tool reports it. `edgePixels`:
+   * for a Delete with edge cleanup or feathering, how many edge pixels those changed besides.
+   */
+  | {
+      readonly kind: 'applied'
+      readonly operation: EditKind
+      readonly changedPixels: number | null
+      readonly edgePixels?: number
+    }
   | { readonly kind: 'undone' | 'redone'; readonly operation: EditKind }
   /** The edit would have changed no pixel (Delete with only fully transparent pixels selected): nothing happened. */
   | { readonly kind: 'unchanged'; readonly operation: EditKind }
@@ -235,6 +250,11 @@ export type EditorAction =
   | { readonly type: 'magic-wand-flood-mode-changed'; readonly floodMode: FloodMode }
   | { readonly type: 'magic-wand-selection-mode-changed'; readonly selectionMode: SelectionMode }
   /**
+   * Sets the edge cleanup and / or feather amount used by the next Delete Selection. Each is
+   * rounded to a whole number and clamped to 0–5; values that are not finite are ignored.
+   */
+  | { readonly type: 'edge-settings-changed'; readonly settings: Partial<EdgeSettings> }
+  /**
    * Replaces the selection with one computed for `version` of the open document (null
    * selects nothing). Ignored unless `version` is the open document's current version
    * and the mask is the document's size. The state keeps the mask itself, without
@@ -280,6 +300,8 @@ export type EditorAction =
       readonly selection: SelectionMask | null
       /** How many pixels the edit changed, when the tool reports it (for the announcement). */
       readonly changedPixels?: number
+      /** Edge pixels changed by Delete's edge cleanup and feathering, when there were any (for the announcement). */
+      readonly edgePixels?: number
     }
   /**
    * An edit of `version` that would have changed no pixel, so nothing was recorded and nothing
@@ -326,6 +348,7 @@ export const initialEditorState: EditorState = {
   importNotice: null,
   activeTool: null,
   magicWand: DEFAULT_MAGIC_WAND_SETTINGS,
+  edgeSettings: NO_EDGE_TREATMENT,
   selection: null,
   lastMagicWandOperation: null,
   history: createEditHistory(),
@@ -466,6 +489,9 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         ? withMagicWand(state, { selectionMode: action.selectionMode })
         : state
 
+    case 'edge-settings-changed':
+      return withEdgeSettings(state, action.settings)
+
     case 'selection-applied': {
       const { version, selection } = action
       if (!fitsDocument(state, version, selection) || selection === state.selection) return state
@@ -535,7 +561,12 @@ function applyEdit(state: EditorState, action: EditAction<'edit-applied'>): Edit
     return state
   }
   if (!patchFits(entry, current, next) || !fitsSize(selection, next)) return state
-  const notice: EditNotice = { kind: 'applied', operation: entry.kind, changedPixels: action.changedPixels ?? null }
+  const notice: EditNotice = {
+    kind: 'applied',
+    operation: entry.kind,
+    changedPixels: action.changedPixels ?? null,
+    ...(action.edgePixels ? { edgePixels: action.edgePixels } : {}),
+  }
   return {
     ...withEditFeedback(state, null, notice),
     ...moveContent(state, next, contentShift(entry, 1)),
@@ -700,6 +731,22 @@ function withMagicWand(state: EditorState, change: Partial<MagicWandSettings>): 
     return state
   }
   return { ...state, magicWand: next }
+}
+
+/** A Delete edge amount as the editor keeps it: a whole number of pixels from 0 to 5. */
+function clampEdgePixels(value: number): number {
+  return Math.min(MAX_EDGE_PIXELS, Math.max(0, Math.round(value)))
+}
+
+/** Changes the edge settings, ignoring values that are not finite; the state itself when nothing differs. */
+function withEdgeSettings(state: EditorState, change: Partial<EdgeSettings>): EditorState {
+  const current = state.edgeSettings
+  const pick = (value: number | undefined, previous: number) =>
+    value !== undefined && Number.isFinite(value) ? clampEdgePixels(value) : previous
+  const cleanup = pick(change.cleanup, current.cleanup)
+  const feather = pick(change.feather, current.feather)
+  if (cleanup === current.cleanup && feather === current.feather) return state
+  return { ...state, edgeSettings: { cleanup, feather } }
 }
 
 /**

@@ -4,12 +4,14 @@ import type { SelectionAction } from '../../editor/selectionCommands'
 import {
   type ToleranceFieldEvent,
   type ToleranceSliderEvent,
+  EDGE_PIXEL_RANGE,
   NO_KEYS_HELD,
   initialToleranceFieldState,
   toleranceFieldEvent,
   toleranceSliderEvent,
 } from '../../editor/toleranceInput'
 import type { FloodMode, SelectionMode } from '../../editor/types'
+import type { EdgeSettings } from '../../image/edit/deleteWithEdges'
 import { MAX_TOLERANCE } from '../../image/selection/colourDistance'
 import { DeleteIcon } from '../icons/icons'
 import './ToolOptions.css'
@@ -32,6 +34,10 @@ export interface MagicWandOptionsProps {
    */
   onToleranceCommit: (tolerance: number) => void
   onSelectionAction: (action: SelectionAction) => void
+  /** Edge cleanup and feather amounts (0–5 px) the next Delete Selection uses. */
+  edgeSettings: EdgeSettings
+  /** A new edge cleanup and / or feather amount, applied to the next Delete only. */
+  onEdgeSettingsChange: (settings: Partial<EdgeSettings>) => void
   /** Whether Delete Selection can run: something is selected (and no other image is opening). */
   canDeleteSelection: boolean
   /** Makes the selected pixels transparent (the Delete key does the same). */
@@ -65,11 +71,17 @@ const ACTIONS: readonly { action: SelectionAction; label: string; name: string; 
 
 const DELETE_TITLE = 'Make the selected pixels transparent (Delete)'
 
+const EDGE_CLEANUP_TITLE =
+  'Edge cleanup for the next Delete: remove the background colour left in edge pixels, up to this many pixels in from the deleted area (0–5 px; 0 = off)'
+const FEATHER_TITLE =
+  'Feather for the next Delete: fade the edge over this many pixels in from the deleted area; thin lines and small text are kept (0–5 px; 0 = off)'
+
 /**
  * The Magic Wand's contextual options, shown as a second toolbar row while it is the
  * active tool. Options apply to the next Magic Wand click; a finished tolerance adjustment
  * also re-applies the last click. The selection actions change the selection at once.
- * Delete Selection, last, edits the image: it makes the selected pixels transparent.
+ * Delete Selection, last, edits the image: it makes the selected pixels transparent, then
+ * applies the edge cleanup and feather amounts shown just before it (both 0 by default).
  */
 export function MagicWandOptions({
   settings,
@@ -79,6 +91,8 @@ export function MagicWandOptions({
   onToleranceChange,
   onToleranceCommit,
   onSelectionAction,
+  edgeSettings,
+  onEdgeSettingsChange,
   canDeleteSelection,
   onDeleteSelection,
 }: MagicWandOptionsProps) {
@@ -114,6 +128,20 @@ export function MagicWandOptions({
           )
         })}
       </div>
+      <EdgeAmountControl
+        label="Edge cleanup"
+        fieldLabel="Edge cleanup in pixels, 0 to 5"
+        title={EDGE_CLEANUP_TITLE}
+        value={edgeSettings.cleanup}
+        onChange={(cleanup) => onEdgeSettingsChange({ cleanup })}
+      />
+      <EdgeAmountControl
+        label="Feather"
+        fieldLabel="Feather in pixels, 0 to 5"
+        title={FEATHER_TITLE}
+        value={edgeSettings.feather}
+        onChange={(feather) => onEdgeSettingsChange({ feather })}
+      />
       <div className="tool-options__group">
         {/* Its label and size never change, so the row never re-wraps when it becomes available. */}
         <button
@@ -253,6 +281,76 @@ function ToleranceControl({ tolerance, onChange, onCommit }: ToleranceControlPro
         onKeyUp={(event) => handleField({ type: 'key-up', key: event.key })}
         onBlur={() => handleField({ type: 'blur' })}
       />
+    </div>
+  )
+}
+
+interface EdgeAmountControlProps {
+  /** Visible label, also the slider's accessible name. */
+  label: string
+  /** The text field's accessible name, with the unit and range. */
+  fieldLabel: string
+  title: string
+  /** Whole pixels, 0–5. */
+  value: number
+  onChange: (value: number) => void
+}
+
+/**
+ * A slider and a text field for one Delete edge amount, in whole pixels from 0 to 5, built like
+ * the tolerance control: the slider applies every movement, and the text field applies a whole
+ * number from 0 to 5 as it is typed, other text on Enter or leaving it (rounded and clamped, or
+ * restored if it is not a number); Up / Down step by 1; Escape cancels an unfinished entry.
+ *
+ * Nothing is computed while adjusting: the value only sets what the next Delete Selection uses.
+ */
+function EdgeAmountControl({ label, fieldLabel, title, value, onChange }: EdgeAmountControlProps) {
+  const labelId = useId()
+  const [field, setField] = useState(() => initialToleranceFieldState(value))
+
+  const handleField = (event: ToleranceFieldEvent, keyEvent?: { preventDefault(): void }) => {
+    const result = toleranceFieldEvent(field, event, value, EDGE_PIXEL_RANGE)
+    if (result.handled) keyEvent?.preventDefault()
+    if (result.state !== field) setField(result.state)
+    if (result.change !== undefined) onChange(result.change)
+    if (result.commit !== undefined) onChange(result.commit)
+  }
+
+  return (
+    <div className="tool-options__group tool-options__amount">
+      <span id={labelId} className="tool-options__label">
+        {label}
+      </span>
+      <input
+        type="range"
+        className="tool-options__slider tool-options__slider--amount"
+        min={0}
+        max={EDGE_PIXEL_RANGE.max}
+        step={1}
+        value={value}
+        aria-labelledby={labelId}
+        aria-valuetext={`${value} px`}
+        title={title}
+        onChange={(event) => onChange(Number(event.currentTarget.value))}
+      />
+      <input
+        type="text"
+        inputMode="numeric"
+        className="tool-options__number tool-options__number--amount"
+        value={field.draft ?? String(value)}
+        aria-label={fieldLabel}
+        title={title}
+        autoComplete="off"
+        spellCheck={false}
+        onFocus={() => handleField({ type: 'focus' })}
+        onChange={(event) => handleField({ type: 'input', text: event.currentTarget.value })}
+        onKeyDown={(event) => handleField({ type: 'key-down', key: event.key }, event)}
+        onKeyUp={(event) => handleField({ type: 'key-up', key: event.key })}
+        onBlur={() => handleField({ type: 'blur' })}
+      />
+      <span className="tool-options__unit" aria-hidden="true">
+        px
+      </span>
     </div>
   )
 }

@@ -192,6 +192,14 @@ As implemented (Phase 3 Step 6):
 - Delete Selection is the last control in the row, in its own group after Shrink: a delete icon and the visible label "Delete Selection" (also its accessible name, so it is not mistaken for Clear), with the tooltip "Make the selected pixels transparent (Delete)" and `aria-keyshortcuts="Delete"`.
 - It is available whenever something is selected and no other image is opening. Unavailable, it is `aria-disabled` (styled like the other unavailable actions; focus stays on it after a Delete, and clicking does nothing) and its tooltip adds "— nothing to delete". Its label and size never change, so the row never re-wraps or resizes the workspace.
 
+As implemented (Phase 3 Step 8):
+
+- Two controls between Shrink and Delete Selection: "Edge cleanup" and "Feather", each a short slider (0–5, step 1) and a text field followed by the unit "px". Both show 0 by default. Each control wraps as one unit on narrow windows; the toolbar is otherwise unchanged.
+- They follow the tolerance control's conventions: the slider applies every movement; the field applies a whole number from 0 to 5 as it is typed, rounds and clamps other numbers on Enter or leaving the field (other text restores the value), steps with Up / Down (and Page Up / Page Down, by 1), and Escape cancels an unfinished entry. Delete, Backspace and Ctrl + Z inside the field edit its text.
+- Accessible names: the slider is named by its visible label and reads its value as "2 px"; the fields are "Edge cleanup in pixels, 0 to 5" and "Feather in pixels, 0 to 5". Tooltips say what each does and that it applies to the next Delete.
+- Nothing is computed while adjusting: the amounts only set what the next Delete Selection does. Changing them never changes the image or re-applies a Delete (Step 9 may add that). They are kept for the session, like the Magic Wand options.
+- After a Delete that cleaned or feathered edge pixels, the announcement adds, for example, "1,204 edge pixels were cleaned up or feathered."
+
 The interface should not expose unnecessary technical terminology.
 
 ---

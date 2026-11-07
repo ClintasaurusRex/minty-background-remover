@@ -344,7 +344,28 @@ scripts/browser/                   edit-workflow.mjs (the whole workflow, timing
 - Availability rules that are not permanent (an import in progress) live in the commands, never in the reducer.
 - `import-started` is committed at once, so edits are unavailable from the moment an import starts: together with the confirmation, no edit can slip in between the decision to replace the image and the replacement.
 
-Planned for later steps (subject to review at each step): `image/edit/` (edge band, cleanup, feather), `image/trim/autoTrim.ts` and its tool.
+Step 8 (edge cleanup and feathering as part of Delete Selection):
+
+```text
+src/
+├── image/edit/deleteSelection.ts  deleteSelectedPixelData: the Delete returning its still-writable copy
+├── image/edit/deleteWithEdges.ts  deleteSelectionWithEdges: Delete, cleanup, feather on one copy; EdgeSettings
+├── image/edit/edgeBand.ts         strips with a halo, the 32-bit seed scan, changed-bounds tracking
+├── image/edit/edgeCleanup.ts      background-colour decontamination (Candidate B)
+├── image/edit/feather.ts          inward feathering, thin features protected by local thickness
+├── editor/editorState.ts          edgeSettings (0–5 px each, default 0), edge-settings-changed
+├── editor/editCommands.ts         Delete uses the state's edge settings
+└── components/Toolbar/MagicWandOptions.tsx  the Edge cleanup and Feather controls
+
+scripts/browser/edge-cleanup.mjs   the controls, exact results against the algorithm run in Node
+                                   (lib/source.mjs imports src/), Undo / Redo, Step 7 fixtures, timings
+```
+
+- The edge passes are pure (`PixelBuffer` and `SelectionMask` in, the edited copy out), so they run in Node tests and could move to a Worker with Delete. They write only the copy Delete made, before it becomes a document: copy-on-write is unchanged, and Delete with edges still makes exactly one image-sized copy.
+- The patch region is the bounds of every changed pixel, so the existing XOR pixel patches record the colour and alpha changes; history, Undo, Redo, version checks and display-image ownership are unchanged.
+- The amounts are editor state like the Magic Wand options: the reducer only stores them (rounded, clamped); the command reads them when Delete runs.
+
+Planned for later steps (subject to review at each step): `image/trim/autoTrim.ts` and its tool.
 
 Key rules:
 

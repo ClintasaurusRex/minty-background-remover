@@ -35,6 +35,16 @@ const KEYS = {
   Enter: { key: 'Enter', code: 'Enter', keyCode: 13, webdriver: '\uE007' },
   Control: { key: 'Control', code: 'ControlLeft', keyCode: 17, webdriver: '\uE009' },
   Shift: { key: 'Shift', code: 'ShiftLeft', keyCode: 16, webdriver: '\uE008' },
+  Tab: { key: 'Tab', code: 'Tab', keyCode: 9, webdriver: '\uE004' },
+  Backspace: { key: 'Backspace', code: 'Backspace', keyCode: 8, webdriver: '\uE003' },
+  ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37, webdriver: '\uE012' },
+  ArrowUp: { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38, webdriver: '\uE013' },
+  ArrowRight: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39, webdriver: '\uE014' },
+  ArrowDown: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, webdriver: '\uE015' },
+  PageUp: { key: 'PageUp', code: 'PageUp', keyCode: 33, webdriver: '\uE00E' },
+  PageDown: { key: 'PageDown', code: 'PageDown', keyCode: 34, webdriver: '\uE00F' },
+  End: { key: 'End', code: 'End', keyCode: 35, webdriver: '\uE010' },
+  Home: { key: 'Home', code: 'Home', keyCode: 36, webdriver: '\uE011' },
 }
 function keyInfo(name) {
   if (KEYS[name]) return KEYS[name]
@@ -191,6 +201,10 @@ export async function launchChrome({ dpr = 1, width = 1400, height = 900, reduce
           await send('Input.dispatchKeyEvent', { type: 'keyUp', key: modifier.key, code: modifier.code, windowsVirtualKeyCode: modifier.keyCode, modifiers: down })
         }
       },
+      /** Types `text` into the focused element, as text input (replacing a text selection). */
+      async type(text) {
+        await send('Input.insertText', { text })
+      },
       /** Runs a Chrome DevTools Protocol command on the page. */
       cdp: (method, params = {}) => send(method, params),
       close: () => closeBrowser(child, profile, socket, () => send('Browser.close')),
@@ -283,6 +297,11 @@ export async function launchFirefox({ dpr = 1, width = 1400, height = 900, reduc
           ...(repeat ? [] : [{ type: 'keyUp', value: info.webdriver }]),
           ...held.reverse().map((modifier) => ({ type: 'keyUp', value: modifier.webdriver })),
         ]
+        await send('input.performActions', { context, actions: [{ type: 'key', id: 'keyboard', actions }] })
+      },
+      /** Types `text` into the focused element, one key press per character. */
+      async type(text) {
+        const actions = [...text].flatMap((value) => [{ type: 'keyDown', value }, { type: 'keyUp', value }])
         await send('input.performActions', { context, actions: [{ type: 'key', id: 'keyboard', actions }] })
       },
       /** Releases every key and button still held. */

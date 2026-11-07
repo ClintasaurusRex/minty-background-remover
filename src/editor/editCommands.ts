@@ -1,5 +1,5 @@
 import { createDisplayImage } from '../canvas/displayImage'
-import { deleteSelectedPixels } from '../image/edit/deleteSelection'
+import { deleteSelectionWithEdges } from '../image/edit/deleteWithEdges'
 import { isEditableTarget } from '../utils/domTargets'
 import { type EditorAction, type EditorState, documentVersion, isImporting } from './editorState'
 import { nextRedo, nextUndo } from './history/editHistory'
@@ -80,9 +80,11 @@ export function editActionCommand(
 
 /**
  * Delete Selection (FEATURE_SPEC.md §8): every selected pixel becomes fully transparent, its
- * colour kept hidden (deleteSelectedPixels), as a new revision with its display image and a
- * history entry. The selection is cleared, and Undo brings it back with the Magic Wand click
- * that made it.
+ * colour kept hidden, then the edge cleanup and feathering chosen in `state.edgeSettings`
+ * (§9; both 0 by default, and then exactly the Step 6 Delete) treat the edge it leaves
+ * (deleteSelectionWithEdges). One edit: a new revision with its display image and one history
+ * entry, whose patch covers every pixel changed, edge pixels included. The selection is cleared,
+ * and Undo brings it back with the Magic Wand click that made it.
  *
  * Returns null without an image or a selection. When every selected pixel is already fully
  * transparent, returns `edit-unchanged`: no entry, no revision, no image, and the selection
@@ -100,7 +102,7 @@ export function deleteSelectionCommand(
   if (!document || !version || !selection) return null
   let result
   try {
-    result = deleteSelectedPixels(document.pixels, selection)
+    result = deleteSelectionWithEdges(document.pixels, selection, state.edgeSettings)
   } catch (cause) {
     return { type: 'edit-failed', error: { operation: 'delete-selection', detail: describeCause(cause) } }
   }
@@ -115,6 +117,7 @@ export function deleteSelectionCommand(
       pixels: result.pixels,
       region: result.bounds,
       changedPixels: result.count,
+      ...(result.edgePixels > 0 ? { edgePixels: result.edgePixels } : {}),
     },
     createImage,
   )

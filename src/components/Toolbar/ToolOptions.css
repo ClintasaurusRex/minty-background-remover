@@ -100,6 +100,24 @@
   border-color: var(--color-border);
 }
 
+/* Delete Selection's edge amounts (0–5 px): a short slider, a two-digit field and the unit. */
+.tool-options__amount {
+  gap: var(--space-2);
+}
+
+.tool-options__slider--amount {
+  width: 64px;
+}
+
+.tool-options__number--amount {
+  width: 2.5em;
+}
+
+.tool-options__unit {
+  margin-left: calc(-1 * var(--space-1));
+  color: var(--color-text-muted);
+}
+
 /* Delete Selection: the one action that edits the image, marked by its icon. */
 .tool-options__delete svg {
   width: 16px;
