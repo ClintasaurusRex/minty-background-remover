@@ -2,8 +2,9 @@ import type { DisplayImage } from '../canvas/displayImage'
 import type { EditorAction, EditorState } from '../editor/editorState'
 
 /*
- * Dispatching edit, Undo and Redo actions, which carry a new display image (Phase 3 Step 6;
- * ownership contract in canvas/displayImage.ts and ARCHITECTURE.md).
+ * Dispatching edit, Undo and Redo actions, and the last Delete made again with new edge amounts
+ * (Phase 3 Step 9), which carry a new display image (Phase 3 Step 6; ownership contract in
+ * canvas/displayImage.ts and ARCHITECTURE.md).
  *
  * The action is dispatched inside flushSync: React processes and commits it, and runs the
  * commit's layout effects (the workspace canvas drawing the new image and releasing the one it
@@ -54,6 +55,7 @@ export function actionImage(action: EditorAction): DisplayImage | null {
     case 'edit-applied':
     case 'edit-undone':
     case 'edit-redone':
+    case 'edit-adjusted':
       return action.image
     default:
       return null

@@ -171,6 +171,17 @@ export const EDIT_HELPERS = `(() => {
       const framed = performance.now() - start
       return { total, framed, put: timing.put, transfer: timing.transfer, draw: timing.draw, changed: m.state().document.revision !== before }
     },
+    /** Runs \`input\` (synchronous input dispatched in the page, such as a slider's change event), timed like timeKey. */
+    async timeInput(input) {
+      timing.put = timing.transfer = timing.draw = 0
+      const before = m.state().document.revision
+      const start = performance.now()
+      input()
+      const total = performance.now() - start
+      await frame()
+      const framed = performance.now() - start
+      return { total, framed, put: timing.put, transfer: timing.transfer, draw: timing.draw, changed: m.state().document.revision !== before }
+    },
     lastKey: () => lastKey,
     consoleMessages: () => consoleMessages,
 

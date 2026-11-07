@@ -542,6 +542,17 @@ Implemented in Phase 3 Step 8 (`image/edit/feather.ts`), run as part of Delete S
 - Alpha only ever decreases and colour is never changed, except that a pixel faded to 0 gets its original colour back, hidden. Changes stay within the feather distance of the selection; the result does not depend on the strips.
 - Known effect: shapes thicker than about 4 px fade along every deleted edge, outlines drawn on that edge included.
 
+### Re-applying the Last Delete (Phase 3 Step 9)
+
+When the Edge cleanup or Feather amount is changed right after a Delete, the Delete is made again from its inputs, never from its result:
+
+- The pixels before the Delete are rebuilt from its history entry: the XOR patch applied to the current pixels gives them back byte for byte, hidden colour included. The selection is the one the entry recorded (decoded), so it is exactly the mask that was deleted, whatever has happened to the selection settings since.
+- The result is `deleteSelectionWithEdges(pixels before, selection, new amounts)`: exactly what Delete with those amounts would have given, with 0 / 0 exactly the Step 6 Delete. Cleanup reads the original colours of the selected pixels as it does inside Delete; feathering measures distances from the same selection.
+- Because each adjustment starts from the same pixels and selection, adjustments never accumulate: no edge is cleaned or faded twice, and the same amounts always give the same bytes, however often and in whatever order they are tried.
+- The history entry is replaced by one with the new patch (over the bounds of every pixel changed by the new amounts) and the new amounts; its encoded selections and Magic Wand click are shared, not encoded again. Undo therefore returns exactly to the image before the Delete, and Redo to the latest result.
+- Peak memory during an adjustment: the current pixels, the pixels before the Delete, the result and the decoded selection, plus Delete's strip scratch. Measured at 50 MP (edge-dense): 380–430 MB above the open image, about one image (190 MB) more than the Delete itself, all released afterwards. Nothing is kept between adjustments.
+- Time: about that of a Delete with the same amounts, plus 30–120 ms (Node) to rebuild the image before it and decode the selection; in the browsers 0.2–0.47 s at 4K and 0.6–2.7 s near 50 MP (`IMPLEMENTATION_PLAN.md`, Phase 3 Step 9).
+
 ---
 
 ## Auto Trim
@@ -790,6 +801,8 @@ Implemented in the editor state in Phase 3 Step 5 (`editor/history/editHistory.t
 - Undo applies the patch backwards to the current pixels (`applyPixelPatch`, or `restoreCroppedPixels` for a crop) and Redo forwards (`applyPixelPatch`, or `cropPixels`); each result is a new revision, every byte exact, hidden colour included.
 - A patch is applied only to the content state it belongs to: the history is bound to the document version its entries apply to, and the action applying an entry must carry that version and that entry. Size checks come on top of this, never instead of it: same-size patches would otherwise fit any state of the image, and a crop any image containing its rectangle.
 
+Phase 3 Step 9: a Delete's entry also records the edge amounts it was made with. Adjusting the last Delete (see Edge Cleanup, Re-applying the Last Delete) replaces that entry in place rather than adding one: the same number of entries, the same encoded selections, a new patch. Only the next Undo, with nothing to redo, can be replaced, and the history is recounted against its limits (a larger patch can drop the oldest entries; the Delete itself is always kept).
+
 ---
 
 ## Performance
@@ -808,6 +821,8 @@ Potential future performance tools:
 Do not introduce these until profiling demonstrates a need.
 
 Phase 3 Step 8: edge cleanup and feathering add to Delete's time in proportion to the edge length, not the image size: at 4K about 0.1 s more at 1 px and up to about 0.35 s more at 5 / 5; near 50 MP on an edge-dense image 0.5–0.7 s more at cleanup 1, 0.9–1.2 s at 5, and 1.7–2.1 s more at 5 / 5 (Chrome and Firefox; a flat 50 MP background: at most about 0.35 s more). Undo and Redo times do not change. Work is done in strips of 256 rows, so scratch memory (about 25–95 MB at 50 MP besides Delete's copy) follows the image width. Details: `IMPLEMENTATION_PLAN.md`, Phase 3 Step 8.
+
+Phase 3 Step 9: adjusting the last Delete with other edge amounts recomputes it synchronously from the image before it and takes about as long as a Delete with those amounts (plus up to about 0.2 s at 50 MP to rebuild that image and decode the selection); nothing is computed while a slider is dragged or a key held. Details: `IMPLEMENTATION_PLAN.md`, Phase 3 Step 9.
 
 Phase 3 (P3-D11): pixel edits start synchronous on the main thread, like Phase 2 selection work, and are measured at 4K and 50 MP before anything else is decided. Measured in Step 6 (Delete Selection above): about 0.1 s at 4K in both browsers, about 0.5–0.65 s for a Delete and 0.23–0.33 s for Undo or Redo near 50 MP. Whether large images need a progress indication or a Worker is an open owner decision (`IMPLEMENTATION_PLAN.md`, Phase 3 Step 6). Copy-on-write buffers can be handed to a Web Worker later without changing the algorithms. How the display image is rebuilt after an edit (P3-D10) was verified in Phase 3 Step 4: synchronously through `OffscreenCanvas` (see Display Images), 13–15 ms at 4K and 77 ms at 50 MP in Chrome, 23–26 ms and 138 ms in Firefox.
 

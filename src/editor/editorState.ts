@@ -13,6 +13,7 @@ import {
   recordEdit,
   recordRedo,
   recordUndo,
+  replaceLatestEdit,
 } from './history/editHistory'
 import { type EditKind, type HistoryEntry, sizeAfter, sizeBefore } from './history/historyEntry'
 import { clampTolerance } from './toleranceInput'
@@ -88,7 +89,9 @@ export interface EditorState {
   /**
    * Edge cleanup and feather amounts for the next Delete Selection (Phase 3 Step 8), whole
    * pixels from 0 to 5, both 0 by default (P3-D4). Like the Magic Wand options, kept for the
-   * session and never applied to an edit already made.
+   * session. Changing them never changes the image by itself; a committed change also makes the
+   * last Delete again while it can still be adjusted (adjustableEdit, Phase 3 Step 9), through
+   * its own action.
    */
   readonly edgeSettings: EdgeSettings
   /**
@@ -111,6 +114,17 @@ export interface EditorState {
    * another image opens; kept when an import fails.
    */
   readonly history: EditHistory
+  /**
+   * The Delete Selection that a committed Edge cleanup or Feather amount makes again (Phase 3
+   * Step 9): its history entry, from the moment the Delete is applied, made again or redone, until
+   * anything else changes the selection (a Magic Wand click or re-apply, Select All, Clear, Invert,
+   * Grow, Shrink), the image or the history (another edit, Undo, another image). Null otherwise.
+   * View changes, option and amount changes, announcements and failed attempts keep it.
+   *
+   * Only usable while it is still the history's next Undo for the open document's version and
+   * nothing can be redone (adjustableDelete in editCommands.ts checks this).
+   */
+  readonly adjustableEdit: HistoryEntry | null
   /** The last edit, Undo or Redo that failed, until dismissed or a later outcome (editNotice) replaces it. */
   readonly editError: EditError | null
   /**
@@ -149,13 +163,25 @@ export type EditNotice =
   | { readonly kind: 'undone' | 'redone'; readonly operation: EditKind }
   /** The edit would have changed no pixel (Delete with only fully transparent pixels selected): nothing happened. */
   | { readonly kind: 'unchanged'; readonly operation: EditKind }
+  /**
+   * The latest edit was made again with other amounts (Phase 3 Step 9: the last Delete with the
+   * Edge cleanup and Feather amounts committed): `edgeSettings` as used, and how many edge pixels
+   * they changed besides the deleted ones.
+   */
+  | {
+      readonly kind: 'adjusted'
+      readonly operation: EditKind
+      readonly edgeSettings: EdgeSettings
+      readonly edgePixels: number
+    }
 
 /**
  * An edit, Undo or Redo that could not be completed (for example, for lack of memory). The
- * document, its selection and the history are unchanged.
+ * document, its selection and the history are unchanged. `adjust`: making the last Delete again
+ * with new edge amounts (Phase 3 Step 9).
  */
 export interface EditError {
-  readonly operation: EditKind | 'undo' | 'redo'
+  readonly operation: EditKind | 'undo' | 'redo' | 'adjust'
   /** Developer-facing cause. Not intended for display. */
   readonly detail?: string
 }
@@ -332,6 +358,25 @@ export type EditorAction =
       readonly image: DisplayImage
       readonly selection: SelectionMask | null
     }
+  /**
+   * The latest edit, `entry`, made again from the pixels before it (Phase 3 Step 9: the last
+   * Delete with other edge amounts), computed from `version`: `document` (a new revision of the
+   * result) and its display image, with `replacement` taking `entry`'s place in the history. The
+   * selection stays empty and the number of entries the same. Ignored unless `version` is the
+   * open document's current version, `entry` is the state's adjustable edit and the history's next
+   * Undo with nothing to redo, nothing is selected, and everything fits (a new revision of the
+   * same image, of the same size).
+   */
+  | {
+      readonly type: 'edit-adjusted'
+      readonly version: DocumentVersion
+      readonly entry: HistoryEntry
+      readonly replacement: HistoryEntry
+      readonly document: ImageDocument
+      readonly image: DisplayImage
+      /** Edge pixels the new amounts changed besides the deleted ones (for the announcement). */
+      readonly edgePixels: number
+    }
   /** An edit, Undo or Redo failed; nothing else changes. */
   | { readonly type: 'edit-failed'; readonly error: EditError }
   | { readonly type: 'edit-error-dismissed' }
@@ -352,6 +397,7 @@ export const initialEditorState: EditorState = {
   selection: null,
   lastMagicWandOperation: null,
   history: createEditHistory(),
+  adjustableEdit: null,
   editError: null,
   editDepth: 0,
   editNotice: null,
@@ -403,6 +449,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         lastMagicWandOperation: null,
         // Edits of the previous image cannot apply to this one.
         history: clearEditHistory(state.history),
+        adjustableEdit: null,
         editError: null,
         editDepth: 0,
         editNotice: null,
@@ -496,12 +543,14 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const { version, selection } = action
       if (!fitsDocument(state, version, selection) || selection === state.selection) return state
       // The selection is no longer a Magic Wand result, so a tolerance change must not
-      // re-apply a click over it.
-      return { ...state, selection, lastMagicWandOperation: null }
+      // re-apply a click over it. Selecting also ends adjusting the last Delete.
+      return { ...state, selection, lastMagicWandOperation: null, adjustableEdit: null }
     }
 
     case 'selection-cleared':
-      return state.selection === null ? state : { ...state, selection: null, lastMagicWandOperation: null }
+      return state.selection === null
+        ? state
+        : { ...state, selection: null, lastMagicWandOperation: null, adjustableEdit: null }
 
     case 'magic-wand-applied': {
       const { operation, selection } = action
@@ -509,13 +558,14 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       // Add and Subtract were combined with `base`; if the selection has changed since,
       // the result (and the recorded base) would be stale. New does not depend on it.
       if (operation.selectionMode !== 'new' && operation.base !== state.selection) return state
-      return { ...state, selection, lastMagicWandOperation: operation }
+      // A click starts the next selection: the edge amounts are for the next Delete from now on.
+      return { ...state, selection, lastMagicWandOperation: operation, adjustableEdit: null }
     }
 
     case 'magic-wand-reapplied': {
       const { operation, tolerance, selection } = action
       if (operation !== state.lastMagicWandOperation || !fitsDocument(state, operation.version, selection)) return state
-      return { ...state, selection, lastMagicWandOperation: { ...operation, tolerance } }
+      return { ...state, selection, lastMagicWandOperation: { ...operation, tolerance }, adjustableEdit: null }
     }
 
     case 'edit-applied':
@@ -526,6 +576,9 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'edit-redone':
       return redoEdit(state, action)
+
+    case 'edit-adjusted':
+      return adjustEdit(state, action)
 
     case 'edit-unchanged': {
       const { document } = state
@@ -575,6 +628,7 @@ function applyEdit(state: EditorState, action: EditAction<'edit-applied'>): Edit
     selection,
     lastMagicWandOperation: null,
     history: recordEdit(state.history, version, entry, versionOf(next)),
+    adjustableEdit: adjustableAfter(entry, selection),
     editDepth: state.editDepth + 1,
   }
 }
@@ -598,6 +652,8 @@ function undoEdit(state: EditorState, action: EditAction<'edit-undone'>): Editor
     selection,
     lastMagicWandOperation: magicWandOperation,
     history,
+    // The selection is back, ready for the next Delete: the amounts set what that Delete does.
+    adjustableEdit: null,
     editDepth: state.editDepth - 1,
   }
 }
@@ -617,8 +673,49 @@ function redoEdit(state: EditorState, action: EditAction<'edit-redone'>): Editor
     selection,
     lastMagicWandOperation: null,
     history,
+    adjustableEdit: adjustableAfter(entry, selection),
     editDepth: state.editDepth + 1,
   }
+}
+
+/**
+ * The latest edit made again from the pixels before it (Phase 3 Step 9). Constant time apart from
+ * the history's memory accounting, like the other document changes. The edit depth is unchanged:
+ * the image is still one edit away from where it was before `entry`.
+ */
+function adjustEdit(state: EditorState, action: EditAction<'edit-adjusted'>): EditorState {
+  const { version, entry, replacement, document: next, image } = action
+  const current = state.document
+  if (!current || !isVersionOf(version, current) || !isNewContentState(current, next, image)) return state
+  // Only the edit the user has just made, applied again or redone, and only while nothing has been
+  // selected since: a selection is the start of the next edit, which the amounts then configure.
+  if (entry !== state.adjustableEdit || replacement.kind !== entry.kind) return state
+  if (state.selection !== null || state.lastMagicWandOperation !== null) return state
+  if (!sameSize(current, next) || !patchFits(replacement, current, next)) return state
+  const history = replaceLatestEdit(state.history, version, entry, replacement, versionOf(next))
+  if (!history || !replacement.edgeSettings) return state
+  return {
+    ...withEditFeedback(state, null, {
+      kind: 'adjusted',
+      operation: replacement.kind,
+      edgeSettings: replacement.edgeSettings,
+      edgePixels: action.edgePixels,
+    }),
+    document: next,
+    documentBitmap: image,
+    history,
+    adjustableEdit: replacement,
+  }
+}
+
+/**
+ * The edit a committed edge amount makes again after `entry` was applied or redone, leaving
+ * `selection`: a Delete Selection recorded with its edge amounts, which leaves nothing selected.
+ */
+function adjustableAfter(entry: HistoryEntry, selection: SelectionMask | null): HistoryEntry | null {
+  return entry.kind === 'delete-selection' && entry.edgeSettings && entry.patch.kind === 'pixel-patch' && selection === null
+    ? entry
+    : null
 }
 
 /** `state` reporting a new edit outcome: an error or a notice (the other is cleared). */
@@ -738,15 +835,22 @@ function clampEdgePixels(value: number): number {
   return Math.min(MAX_EDGE_PIXELS, Math.max(0, Math.round(value)))
 }
 
-/** Changes the edge settings, ignoring values that are not finite; the state itself when nothing differs. */
-function withEdgeSettings(state: EditorState, change: Partial<EdgeSettings>): EditorState {
-  const current = state.edgeSettings
+/**
+ * `current` with `change` applied as `edge-settings-changed` applies it: each given amount rounded
+ * and clamped to 0–5, values that are not finite ignored. `current` itself when nothing differs.
+ */
+export function mergeEdgeSettings(current: EdgeSettings, change: Partial<EdgeSettings>): EdgeSettings {
   const pick = (value: number | undefined, previous: number) =>
     value !== undefined && Number.isFinite(value) ? clampEdgePixels(value) : previous
   const cleanup = pick(change.cleanup, current.cleanup)
   const feather = pick(change.feather, current.feather)
-  if (cleanup === current.cleanup && feather === current.feather) return state
-  return { ...state, edgeSettings: { cleanup, feather } }
+  return cleanup === current.cleanup && feather === current.feather ? current : { cleanup, feather }
+}
+
+/** Changes the edge settings, ignoring values that are not finite; the state itself when nothing differs. */
+function withEdgeSettings(state: EditorState, change: Partial<EdgeSettings>): EditorState {
+  const edgeSettings = mergeEdgeSettings(state.edgeSettings, change)
+  return edgeSettings === state.edgeSettings ? state : { ...state, edgeSettings }
 }
 
 /**

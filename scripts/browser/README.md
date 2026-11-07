@@ -184,6 +184,40 @@ Then (unless `--no-perf`) it times Delete, Undo and Redo at each amount at 4K an
 checked. Headless Firefox has no window focus and fires no blur events, so leaving an emptied field
 is checked in Chrome only.
 
+### Adjusting the last Delete (Phase 3 Step 9)
+
+```sh
+npm run build
+node scripts/browser/edge-adjust.mjs [--browser chrome|firefox|all] [--no-perf] [--no-stress]
+APP_URL=http://127.0.0.1:5173/ node scripts/browser/edge-adjust.mjs --no-perf   # npm run dev: Strict Mode
+```
+
+Right after a Delete, with real pointer drags, key presses, held keys and typing, it checks that:
+
+- Dragging a slider or holding a key changes the amount shown but computes nothing until it is
+  released; then the Delete is made again once. Typing waits for Enter or leaving the field, and
+  Escape cancels. Committing the amounts the result already has computes nothing.
+- Every result is exactly the bytes the application's algorithm gives in Node for the pixels and
+  selection from before the Delete with the amounts now set; one history entry throughout; the
+  canvas shows the result; the update is announced; one Undo restores every byte and the
+  selection, Redo the latest result, which can be adjusted again; 0 / 0 is the Step 6 Delete.
+- The tooltips say whether the amounts set the next Delete or update the last one.
+- Nothing is adjusted with a selection (the amounts set the next Delete), after Select All and
+  Clear, while the replace confirmation is open (also when opening it takes focus from a field
+  being edited) or while another image opens.
+- After Redo with other amounts shown than the Delete was made with: Tab and Shift + Tab through
+  both controls, focusing and leaving each part, a drag back to its start, keys held and stepped
+  back, retyping the same number and Escape never update the Delete; an actual change does.
+- The status bar note "Edge settings update last Delete": shown only while a change would update
+  the Delete, no toolbar or status bar height change, hidden below 800 px.
+- For five images, seven adjustments from the fields, each compared with Node.
+
+Then (unless `--no-perf`) it times each adjustment (the synchronous commit handler, including the
+display image), Undo and Redo, at 4K and (unless `--no-stress`) near 50 megapixels. Timings are
+reported, never checked.
+
+`lib/edges.mjs` holds the page helpers and input steps shared with `edge-cleanup.mjs`.
+
 ## Maintenance notes
 
 - `lib/app.mjs` finds the editor state through React's internal fiber tree, because the app has

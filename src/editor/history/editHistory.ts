@@ -16,8 +16,8 @@ import { type HistoryEntry, entryPayloads } from './historyEntry'
  * nothing in it is offered for Undo or Redo.
  *
  * Limits: at most `maxEntries` entries and `maxBytes` of retained memory over both stacks. A new
- * edit clears Redo, so only recording can exceed them; Undo and Redo move entries between the
- * stacks without changing what is kept. The oldest entries go first, and the newest entry is
+ * edit clears Redo, so only recording an edit, or replacing the latest one (replaceLatestEdit),
+ * can exceed them; Undo and Redo move entries between the stacks without changing what is kept. The oldest entries go first, and the newest entry is
  * always kept, even when it alone exceeds the budget, so the last edit can always be undone.
  *
  * Pure and cheap: no pixel work and no typed-array contents are read (memory accounting reads only
@@ -97,6 +97,33 @@ export function recordEdit(
   let bytes = historyRetainedBytes(undo)
   // Payloads can be shared between entries, so the total is counted again after each drop.
   while (bytes > maxBytes && undo.length > 1) {
+    undo = undo.slice(1)
+    bytes = historyRetainedBytes(undo)
+  }
+  return { limits: history.limits, version: copyVersion(to), undo, redo: [], retainedBytes: bytes }
+}
+
+/**
+ * `history` after the latest edit, `entry`, was made again differently (Phase 3 Step 9: the last
+ * Delete with other edge amounts), turning the document at `from` into the one at `to`: `entry`
+ * replaced by `replacement` in place, so the number of entries stays the same and one Undo still
+ * goes back to the image before the edit. The oldest entries are dropped while the retained bytes
+ * exceed the limit (never `replacement`), as when recording an edit. Bound to `to`.
+ *
+ * Null, changing nothing, unless `entry` is the next Undo for `from` and nothing can be redone: a
+ * Redo entry was made from `entry`'s result and could not apply to another one.
+ */
+export function replaceLatestEdit(
+  history: EditHistory,
+  from: DocumentVersion,
+  entry: HistoryEntry,
+  replacement: HistoryEntry,
+  to: DocumentVersion,
+): EditHistory | null {
+  if (nextUndo(history, from) !== entry || history.redo.length > 0) return null
+  let undo = [...history.undo.slice(0, -1), replacement]
+  let bytes = historyRetainedBytes(undo)
+  while (bytes > history.limits.maxBytes && undo.length > 1) {
     undo = undo.slice(1)
     bytes = historyRetainedBytes(undo)
   }

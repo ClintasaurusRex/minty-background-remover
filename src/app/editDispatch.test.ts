@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DisplayImage } from '../canvas/displayImage'
-import { editActionCommand } from '../editor/editCommands'
+import { adjustDeleteCommand, editActionCommand } from '../editor/editCommands'
 import { type EditorAction, type EditorState, documentVersion, editorReducer, initialEditorState } from '../editor/editorState'
 import { WORKSPACE, mask, opened, reduce } from '../editor/history/testFixtures'
 import { createPixelBuffer } from '../image/pixelBuffer'
@@ -182,5 +182,27 @@ describe('dispatchEditAction', () => {
     expect(images.created.filter((image) => image.releases === 1)).toEqual([actionImage(undoB), actionImage(redoB)])
     // The canvas, not the dispatcher, releases replaced images: the first two stay until it does.
     expect(images.created.filter((image) => image.releases === 0)).toHaveLength(3)
+  })
+
+  it('adjusting the last Delete (Phase 3 Step 9): the accepted image kept, a stale one released, also after the amount set first', () => {
+    const images = testImages()
+    const react = fakeReact(selected())
+    const deps = react.deps(images.release)
+    dispatchEditAction(editActionCommand(react.committed(), 'delete-selection', images.create)!, deps)
+    const first = adjustDeleteCommand(react.committed(), { cleanup: 1, feather: 0 }, images.create)!
+    const stale = adjustDeleteCommand(react.committed(), { cleanup: 2, feather: 0 }, images.create)!
+    expect(first.type).toBe('edit-adjusted')
+    expect(actionImage(first)).toBe(images.created[1])
+    react.events.length = 0
+    // As the application commits an amount: the amount is dispatched, then the adjustment in flushSync.
+    deps.dispatch({ type: 'edge-settings-changed', settings: { cleanup: 1 } })
+    dispatchEditAction(first, deps)
+    expect(react.events).toEqual(['dispatch edge-settings-changed', 'flush start', 'dispatch edit-adjusted', 'flush end'])
+    expect(react.committed().documentBitmap).toBe(actionImage(first))
+    expect(react.committed().edgeSettings).toEqual({ cleanup: 1, feather: 0 })
+    dispatchEditAction(stale, deps)
+    expect((actionImage(stale) as unknown as TestImage).releases).toBe(1)
+    expect((actionImage(first) as unknown as TestImage).releases).toBe(0)
+    expect(react.committed().documentBitmap).toBe(actionImage(first))
   })
 })

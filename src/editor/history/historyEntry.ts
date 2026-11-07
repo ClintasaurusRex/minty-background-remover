@@ -1,3 +1,4 @@
+import type { EdgeSettings } from '../../image/edit/deleteWithEdges'
 import type { FloodMode, PixelCoordinate, SelectionMask, SelectionMode, Size } from '../types'
 import type { CropPatch } from './cropPatch'
 import { type HistoryPayload, retainedBytes } from './historyBytes'
@@ -69,6 +70,13 @@ export interface HistoryEntry {
    * object as `selectionBefore` when the edit kept the selection.
    */
   readonly selectionAfter: EncodedSelection | null
+  /**
+   * For Delete Selection: the edge cleanup and feather amounts its result was made with. With the
+   * patch (which gives back the pixels before the Delete) and `selectionBefore` (the selection it
+   * deleted), they are everything needed to make the same Delete again with other amounts (Phase 3
+   * Step 9). Absent for other edits.
+   */
+  readonly edgeSettings?: EdgeSettings
   /** Bytes this entry retains on its own (retainedBytes over its payloads). */
   readonly retainedBytes: number
 }
@@ -82,6 +90,8 @@ export interface HistoryEntryInput {
   readonly magicWandBefore: MagicWandClick | null
   /** The selection the edit leaves, the size of the edited image. */
   readonly selectionAfter: SelectionMask | null
+  /** For Delete Selection, the edge amounts it was made with (copied). */
+  readonly edgeSettings?: EdgeSettings
 }
 
 /**
@@ -122,8 +132,48 @@ export function createHistoryEntry(input: HistoryEntryInput): HistoryEntry {
   }
   // A mask of one size cannot be the selection after a crop, so sharing never crosses sizes.
   const encodedAfter = encode(selectionAfter)
-  const entry = { kind, patch, selectionBefore: encodedBefore, magicWandBefore: recordedClick, selectionAfter: encodedAfter }
+  const entry = {
+    kind,
+    patch,
+    selectionBefore: encodedBefore,
+    magicWandBefore: recordedClick,
+    selectionAfter: encodedAfter,
+    ...(input.edgeSettings ? { edgeSettings: copyEdgeSettings(input.edgeSettings) } : {}),
+  }
   return { ...entry, retainedBytes: retainedBytes(entryPayloads(entry)) }
+}
+
+/**
+ * `entry` made again with another result (Phase 3 Step 9, re-applying the last Delete with other
+ * edge amounts): the same kind, the same encoded selections and Magic Wand click (shared, never
+ * encoded again, so they cannot drift however often the edit is re-made), with `patch` and
+ * `edgeSettings` in place of its own, and its retained bytes counted again.
+ *
+ * `patch` must be a pixel patch between the same image before the edit and a result of the same
+ * size: the edit it describes started from the same pixels and selection. Throws a RangeError
+ * otherwise. `entry` is not changed.
+ */
+export function remadeHistoryEntry(entry: HistoryEntry, patch: PixelPatch, edgeSettings: EdgeSettings): HistoryEntry {
+  if (entry.patch.kind !== 'pixel-patch' || patch.kind !== 'pixel-patch') {
+    throw new RangeError('Only an edit recorded as a pixel patch can be made again with another pixel patch')
+  }
+  const before = sizeBefore(entry.patch)
+  if (patch.width !== before.width || patch.height !== before.height) {
+    throw new RangeError(`The new patch is for a ${patch.width} × ${patch.height} image; the edit is on a ${before.width} × ${before.height} one`)
+  }
+  const remade = {
+    kind: entry.kind,
+    patch,
+    selectionBefore: entry.selectionBefore,
+    magicWandBefore: entry.magicWandBefore,
+    selectionAfter: entry.selectionAfter,
+    edgeSettings: copyEdgeSettings(edgeSettings),
+  }
+  return { ...remade, retainedBytes: retainedBytes(entryPayloads(remade)) }
+}
+
+function copyEdgeSettings(settings: EdgeSettings): EdgeSettings {
+  return { cleanup: settings.cleanup, feather: settings.feather }
 }
 
 /** Everything an entry keeps that holds typed-array memory, for retainedBytes. */

@@ -9,6 +9,7 @@ import {
   clampTolerance,
   committedToleranceInput,
   exactToleranceInput,
+  finishAdjustment,
   initialToleranceFieldState,
   steppedTolerance,
   toleranceFieldEvent,
@@ -434,5 +435,201 @@ describe('the same field behaviour for the Delete edge amounts (0–5 px)', () =
     expect(send({ type: 'blur' }, 5).commit).toBe(5)
     expect(send({ type: 'key-down', key: 'ArrowDown' }, 5).change).toBe(4)
     expect(send({ type: 'key-up', key: 'ArrowDown' }, 4).commit).toBe(4)
+  })
+
+  it('commits an edge amount only when an adjustment is finished, as the Edge cleanup and Feather controls use it (Phase 3 Step 9)', () => {
+    // The slider: a drag reports movements (React's onChange, not seen here) and one change at release.
+    let held = NO_KEYS_HELD
+    const slider = (event: Parameters<typeof toleranceSliderEvent>[1]) => {
+      const result = toleranceSliderEvent(held, event)
+      held = result.held
+      return result.commit
+    }
+    expect([slider({ type: 'pointer-down' }), slider({ type: 'change' })]).toEqual([false, true])
+    // A held arrow key: a change for every repeated step, one commit at the release.
+    const steps = [slider({ type: 'key-down', key: 'ArrowRight' })]
+    for (let i = 0; i < 4; i++) steps.push(slider({ type: 'key-down', key: 'ArrowRight' }), slider({ type: 'change' }))
+    steps.push(slider({ type: 'key-up', key: 'ArrowRight' }))
+    expect(steps.filter(Boolean)).toHaveLength(1)
+    expect(steps.at(-1)).toBe(true)
+    // The field: typing applies without committing; Enter commits once.
+    let field = initialToleranceFieldState(0)
+    const typed = toleranceFieldEvent(field, { type: 'input', text: '3' }, 0, range)
+    expect(typed).toMatchObject({ change: 3 })
+    expect(typed.commit).toBeUndefined()
+    field = typed.state
+    expect(toleranceFieldEvent(field, { type: 'key-down', key: 'Enter' }, 3, range).commit).toBe(3)
+  })
+})
+
+/**
+ * The Edge cleanup / Feather control as MagicWandOptions wires it (Phase 3 Step 9 correction): the
+ * slider and field events above, with finishAdjustment deciding whether a finished adjustment is a
+ * commit (which can update the last Delete) or only sets the amount again. `log` records what the
+ * control reports: "set n" (the amount, nothing computed) and "commit n".
+ */
+function amountControl(initial: number) {
+  const range = EDGE_PIXEL_RANGE
+  let value = initial
+  let start = initial
+  let keys = NO_KEYS_HELD
+  let field = initialToleranceFieldState(initial)
+  const log: string[] = []
+  const finish = (pixels: number) => {
+    const result = finishAdjustment(start, pixels)
+    start = result.start
+    value = pixels
+    log.push(`${result.changed ? 'commit' : 'set'} ${pixels}`)
+  }
+  const slider = (event: Parameters<typeof toleranceSliderEvent>[1]) => {
+    const result = toleranceSliderEvent(keys, event)
+    keys = result.held
+    if (result.commit) finish(value)
+    if (event.type === 'pointer-down') start = value
+  }
+  const fieldEvent = (event: Parameters<typeof toleranceFieldEvent>[1]) => {
+    const result = toleranceFieldEvent(field, event, value, range)
+    field = result.state
+    if (result.change !== undefined) value = result.change
+    if (result.commit !== undefined) finish(result.commit)
+  }
+  const step = (key: string) => {
+    const next = { ArrowRight: value + 1, ArrowUp: value + 1, ArrowLeft: value - 1, ArrowDown: value - 1, Home: 0, End: range.max }[key]
+    return Math.min(range.max, Math.max(0, next ?? value))
+  }
+  return {
+    log,
+    value: () => value,
+    commits: () => log.filter((entry) => entry.startsWith('commit')),
+    // The slider: focus, a pointer drag (input events move it, change at release), keys (a change event per step).
+    focusSlider: () => (start = value),
+    blurSlider: () => slider({ type: 'blur' }),
+    press: () => slider({ type: 'pointer-down' }),
+    move: (pixels: number) => (value = pixels),
+    release: () => slider({ type: 'change' }),
+    keyDown(key: string) {
+      slider({ type: 'key-down', key })
+      value = step(key)
+      slider({ type: 'change' })
+    },
+    keyUp: (key: string) => slider({ type: 'key-up', key }),
+    // The field.
+    focusField() {
+      start = value
+      fieldEvent({ type: 'focus' })
+    },
+    type: (text: string) => fieldEvent({ type: 'input', text }),
+    fieldKey: (key: string) => fieldEvent({ type: 'key-down', key }),
+    fieldKeyUp: (key: string) => fieldEvent({ type: 'key-up', key }),
+    blurField: () => fieldEvent({ type: 'blur' }),
+  }
+}
+
+describe('Edge amount controls commit only actual changes (Phase 3 Step 9 correction)', () => {
+  it('finishAdjustment: a change only when the finished value differs from the start; the next start is that value', () => {
+    expect(finishAdjustment(3, 3)).toEqual({ changed: false, start: 3 })
+    expect(finishAdjustment(3, 4)).toEqual({ changed: true, start: 4 })
+    expect(finishAdjustment(0, 5)).toEqual({ changed: true, start: 5 })
+  })
+
+  it('moving focus through both parts of both controls commits nothing (the Redo mismatch: 3 shown, the Delete made with 1)', () => {
+    for (const shown of [0, 3, 5]) {
+      const control = amountControl(shown)
+      control.focusSlider()
+      control.blurSlider()
+      control.focusField()
+      control.blurField()
+      control.focusSlider()
+      control.blurSlider()
+      expect(control.commits(), `${shown}`).toEqual([])
+      expect(control.value()).toBe(shown)
+    }
+  })
+
+  it('a slider drag commits once at release, only when it ends on another amount', () => {
+    const back = amountControl(3)
+    back.focusSlider()
+    back.press()
+    for (const pixels of [4, 5, 4, 3]) back.move(pixels)
+    back.release()
+    back.blurSlider()
+    expect(back.commits()).toEqual([])
+    expect(back.log).toEqual(['set 3', 'set 3'])
+    const moved = amountControl(3)
+    moved.press()
+    for (const pixels of [4, 5, 2]) moved.move(pixels)
+    moved.release()
+    moved.blurSlider()
+    expect(moved.commits()).toEqual(['commit 2'])
+  })
+
+  it('keyboard: each finished press commits; keys held and moved back before release commit nothing', () => {
+    const control = amountControl(3)
+    control.focusSlider()
+    control.keyDown('ArrowRight')
+    control.keyUp('ArrowRight')
+    control.keyDown('ArrowLeft')
+    control.keyUp('ArrowLeft')
+    expect(control.commits()).toEqual(['commit 4', 'commit 3'])
+    // Right held, then Left while it is still held: back to 3 when the last key is released.
+    control.keyDown('ArrowRight')
+    control.keyDown('ArrowLeft')
+    control.keyUp('ArrowRight')
+    control.keyUp('ArrowLeft')
+    // Held to the end and back with Home is not back: 0.
+    control.blurSlider()
+    expect(control.commits()).toEqual(['commit 4', 'commit 3'])
+    control.focusSlider()
+    control.keyDown('Home')
+    control.keyUp('Home')
+    expect(control.commits()).toEqual(['commit 4', 'commit 3', 'commit 0'])
+  })
+
+  it('typing: Enter or leaving commits a different amount; retyping the same, Escape and non-numbers commit nothing', () => {
+    const control = amountControl(3)
+    control.focusField()
+    control.type('4')
+    control.type('3')
+    control.fieldKey('Enter')
+    expect(control.commits()).toEqual([])
+    control.type('5')
+    expect(control.value()).toBe(5)
+    control.fieldKey('Escape')
+    // Escape sets the amount back without committing.
+    expect(control.value()).toBe(3)
+    expect(control.commits()).toEqual([])
+    control.type('abc')
+    control.fieldKey('Enter')
+    expect(control.commits()).toEqual([])
+    control.type('1')
+    control.blurField()
+    expect(control.commits()).toEqual(['commit 1'])
+    control.focusField()
+    control.blurField()
+    expect(control.commits()).toEqual(['commit 1'])
+    // An arrow step in the field commits at its release; stepping back in the same hold does not.
+    control.focusField()
+    control.fieldKey('ArrowUp')
+    control.fieldKeyUp('ArrowUp')
+    expect(control.commits()).toEqual(['commit 1', 'commit 2'])
+    control.fieldKey('ArrowUp')
+    control.fieldKey('ArrowDown')
+    control.fieldKeyUp('ArrowUp')
+    control.fieldKeyUp('ArrowDown')
+    expect(control.commits()).toEqual(['commit 1', 'commit 2'])
+  })
+
+  it('values typed out of range commit their clamped amount, and only when it differs', () => {
+    const atMax = amountControl(5)
+    atMax.focusField()
+    atMax.type('9')
+    atMax.fieldKey('Enter')
+    expect(atMax.commits()).toEqual([])
+    expect(atMax.value()).toBe(5)
+    const below = amountControl(2)
+    below.focusField()
+    below.type('9')
+    below.fieldKey('Enter')
+    expect(below.commits()).toEqual(['commit 5'])
   })
 })

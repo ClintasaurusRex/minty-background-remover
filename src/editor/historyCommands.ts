@@ -1,4 +1,5 @@
 import { type DisplayImage, createDisplayImage } from '../canvas/displayImage'
+import type { EdgeSettings } from '../image/edit/deleteWithEdges'
 import { sharesPixelMemory } from '../image/pixelBuffer'
 import { type EditorAction, type EditorState, type MagicWandOperation, documentVersion } from './editorState'
 import { nextRedo, nextUndo } from './history/editHistory'
@@ -52,6 +53,11 @@ interface CompletedEditBase {
   readonly changedPixels?: number
   /** Edge pixels Delete's cleanup and feathering changed besides, when there were any, for the announcement. */
   readonly edgePixels?: number
+  /**
+   * For Delete Selection, the edge amounts it was made with, kept in its history entry so that it
+   * can be made again with other amounts (Phase 3 Step 9).
+   */
+  readonly edgeSettings?: EdgeSettings
 }
 
 /** An edit that keeps the image's size, such as Delete Selection. */
@@ -119,6 +125,7 @@ export function completedEditCommand(
       selectionBefore: selection,
       magicWandBefore: lastMagicWandOperation,
       selectionAfter: edit.selection,
+      ...(edit.edgeSettings ? { edgeSettings: edit.edgeSettings } : {}),
     })
     const next = createEditedDocument(document, pixels)
     const image = createImage(next.pixels)

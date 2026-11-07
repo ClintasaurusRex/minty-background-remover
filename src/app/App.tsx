@@ -12,7 +12,7 @@ import {
   initialEditorState,
   isImporting,
 } from '../editor/editorState'
-import { availableEditActions, hasUnexportedEdits } from '../editor/editCommands'
+import { adjustableDelete, availableEditActions, hasUnexportedEdits } from '../editor/editCommands'
 import type { PanGestureEffect } from '../editor/panGesture'
 import {
   type PointerPress,
@@ -48,13 +48,15 @@ function App() {
   const [pointer] = useState(createPointerPositionStore)
   // While the replace confirmation is open, keyboard shortcuts belong to it.
   useSelectionShortcuts(stateRef, dispatch, isConfirming)
-  const runEditAction = useEditCommands(stateRef, dispatch, isConfirming)
+  const { run: runEditAction, commitEdgeSettings } = useEditCommands(stateRef, dispatch, isConfirming)
   const deleteSelection = useCallback(() => runEditAction('delete-selection'), [runEditAction])
   const undo = useCallback(() => runEditAction('undo'), [runEditAction])
   const redo = useCallback(() => runEditAction('redo'), [runEditAction])
   const cancelReplace = useCallback(() => answerQuestion(false), [answerQuestion])
   const continueReplace = useCallback(() => answerQuestion(true), [answerQuestion])
   const editActions = availableEditActions(state)
+  // Whether a finished change of the edge amounts updates the last Delete (Phase 3 Step 9).
+  const adjustsLastDelete = adjustableDelete(state) !== null
 
   const handleResize = useCallback(
     (workspace: WorkspaceMetrics) => dispatch({ type: 'workspace-resized', workspace }),
@@ -100,7 +102,9 @@ function App() {
     // changed the selection or the image since.
     for (const action of commitToleranceCommand(stateRef.current, tolerance)) dispatch(action)
   }, [])
-  // Edge cleanup and feather apply to the next Delete only; changing them computes nothing.
+  // Edge cleanup and feather while they are being adjusted: they set what the next Delete does and
+  // compute nothing. A finished adjustment (commitEdgeSettings) also makes the last Delete again
+  // while that Delete can still be adjusted (Phase 3 Step 9).
   const changeEdgeSettings = useCallback(
     (settings: Partial<EdgeSettings>) => dispatch({ type: 'edge-settings-changed', settings }),
     [],
@@ -155,6 +159,8 @@ function App() {
           onSelectionAction={runSelectionAction}
           edgeSettings={state.edgeSettings}
           onEdgeSettingsChange={changeEdgeSettings}
+          onEdgeSettingsCommit={commitEdgeSettings}
+          adjustsLastDelete={adjustsLastDelete}
           canDeleteSelection={editActions.deleteSelection}
           onDeleteSelection={deleteSelection}
         />
@@ -190,6 +196,7 @@ function App() {
         devicePixelRatio={state.workspace?.devicePixelRatio ?? 1}
         activeTool={state.activeTool}
         selection={state.selection}
+        adjustsLastDelete={adjustsLastDelete}
         pointer={pointer}
         onZoomIn={() => dispatch({ type: 'zoom-stepped', direction: 1 })}
         onZoomOut={() => dispatch({ type: 'zoom-stepped', direction: -1 })}

@@ -6,6 +6,7 @@ import {
   type ToleranceSliderEvent,
   EDGE_PIXEL_RANGE,
   NO_KEYS_HELD,
+  finishAdjustment,
   initialToleranceFieldState,
   toleranceFieldEvent,
   toleranceSliderEvent,
@@ -36,8 +37,18 @@ export interface MagicWandOptionsProps {
   onSelectionAction: (action: SelectionAction) => void
   /** Edge cleanup and feather amounts (0–5 px) the next Delete Selection uses. */
   edgeSettings: EdgeSettings
-  /** A new edge cleanup and / or feather amount, applied to the next Delete only. */
+  /** An edge cleanup or feather amount while it is being adjusted: it sets what the next Delete does. */
   onEdgeSettingsChange: (settings: Partial<EdgeSettings>) => void
+  /**
+   * A finished edge amount adjustment (slider released, last key released, Enter, leaving the
+   * control): it sets the amount and, while the last Delete can be adjusted, makes it again.
+   */
+  onEdgeSettingsCommit: (settings: Partial<EdgeSettings>) => void
+  /**
+   * Whether a finished adjustment of the amounts updates the last Delete (just made, with nothing
+   * selected since) rather than only setting them for the next one (Phase 3 Step 9).
+   */
+  adjustsLastDelete: boolean
   /** Whether Delete Selection can run: something is selected (and no other image is opening). */
   canDeleteSelection: boolean
   /** Makes the selected pixels transparent (the Delete key does the same). */
@@ -71,17 +82,24 @@ const ACTIONS: readonly { action: SelectionAction; label: string; name: string; 
 
 const DELETE_TITLE = 'Make the selected pixels transparent (Delete)'
 
-const EDGE_CLEANUP_TITLE =
-  'Edge cleanup for the next Delete: remove the background colour left in edge pixels, up to this many pixels in from the deleted area (0–5 px; 0 = off)'
-const FEATHER_TITLE =
-  'Feather for the next Delete: fade the edge over this many pixels in from the deleted area; thin lines and small text are kept (0–5 px; 0 = off)'
+const EDGE_CLEANUP_WHAT =
+  'remove the background colour left in edge pixels, up to this many pixels in from the deleted area (0–5 px; 0 = off)'
+const FEATHER_WHAT =
+  'fade the edge over this many pixels in from the deleted area; thin lines and small text are kept (0–5 px; 0 = off)'
+
+/** The tooltip of an edge amount: what it does, and whether it applies to the next Delete or updates the last one. */
+function edgeAmountTitle(label: string, what: string, adjustsLastDelete: boolean): string {
+  return adjustsLastDelete ? `${label}, updating the last Delete: ${what}` : `${label} for the next Delete: ${what}`
+}
 
 /**
  * The Magic Wand's contextual options, shown as a second toolbar row while it is the
  * active tool. Options apply to the next Magic Wand click; a finished tolerance adjustment
  * also re-applies the last click. The selection actions change the selection at once.
  * Delete Selection, last, edits the image: it makes the selected pixels transparent, then
- * applies the edge cleanup and feather amounts shown just before it (both 0 by default).
+ * applies the edge cleanup and feather amounts shown just before it (both 0 by default). Right
+ * after a Delete, with nothing selected since, a finished change of those amounts updates that
+ * Delete instead (Phase 3 Step 9).
  */
 export function MagicWandOptions({
   settings,
@@ -93,6 +111,8 @@ export function MagicWandOptions({
   onSelectionAction,
   edgeSettings,
   onEdgeSettingsChange,
+  onEdgeSettingsCommit,
+  adjustsLastDelete,
   canDeleteSelection,
   onDeleteSelection,
 }: MagicWandOptionsProps) {
@@ -129,18 +149,22 @@ export function MagicWandOptions({
         })}
       </div>
       <EdgeAmountControl
+        setting="cleanup"
         label="Edge cleanup"
         fieldLabel="Edge cleanup in pixels, 0 to 5"
-        title={EDGE_CLEANUP_TITLE}
+        title={edgeAmountTitle('Edge cleanup', EDGE_CLEANUP_WHAT, adjustsLastDelete)}
         value={edgeSettings.cleanup}
-        onChange={(cleanup) => onEdgeSettingsChange({ cleanup })}
+        onChange={onEdgeSettingsChange}
+        onCommit={onEdgeSettingsCommit}
       />
       <EdgeAmountControl
+        setting="feather"
         label="Feather"
         fieldLabel="Feather in pixels, 0 to 5"
-        title={FEATHER_TITLE}
+        title={edgeAmountTitle('Feather', FEATHER_WHAT, adjustsLastDelete)}
         value={edgeSettings.feather}
-        onChange={(feather) => onEdgeSettingsChange({ feather })}
+        onChange={onEdgeSettingsChange}
+        onCommit={onEdgeSettingsCommit}
       />
       <div className="tool-options__group">
         {/* Its label and size never change, so the row never re-wraps when it becomes available. */}
@@ -286,6 +310,8 @@ function ToleranceControl({ tolerance, onChange, onCommit }: ToleranceControlPro
 }
 
 interface EdgeAmountControlProps {
+  /** Which amount this control sets. */
+  setting: keyof EdgeSettings
   /** Visible label, also the slider's accessible name. */
   label: string
   /** The text field's accessible name, with the unit and range. */
@@ -293,7 +319,10 @@ interface EdgeAmountControlProps {
   title: string
   /** Whole pixels, 0–5. */
   value: number
-  onChange: (value: number) => void
+  /** The amount while it is being adjusted. */
+  onChange: (settings: Partial<EdgeSettings>) => void
+  /** A finished adjustment, with the amount committed. */
+  onCommit: (settings: Partial<EdgeSettings>) => void
 }
 
 /**
@@ -302,18 +331,66 @@ interface EdgeAmountControlProps {
  * number from 0 to 5 as it is typed, other text on Enter or leaving it (rounded and clamped, or
  * restored if it is not a number); Up / Down step by 1; Escape cancels an unfinished entry.
  *
- * Nothing is computed while adjusting: the value only sets what the next Delete Selection uses.
+ * Also like the tolerance control, adjustments are finished only when the slider is released, the
+ * last arrow, Page, Home or End key is released, on Enter, or when focus leaves either control
+ * (see toleranceInput.ts), and nothing is computed while adjusting. Unlike the tolerance, a
+ * finished adjustment is committed (and can make the last Delete again, Phase 3 Step 9) only when
+ * it ends on another amount than the interaction started from (finishAdjustment): moving focus
+ * through the controls, or changing the amount and back before finishing, never edits the image.
+ * Otherwise the amount is only set again (so Escape restores it).
  */
-function EdgeAmountControl({ label, fieldLabel, title, value, onChange }: EdgeAmountControlProps) {
+function EdgeAmountControl({ setting, label, fieldLabel, title, value, onChange, onCommit }: EdgeAmountControlProps) {
   const labelId = useId()
+  const sliderRef = useRef<HTMLInputElement>(null)
+  // Adjustment keys held on the slider; read by the native change listener, so not render state.
+  const sliderKeys = useRef(NO_KEYS_HELD)
+  // The amount when the current interaction began (focus, a slider press, the previous finished
+  // adjustment). Shared by the slider and the field, which show the same amount.
+  const start = useRef(value)
   const [field, setField] = useState(() => initialToleranceFieldState(value))
+  const amount = (pixels: number): Partial<EdgeSettings> => (setting === 'cleanup' ? { cleanup: pixels } : { feather: pixels })
+
+  const finish = (pixels: number) => {
+    const result = finishAdjustment(start.current, pixels)
+    start.current = result.start
+    if (result.changed) onCommit(amount(pixels))
+    else onChange(amount(pixels))
+  }
+
+  const handleSlider = (event: ToleranceSliderEvent, pixels: number) => {
+    const result = toleranceSliderEvent(sliderKeys.current, event)
+    sliderKeys.current = result.held
+    if (result.commit) finish(pixels)
+    // A pointer press starts a new adjustment from the amount shown (after finishing any keyboard one).
+    if (event.type === 'pointer-down') start.current = pixels
+  }
+
+  // React's onChange reports every movement of the slider (the input event). The native change
+  // event reports a finished value: the thumb released, or a value set by assistive technology.
+  useEffect(() => {
+    const slider = sliderRef.current
+    if (!slider) return
+    const handleChange = () => {
+      const result = toleranceSliderEvent(sliderKeys.current, { type: 'change' })
+      sliderKeys.current = result.held
+      if (!result.commit) return
+      const pixels = Number(slider.value)
+      const finished = finishAdjustment(start.current, pixels)
+      start.current = finished.start
+      const settings: Partial<EdgeSettings> = setting === 'cleanup' ? { cleanup: pixels } : { feather: pixels }
+      if (finished.changed) onCommit(settings)
+      else onChange(settings)
+    }
+    slider.addEventListener('change', handleChange)
+    return () => slider.removeEventListener('change', handleChange)
+  }, [onCommit, onChange, setting])
 
   const handleField = (event: ToleranceFieldEvent, keyEvent?: { preventDefault(): void }) => {
     const result = toleranceFieldEvent(field, event, value, EDGE_PIXEL_RANGE)
     if (result.handled) keyEvent?.preventDefault()
     if (result.state !== field) setField(result.state)
-    if (result.change !== undefined) onChange(result.change)
-    if (result.commit !== undefined) onChange(result.commit)
+    if (result.change !== undefined) onChange(amount(result.change))
+    if (result.commit !== undefined) finish(result.commit)
   }
 
   return (
@@ -322,6 +399,7 @@ function EdgeAmountControl({ label, fieldLabel, title, value, onChange }: EdgeAm
         {label}
       </span>
       <input
+        ref={sliderRef}
         type="range"
         className="tool-options__slider tool-options__slider--amount"
         min={0}
@@ -331,7 +409,14 @@ function EdgeAmountControl({ label, fieldLabel, title, value, onChange }: EdgeAm
         aria-labelledby={labelId}
         aria-valuetext={`${value} px`}
         title={title}
-        onChange={(event) => onChange(Number(event.currentTarget.value))}
+        onChange={(event) => onChange(amount(Number(event.currentTarget.value)))}
+        onFocus={(event) => {
+          start.current = Number(event.currentTarget.value)
+        }}
+        onPointerDown={(event) => handleSlider({ type: 'pointer-down' }, Number(event.currentTarget.value))}
+        onKeyDown={(event) => handleSlider({ type: 'key-down', key: event.key }, Number(event.currentTarget.value))}
+        onKeyUp={(event) => handleSlider({ type: 'key-up', key: event.key }, Number(event.currentTarget.value))}
+        onBlur={(event) => handleSlider({ type: 'blur' }, Number(event.currentTarget.value))}
       />
       <input
         type="text"
@@ -342,7 +427,10 @@ function EdgeAmountControl({ label, fieldLabel, title, value, onChange }: EdgeAm
         title={title}
         autoComplete="off"
         spellCheck={false}
-        onFocus={() => handleField({ type: 'focus' })}
+        onFocus={() => {
+          start.current = value
+          handleField({ type: 'focus' })
+        }}
         onChange={(event) => handleField({ type: 'input', text: event.currentTarget.value })}
         onKeyDown={(event) => handleField({ type: 'key-down', key: event.key }, event)}
         onKeyUp={(event) => handleField({ type: 'key-up', key: event.key })}

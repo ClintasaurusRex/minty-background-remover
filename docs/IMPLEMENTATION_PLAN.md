@@ -337,7 +337,7 @@ Phase 3 is implemented in twelve reviewed steps, each stopping for review:
 6. Delete Selection, Undo and Redo (first manual checkpoint). Approved for checkpoint commit with outstanding manual QA: 14 of 23 checks passed, 9 deferred (see Step 6).
 7. Edge cleanup prototype and visual comparison (owner decision P3-D5). Done; Candidate B approved.
 8. Edge cleanup and feathering. Its manual QA also runs the nine deferred Step 6 checks. Implemented; awaiting owner manual QA.
-9. Optional, depending on P3-D4 and P3-D5: re-apply the last Delete when cleanup or feathering changes.
+9. Re-apply the last Delete when cleanup or feathering changes. Implemented; awaiting owner review (Step 8 manual QA still outstanding).
 10. Auto Trim algorithm.
 11. Auto Trim tool (second manual checkpoint).
 12. Final quality assurance, performance, memory and Phase 3 readiness. Revisits Step 6 owner decision 1 (synchronous Delete, Undo and Redo on large images). Phase 3 sign-off and merge require every deferred Step 6 check to be completed or explicitly dispositioned.
@@ -814,7 +814,7 @@ The prototype, the comparison page and the report are kept by the owner outside 
 
 #### Step 8: Edge Cleanup and Feathering (implemented; awaiting owner manual QA)
 
-Delete Selection now applies the Edge cleanup and Feather amounts set beside it, as one edit with one Undo step. Both default to 0 px, and then Delete is byte for byte the Step 6 Delete. Step 9 (re-applying the last Delete when an amount changes) is not implemented.
+Delete Selection now applies the Edge cleanup and Feather amounts set beside it, as one edit with one Undo step. Both default to 0 px, and then Delete is byte for byte the Step 6 Delete. Step 9 (re-applying the last Delete when an amount changes) was not part of this step; it is implemented in Step 9 below.
 
 Modules:
 
@@ -938,6 +938,141 @@ Carried forward from Step 6 (still deferred; the owner decides each before Phase
 | 21 | Orca: Delete, Undo, Redo; the Undo / Redo buttons; the dialog | Each announced once; buttons read "Undo Delete Selection" / "Redo Delete Selection"; the dialog reads its title and text | — |
 | 22 | Window about 640 px wide | The options row wraps with Delete Selection (and now each amount control) as one unit; the header stays usable; the dialog fits | — |
 | 23 | In Firefox as well as Chrome, repeat Step 6 checks 1, 3, 9, 10 and 17 | All behave as in Chrome, including Escape and focus return in the dialog | Not checkable in headless Firefox |
+
+#### Step 9: Re-applying the Last Delete When Edge Settings Change (provisionally approved; review correction implemented, awaiting checkpoint)
+
+Right after a Delete, a finished change of Edge cleanup or Feather updates that Delete instead of only setting the next one: the Delete is made again, from the image as it was before it and the selection it deleted, with the amounts now set. It stays one edit with one Undo step. Step 8's algorithms, its synchronous processing and its session-wide amounts are unchanged; Step 8's manual QA, including the nine deferred Step 6 checks, is still outstanding and is not affected by this step's own checklist below.
+
+Modules:
+
+```text
+src/
+├── editor/history/historyEntry.ts  edgeSettings: the amounts a Delete was made with (recorded in its entry);
+│                                   remadeHistoryEntry: the same entry with another patch and amounts
+├── editor/history/editHistory.ts   replaceLatestEdit: the next Undo replaced in place, Redo empty
+├── editor/editorState.ts           adjustableEdit, the edit-adjusted action, the 'adjusted' notice and
+│                                   'adjust' error, mergeEdgeSettings (the reducer's clamping, shared)
+├── editor/editCommands.ts          adjustableDelete (constant time), adjustDeleteCommand; Delete records
+│                                   its amounts
+├── editor/editFeedback.ts          the announcement and error texts
+├── app/editDispatch.ts             edit-adjusted carries a display image like edits, Undo and Redo
+├── app/useEditCommands.ts          commitEdgeSettings
+└── components/Toolbar/MagicWandOptions.tsx  the amount controls commit like the tolerance control;
+                                    tooltips say which Delete the amounts apply to
+```
+
+Also changed: `historyCommands.ts` (passes the amounts into the entry), `App.tsx`, `toleranceInput.ts` (comment only). Browser scripts: `edge-adjust.mjs` (new), `lib/edges.mjs` (the page helpers and input steps of `edge-cleanup.mjs`, moved so both scripts share them, plus three Step 9 helpers), `lib/browsers.mjs` (mouse down / move / up and key down / up as separate steps), `lib/edit.mjs` (`timeInput`). No dependency was added or removed.
+
+How the image before the Delete is rebuilt (no snapshot is kept):
+
+- A Delete's history entry already holds an XOR patch over every pixel it changed, edge pixels included, and the selection it deleted (encoded). Step 9 adds the two amounts it was made with.
+- `adjustDeleteCommand` applies the patch to the current pixels, which gives the image before the Delete byte for byte (hidden colour included; the same exact operation as Undo), decodes the selection, and runs `deleteSelectionWithEdges` on them with the new amounts: exactly what Delete with those amounts would have produced. Then, as for any edit: a patch between the image before the Delete and the new result (over the new result's changed bounds), a new revision and, last, its display image.
+- The entry is replaced in place (`remadeHistoryEntry`, `replaceLatestEdit`): same kind, same encoded selection and Magic Wand click objects (never encoded again, so they cannot drift), new patch and amounts, retained bytes counted again. The number of entries does not change, Redo stays empty, and the history is bound to the new version.
+- Each adjustment starts from the same pixels and selection, never from the previous result, so nothing accumulates: the same amounts always give the same bytes, and 0 / 0 gives exactly the Step 6 Delete with the same patch as a Delete made at 0 / 0.
+
+When a change updates the last Delete (`adjustableDelete`, checked in constant time on every render):
+
+- The Delete was just applied, adjusted or redone, and since then nothing has been selected: `adjustableEdit` is set by those three and forgotten by every Magic Wand click and re-apply, Select All, Clear, Invert, Grow and Shrink (even when the selection ends up empty again), Undo, and another image. View changes, Magic Wand option changes, amount changes, announcements, dismissals and failed attempts keep it.
+- It is still the history's next Undo for the open document's version, nothing can be redone (a Redo entry's patch was made from the old result and would no longer apply), nothing is selected, no Magic Wand click is recorded, and no other image is opening.
+- The replace confirmation is not open (checked where the commit is handled, `useEditCommands`).
+- Otherwise the amounts only set the next Delete, exactly as in Step 8.
+
+What a committed change does (`commitEdgeSettings`):
+
+- It always sets the amount (`edge-settings-changed`). Then, unless the confirmation is open, it computes `adjustDeleteCommand` from the latest committed state with both amounts as they now are, and dispatches the result through `dispatchEditAction` (inside `flushSync`; React 19 renders the queued amount change and the adjustment in order in that pass; the display image is released if the reducer rejects the action).
+- Nothing is computed when there is no Delete to adjust, or when the amounts are those the result already has (a second commit of the same value, leaving an unchanged control).
+- The reducer (`edit-adjusted`) accepts only an adjustment of the current version whose entry is still the state's adjustable edit and the history's next Undo with nothing to redo, with nothing selected and no click recorded, of the same image and size with a newer revision and its own pixel memory and display image. Versions only move forward, so a rejected adjustment is rejected by every later state. The document, display image, history and adjustable edit change together; the selection, click, view, amounts and edit depth do not.
+- A failure (for example for lack of memory) changes nothing and shows "The last Delete Selection could not be updated with the new Edge cleanup and Feather amounts. The image and selection have not changed." (with the memory hint when it applies). The Delete stays adjustable.
+- The outcome is announced: "Delete Selection updated with Edge cleanup 2 px and Feather 1 px: 1,204 edge pixels were cleaned up or feathered." (or "…: no edge pixels were changed.").
+
+Interaction (the tolerance control's conventions, `toleranceInput.ts`): while the slider is dragged or a key is held the amount and the number follow, nothing is computed; an adjustment is finished when the slider is released (the native `change` event), when the last held arrow, Page, Home or End key is released, on Enter, or when focus leaves the slider or field. Holding a key updates once, at its release; each separate press is its own adjustment. Escape cancels a typed entry. No timers are used. Since the review correction below, a finished adjustment commits only when it ends on another amount than it started from. The tooltips of both controls read "Edge cleanup for the next Delete: …" or, while a change would update the last Delete, "Edge cleanup, updating the last Delete: …" (likewise for Feather); nothing else in the row changes size or text, and the status bar shows "Edge settings update last Delete" (correction below).
+
+Undo / Redo and history:
+
+| | Image | Entries | Selection, click | Depth |
+| --- | --- | --- | --- | --- |
+| Delete | Result with the amounts | +1 (with the amounts) | Cleared | +1 |
+| Adjust (any number of times) | Result with the new amounts, a new revision | Unchanged: the top entry replaced | Stay cleared | Unchanged |
+| Undo | Exactly the image before the Delete | Moved to Redo | The selection and click from before the Delete | −1 |
+| Redo | Exactly the latest adjusted result | Moved back | Cleared; adjustable again | +1 |
+
+Tests: 37 added (1,102 in total, 62 files): `adjustDelete.test.ts` (27, commands and reducer with real Magic Wand clicks: cleanup and feather adjustments against a fresh Delete of the original, ten consecutive adjustments with repeated amounts giving identical bytes and the patch always restoring the original exactly, 0 / 0 equal to the Step 6 Delete with the same patch bytes, one Undo to the original with selection and click after several adjustments and Redo to the latest, 40 random images and selections of every kind through random adjustments, Undo and Redo bit for bit, earlier entries kept by identity with the replaced patch no longer retained, eviction by the byte limit with the Delete kept, not adjusting without an image, before a Delete, with a new selection (the next Delete then uses the amounts), after Select All and Clear, Select All and Invert or a Subtract click that leave nothing selected, after Undo, with something to redo, after another image, while one opens, and keeping it after a failed import, no work for unchanged amounts, a differing amount after Redo, Magic Wand options and view changes keeping it, stale actions (two from one state, after a click, Clear, Undo, Redo, another image, a later adjustment), forged entries, kinds, documents, sizes and revisions on a frozen state, a selection or click forced into the state, a released image, failure and retry, Strict Mode double reducer runs, transparent and hidden-colour pixels, thin lines, a 1920 × 1080 image, the announcement); `editHistory.test.ts` (4), `historyEntry.test.ts` (3), `editDispatch.test.ts` (1), `ToolOptions.test.ts` (1), `toleranceInput.test.ts` (1). 23 deliberately introduced defects were each caught; four only after tests were added (selection changes through `selection-applied` and Clear, Undo, and the reducer's own selection check, each of which the other safeguards also cover).
+
+Browser verification (production build, headless Chrome and Firefox, device pixel ratio 1; `scripts/browser/edge-adjust.mjs`):
+
+- 167 checks pass (143 without timings: Chrome 72, Firefox 71), with real pointer drags, key presses, held keys and typing. On `edge-hmi.png` after a Delete at 0 / 0: while the Edge cleanup slider is dragged (six pointer moves, up to 5 and back to 3) the amount follows but the revision and the number of display images do not change; the release makes the Delete again once. Each arrow press on the Feather slider adjusts once at its release; holding the arrow (three repeats) steps to 5 without computing and adjusts once at the release. Typing 1 in the field computes nothing until Enter; Escape cancels; leaving the field commits (Chrome; headless Firefox fires no blur, Enter used); an arrow step in the field commits at its release; committing the amounts the result has computes nothing. After every adjustment the document is byte for byte the application's Delete in Node of the pixels and selection from before the Delete with the amounts now set, with one entry recorded with those amounts, nothing to redo, depth 1, nothing selected; the canvas shows the result; the announcement names the amounts. One Ctrl + Z restores every byte and the selection; Ctrl + Y the latest result, which can be adjusted again; back to 0 / 0 it is exactly the Step 6 Delete and the first Delete's bytes; the header Undo and Redo buttons as well. The tooltips switch between "for the next Delete" and "updating the last Delete". Nothing is adjusted with Select All active, after Select All and Clear, while the replace confirmation is open (Chrome: opening it took focus from the field with 3 typed, which set the amount only; after Cancel, Enter in the field adjusted), or while another image opens (held import); then the new image has nothing to adjust. One live display image at the end.
+- Five images (HMI graphic, thin lines and wiring, partially transparent PNG, soft JPEG photo, SVG), each deleted at 1 / 1 then adjusted seven times from the fields: every result exactly the Delete of the original with those amounts, one entry throughout, the canvas exact, one Undo exact with the selection, Redo exact.
+- Development server (React Strict Mode): the same 143 checks pass in both browsers, with no React warnings or console errors.
+- Regressions: production `edge-cleanup.mjs --no-perf` 885 (it now imports its helpers from `lib/edges.mjs`; run without the owner's Step 7 fixtures), `edit-workflow.mjs --no-perf` 507, `edit-ownership.mjs` 52, `smoke.mjs` 340; development `edge-cleanup.mjs` 885 and `edit-workflow.mjs` 507. All passing.
+- Not checked headless: leaving a field in Firefox, the real clipboard and drag-and-drop (the file picker opens the confirmation here), screen readers, a real (non-headless) desktop.
+
+Measurements (production build, headless, this machine, one run each; an adjustment is the whole synchronous handler, from the slider's change event to the commit and its layout effects, display image included; each column commits one amount, in this order, from a Delete at 0 / 0; edge-dense tiled HMI images are a worst case):
+
+| Image | Browser | Delete 0 / 0 | 1 / 0 | 3 / 0 | 5 / 0 | 5 / 5 | 0 / 5 | 0 / 2 | 2 / 2 | 2 / 0 | 0 / 0 | Undo, Redo |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 3840 × 2160 HMI, tiled | Chrome | 95 ms | 227 ms | 320 ms | 287 ms | 383 ms | 228 ms | 189 ms | 303 ms | 216 ms | 95 ms | 56, 36 ms |
+| | Firefox | 88 ms | 222 ms | 284 ms | 311 ms | 466 ms | 256 ms | 201 ms | 361 ms | 276 ms | 102 ms | 69, 51 ms |
+| 3840 × 2160 screenshot | Chrome | 98 ms | 258 ms | 356 ms | 275 ms | 358 ms | 195 ms | 183 ms | 319 ms | 249 ms | 103 ms | 52, 37 ms |
+| | Firefox | 100 ms | 252 ms | 315 ms | 317 ms | 427 ms | 219 ms | 197 ms | 379 ms | 290 ms | 102 ms | 76, 50 ms |
+| 8660 × 5773 HMI, tiled | Chrome | 524 ms | 1,108 ms | 1,466 ms | 1,535 ms | 2,269 ms | 1,349 ms | 1,081 ms | 1,756 ms | 1,270 ms | 710 ms | 260, 205 ms |
+| | Firefox | 519 ms | 1,278 ms | 1,640 ms | 1,863 ms | 2,706 ms | 1,571 ms | 1,175 ms | 2,197 ms | 1,538 ms | 632 ms | 340, 288 ms |
+| 8660 × 5773 flat background | Chrome | 637 ms | 626 ms | 894 ms | 774 ms | 902 ms | 656 ms | 849 ms | 845 ms | 733 ms | 529 ms | 227, 184 ms |
+| | Firefox | 481 ms | 681 ms | 751 ms | 733 ms | 860 ms | 736 ms | 708 ms | 833 ms | 720 ms | 525 ms | 323, 263 ms |
+
+- An adjustment costs about what a Delete with the same amounts costs (Step 8 table: Chrome, 50 MP HMI, cleanup 1: Delete 1,057 ms, adjustment 1,108 ms; 5 / 5: 2,224 and 2,269 ms; Firefox 1,221 and 1,278 ms, 2,609 and 2,706 ms). Rebuilding the image before the Delete and decoding its selection add about 30–120 ms (Node), up to about 0.2 s at 50 MP in the browsers (0 / 0: 524 ms for the Delete, 632–710 ms for the adjustment back to it). Single runs: individual values vary by tens of percent.
+- The display image takes 13–15 ms (Chrome) and 24–28 ms (Firefox) at 4K, 76–85 ms and 140–212 ms at 50 MP, as in Step 8. Nothing at all is computed while a slider is dragged or a key held.
+- History: always one entry, whose size follows the amounts exactly as a Delete made with them would (4K HMI 354 KB at 0 / 0 to 1.76 MB at 5 / 5; 50 MP HMI 2.1 to 10.6 MB; flat 50 MP 197–339 KB); back at 0 / 0 it is the first entry's size again.
+- Memory: one live display image after every adjustment in both browsers. Chrome's JavaScript heap and ArrayBuffers after garbage collection did not change from the Delete through the nine adjustments, Undo and Redo: 3.1–3.2 MB and 73.2–73.7 MB at 4K, 435.9–437.8 MB at 50 MP. (Measured right after a change, these include React's previous render, which keeps the previous document and a selection mask until its next render: two images and one mask.)
+- Transient memory (Node, resident high-water mark above the open image and its state, 50 MP edge-dense image, each case in its own process): Delete 191 MB at 0 / 0, 218 MB at cleanup 1, 242 MB at 5 / 5; adjusting 0 / 0 → 1 / 0 416 MB, 0 / 0 → 5 / 5 431 MB, 5 / 5 → 0 / 0 381 MB, 1 / 0 → 5 / 5 412 MB. About one image (190 MB) more than the Delete: the image before the Delete, rebuilt for the adjustment and released afterwards. Node times: Delete 445, 1,239 and 2,754 ms; those adjustments 1,271, 2,872, 623 and 2,798 ms.
+
+Known limitations (Step 9):
+
+- Changing an amount right after a Delete updates that Delete, even when it was meant for the next one; select the next area first (as with the tolerance, which re-applies the last click). Setting the amount back restores the earlier result exactly. The status bar note (correction below) says when this applies.
+- After Redo, or after an amount set while the Delete could not be adjusted (with a selection, or while the replace confirmation was open), the amounts shown can differ from those the result was made with. Nothing reconciles them until the user actually changes an amount; that change then updates the Delete with both amounts as shown (for example, shown 3 / 2 over a 1 / 0 result, changing Feather to 0 gives 3 / 0). Re-entering the same amount does not apply it.
+- Each committed step is a full recomputation, synchronous like Delete: near 50 MP one to a few seconds per step on edge-dense images; three separate arrow presses are three recomputations (holding the key is one).
+- One image-sized buffer more than Delete at the peak of an adjustment (the image before the Delete is rebuilt for it); nothing is kept between adjustments.
+- A larger adjusted patch can make the history drop its oldest entries to stay within 256 MiB, and they do not come back when the amounts are reduced (Delete entries are kilobytes to a few megabytes, so this needs a history already near the limit).
+- Two separate key presses that go up and back (Right, released, then Left, released) are two finished adjustments and update the Delete twice, the second back to the earlier result's exact bytes; only changes made and undone within one adjustment (a drag, keys held together, retyping before Enter, Escape) are not commits.
+
+Owner decisions raised (Step 9) and the owner's answers (review of the first implementation; architecture, functionality and automated results provisionally approved):
+
+1. When the amounts update the last Delete: right after a Delete (or its adjustment or Redo) until anything is selected, Undo or another edit. (Kept as implemented.)
+2. Leaving a control committed the amount shown (tolerance convention), so after Redo the Delete could be updated by tabbing through. (Changed: only actual user changes commit; see the correction below.)
+3. Indication: a small visible indication in an existing status area if feasible without toolbar layout changes. (Added in the status bar; see below.)
+4. The announcement wording. (Accepted as is.)
+5. Large images: each committed step recomputes synchronously. (Kept synchronous until the Phase 3 final performance review, Step 12.)
+
+##### Review correction: only actual changes commit
+
+Problem found in review: after Redo the controls can show other amounts than the redone Delete was made with, and merely focusing a control and tabbing away committed the amount shown, recomputing the image.
+
+- `finishAdjustment(start, value)` (`toleranceInput.ts`): a finished adjustment is a change only when it ends on another amount than the interaction started from. Each edge control keeps that start (shared by its slider and field): the amount when the slider or field gains focus, when the slider is pressed, and after each finished adjustment. A change commits (`onEdgeSettingsCommit`: the amount, then the Delete updated if it can be); anything else only sets the amount again (`onEdgeSettingsChange`), so Escape still restores it and nothing is computed.
+- So moving focus through the controls (Tab, Shift + Tab, clicking in and out), Enter or leaving a field without a change, a drag that ends where it began, keys held and stepped back before release, retyping the same number, and Escape never edit the image. Drags, key releases and typed values that end on another amount commit as before; the hook's own check (amounts already those of the result) and every Undo / Redo rule are unchanged. The tolerance control is unchanged.
+- Visible indication: while a change would update the last Delete, the status bar shows "Edge settings update last Delete" after the selection readout ("No selection"), in the accent colour, with a tooltip "Changing Edge cleanup or Feather now updates the last Delete. Select something to set them for the next Delete instead." (`LastDeleteNote` in `StatusBar.tsx`). It is text, not a live region (the update announcements already speak), changes neither the toolbar nor the status bar height (checked in both browsers), and is hidden below 800 px, where the selection and pointer readouts keep the room (the tooltips still say it).
+- Changed: `toleranceInput.ts` (`finishAdjustment`), `MagicWandOptions.tsx` (`EdgeAmountControl`), `StatusBar.tsx` and `StatusBar.css`, `App.tsx`; tests in `toleranceInput.test.ts` (6: the control's slider, keyboard and field behaviour composed from the same functions, including focus-through, drag back, held keys back, retyping, Escape, clamping) and `StatusBar.test.ts` (1, new); `scripts/browser/edge-adjust.mjs` and `lib/edges.mjs`.
+- Browser: `edge-adjust.mjs` adds the Redo mismatch (3 / 2 shown over a 1 / 0 result): Tab five times and Shift + Tab five times through both controls, focusing and leaving each part, a drag from 3 to 5 and back, ArrowRight and ArrowLeft held together, typing 4 then 3 and Enter, typing 5 then Escape, Enter and leaving without a change: nothing computed and the entry still 1 / 0; then Feather changed to 0 updates the Delete to exactly 3 / 0, and tabbing through again changes nothing. Also the status bar note (shown only while adjustable, gone with a selection, hidden at 760 px with no sideways scrolling, no height change). With the old behaviour put back on purpose, exactly the seven Redo mismatch checks fail.
+- The confirmation case changed accordingly: an amount committed by the focus move into the dialog is set (not applied); after Cancel, a different amount updates the Delete, while re-entering the same amount does not (a known limitation above).
+
+Manual QA checklist (owner, desktop, Chrome and Firefox). Not yet run: none is marked passed. Images from `node scripts/browser/fixtures.mjs` (`scripts/browser/fixtures/`), plus your own screenshots. Look at results at 400–800% over the checkerboard.
+
+| Check | Action | Passes when |
+| --- | --- | --- |
+| 9.1 Slider drag | `edge-hmi.png`, tolerance 10, click the grey background, Delete at 0 / 0. Look at the status bar and hover Edge cleanup. Drag its slider slowly to 3, pausing midway, then release | The status bar shows "Edge settings update last Delete" and the tooltip says "updating the last Delete"; nothing changes while dragging; at release the grey fringe disappears at once; the header still offers one "Undo Delete Selection" |
+| 9.2 Keyboard | Tab to the Feather slider; press Right twice; then hold Right until 5 and release | Each press updates the image once (feathered edges grow); holding updates once, at release; the focus ring stays on the slider |
+| 9.3 Typing | Click the Edge cleanup field, type 1 (image unchanged), Enter (updates); select the text, type 4, Escape | Enter updates; Escape returns the field to 1 and the image does not change |
+| 9.4 No build-up | Set 5 / 5, then 0 / 0, then 1 / 0 twice | At 0 / 0 the image is exactly the plain Delete again (the faint fringe of 8.2 is back); both 1 / 0 results look identical |
+| 9.5 One Undo | After several adjustments: Ctrl + Z once, then Ctrl + Y | Ctrl + Z restores the original image and its selection (marching ants); Ctrl + Y gives the latest adjusted result; adjusting again still works |
+| 9.6 Next Delete | After a Delete, click another area (the tooltip now says "for the next Delete"); change Feather to 3; Delete | The first Delete does not change when Feather changes; the second Delete uses Feather 3; Undo undoes them one at a time |
+| 9.7 Magic Wand options | After a Delete, change the tolerance (slider release), Contiguous / Global and New / Add / Subtract | The image does not change; the amounts still update the Delete afterwards |
+| 9.8 After Undo | Delete, Ctrl + Z, then change Edge cleanup | The image and restored selection do not change; Delete then uses the new amount; Redo is no longer offered |
+| 9.9 Confirmation | After a Delete, type 3 in Edge cleanup without Enter, then open another image (button, drop or Ctrl + V); Cancel; then type 2 in the field and press Enter | Nothing changes behind the dialog; after Cancel the image is still unchanged; Enter with 2 updates the Delete |
+| 9.10 Thin lines | `edge-lines.png`, Global, click the white, Delete; then Edge cleanup 5 and Feather 5 by slider | Lines, hairline and dots stay whole after each update (as in 8.6 and 8.7) |
+| 9.11 Screen reader (Orca) | After a Delete, adjust with the keyboard | "Delete Selection updated with Edge cleanup … px and Feather … px: …" is read once per update; the tooltips' wording is available as the controls' description |
+| 9.12 Large images | `edge-hmi-4k.png` and `edge-hmi-50mp.png`: Delete at 0 / 0, then release the slider at 1, 3 and 5, then Feather 5 | 4K: each update well under half a second; 50 MP: about as long as Delete with those amounts (up to about 2–3 s), no error; dragging itself never stalls |
+| 9.13 Firefox | Repeat 9.1–9.3 in Firefox, and Tab out of an edited field | As in Chrome; leaving the field commits (not checkable headless) |
+| 9.15 Redo with other amounts shown | `edge-hmi.png`: Edge cleanup 1, Feather 0; click the background, Delete; Ctrl + Z; set Edge cleanup 3 and Feather 2 (the selection is back: only the next Delete); Ctrl + Y. Then keyboard only: Tab from Shrink through both sliders and fields to Delete Selection and Shift + Tab back; in a field type the same number and Enter; type another and Escape; on a slider press Right and Left together and release | The image never changes (the Delete stays at 1 / 0) and nothing is announced. Then change Feather to 0 and Enter: the Delete updates once, to 3 / 0 |
+| 9.16 Status bar note | After 9.1, click the image to select; then Escape; then Ctrl + Z, Ctrl + Y; narrow the window below 800 px | The note disappears on selecting and stays away after Escape; it is back after Ctrl + Y; below 800 px it is hidden and the toolbar and status bar do not change height |
+| 9.14 Real assets | Your VTScada screenshots: Delete at 0 / 0, then try Edge cleanup 1–2 and Feather 1 | Easier tuning than Undo and Delete; note anything surprising |
 
 ---
 

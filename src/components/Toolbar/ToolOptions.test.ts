@@ -22,6 +22,7 @@ function render(
   available = ALL,
   canDeleteSelection = true,
   edgeSettings: EdgeSettings = NO_EDGE_TREATMENT,
+  adjustsLastDelete = false,
 ) {
   return renderToStaticMarkup(
     createElement(ToolOptions, {
@@ -35,6 +36,8 @@ function render(
       onSelectionAction: noop,
       edgeSettings,
       onEdgeSettingsChange: noop,
+      onEdgeSettingsCommit: noop,
+      adjustsLastDelete,
       canDeleteSelection,
       onDeleteSelection: noop,
     }),
@@ -200,6 +203,21 @@ describe('Edge cleanup and Feather controls', () => {
     const markup = render('magic-wand')
     expect(amount(markup, 'Edge cleanup').slider).toContain('Edge cleanup for the next Delete: remove the background colour left in edge pixels')
     expect(amount(markup, 'Feather').field).toContain('thin lines and small text are kept')
+  })
+
+  it('says when a change updates the last Delete instead (Phase 3 Step 9), with nothing else changed', () => {
+    const configuring = render('magic-wand', DEFAULT_MAGIC_WAND_SETTINGS, ALL, false, { cleanup: 1, feather: 0 })
+    const adjusting = render('magic-wand', DEFAULT_MAGIC_WAND_SETTINGS, ALL, false, { cleanup: 1, feather: 0 }, true)
+    for (const label of ['Edge cleanup', 'Feather']) {
+      for (const part of ['slider', 'field'] as const) {
+        expect(amount(adjusting, label)[part]).toContain(`title="${label}, updating the last Delete: `)
+        expect(amount(adjusting, label)[part]).toContain('(0–5 px; 0 = off)')
+        expect(amount(configuring, label)[part]).toContain(`title="${label} for the next Delete: `)
+      }
+    }
+    // Only the tooltips differ: same controls, names, values and layout.
+    const strip = (markup: string) => markup.replace(/title="(Edge cleanup|Feather)[^"]*"/g, '')
+    expect(strip(adjusting)).toBe(strip(configuring))
   })
 
   it('sits between the selection actions and Delete Selection, in tab order', () => {

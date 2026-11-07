@@ -23,6 +23,11 @@ interface StatusBarProps {
   devicePixelRatio: number
   activeTool: ToolId | null
   selection: SelectionMask | null
+  /**
+   * Whether a finished change of Edge cleanup or Feather would update the last Delete (Phase 3
+   * Step 9) rather than only set the next one: shown as a short note after the selection readout.
+   */
+  adjustsLastDelete?: boolean
   pointer: PointerPositionStore
   onZoomIn: () => void
   onZoomOut: () => void
@@ -36,6 +41,7 @@ export function StatusBar({
   devicePixelRatio,
   activeTool,
   selection,
+  adjustsLastDelete = false,
   pointer,
   onZoomIn,
   onZoomOut,
@@ -74,6 +80,7 @@ export function StatusBar({
               <span aria-hidden="true">{selection ? `Selection: ${formatSelection(selection)}` : 'No selection'}</span>
               <span className="visually-hidden">{describeSelection(selection)}</span>
             </span>
+            {adjustsLastDelete && <LastDeleteNote />}
             <span className="status-bar__divider" aria-hidden="true" />
             {/* Last, so its changing width never moves the other items. */}
             <PointerPixel pointer={pointer} viewport={viewport} devicePixelRatio={devicePixelRatio} document={document} />
@@ -124,6 +131,25 @@ export function StatusBar({
         </button>
       </div>
     </footer>
+  )
+}
+
+/**
+ * The note that a finished change of Edge cleanup or Feather updates the last Delete (Phase 3
+ * Step 9), with its divider. Text, not colour alone; not a live region, since the edit
+ * announcements already say what happened.
+ */
+export function LastDeleteNote() {
+  return (
+    <>
+      <span className="status-bar__divider status-bar__adjust" aria-hidden="true" />
+      <span
+        className="status-bar__adjust"
+        title="Changing Edge cleanup or Feather now updates the last Delete. Select something to set them for the next Delete instead."
+      >
+        Edge settings update last Delete
+      </span>
+    </>
   )
 }
 

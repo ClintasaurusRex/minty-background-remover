@@ -16,7 +16,7 @@ export function editName(kind: EditKind): string {
   return EDIT_NAMES[kind]
 }
 
-/** The announcement for a successful edit, Undo or Redo, or an edit that changed nothing. */
+/** The announcement for a successful edit, Undo or Redo, an edit that changed nothing, or the last Delete made again. */
 export function editNoticeText(notice: EditNotice): string {
   switch (notice.kind) {
     case 'applied': {
@@ -37,6 +37,15 @@ export function editNoticeText(notice: EditNotice): string {
       return notice.operation === 'delete-selection'
         ? 'Nothing was deleted: the selected pixels are already transparent.'
         : `${editName(notice.operation)} changed nothing.`
+    case 'adjusted': {
+      const { cleanup, feather } = notice.edgeSettings
+      const edge = notice.edgePixels
+      const changed =
+        edge === 0
+          ? 'no edge pixels were changed.'
+          : `${edge.toLocaleString('en-CA')} edge ${edge === 1 ? 'pixel was' : 'pixels were'} cleaned up or feathered.`
+      return `${editName(notice.operation)} updated with Edge cleanup ${cleanup} px and Feather ${feather} px: ${changed}`
+    }
   }
 }
 
@@ -54,9 +63,11 @@ export function editErrorMessage(error: EditError): string {
       ? 'Undo could not be completed.'
       : error.operation === 'redo'
         ? 'Redo could not be completed.'
-        : error.operation === 'delete-selection'
-          ? 'The selected pixels could not be deleted.'
-          : `${editName(error.operation)} could not be completed.`
+        : error.operation === 'adjust'
+          ? 'The last Delete Selection could not be updated with the new Edge cleanup and Feather amounts.'
+          : error.operation === 'delete-selection'
+            ? 'The selected pixels could not be deleted.'
+            : `${editName(error.operation)} could not be completed.`
   const memory = error.detail !== undefined && MEMORY_FAILURE.test(error.detail)
   return `${failed} The image and selection have not changed.${memory ? ' There may not be enough memory for an image this large.' : ''}`
 }

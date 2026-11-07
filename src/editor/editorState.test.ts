@@ -79,6 +79,7 @@ describe('editorReducer: imports', () => {
         redo: [],
         retainedBytes: 0,
       },
+      adjustableEdit: null,
       editError: null,
       editDepth: 0,
       editNotice: null,

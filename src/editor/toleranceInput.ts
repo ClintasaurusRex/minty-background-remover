@@ -7,8 +7,9 @@ import { MAX_TOLERANCE } from '../image/selection/colourDistance'
  * types while they edit.
  *
  * The Delete Selection edge amounts (edge cleanup and feather, 0–5 px; Phase 3 Step 8) use the
- * same text field behaviour with their own range. They re-apply nothing: a value only sets what
- * the next Delete uses.
+ * same text field and slider behaviour with their own range. A finished adjustment of an amount
+ * makes the last Delete again while it can still be adjusted (Phase 3 Step 9), as a finished
+ * tolerance adjustment re-applies the last Magic Wand click.
  */
 
 /** The whole numbers a slider and text field pair accepts, from 0 to `max`. */
@@ -259,6 +260,20 @@ export function toleranceFieldEvent(
     case 'blur':
       return finishField(toleranceToCommit(state.draft, tolerance, range))
   }
+}
+
+/**
+ * A finished adjustment of a control whose commits can edit the image (the Delete edge amounts,
+ * which can update the last Delete; Phase 3 Step 9): it counts as a change only when it ends on
+ * another value than the one the interaction started from. `start` is that value: the amount when
+ * the control gained focus or the slider was pressed, or the value of the previous finished
+ * adjustment. Moving focus through the control, or changing the value and back before finishing
+ * (dragging back, holding keys back, retyping it, Escape), is therefore never a change.
+ *
+ * Returns whether it changed, and the start of the next interaction (the value just finished).
+ */
+export function finishAdjustment(start: number, value: number): { readonly changed: boolean; readonly start: number } {
+  return { changed: value !== start, start: value }
 }
 
 /** Ends the entry in progress, committing `value`. */

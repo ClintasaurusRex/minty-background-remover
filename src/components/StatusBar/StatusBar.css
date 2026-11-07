@@ -45,6 +45,19 @@
   }
 }
 
+/* The note that the edge amounts update the last Delete (Phase 3 Step 9): text, in the accent
+   colour as a secondary cue. Narrow windows keep the selection and pointer readouts instead; the
+   amount controls' tooltips still say it. */
+.status-bar__info > span.status-bar__adjust:not(.status-bar__divider) {
+  color: var(--color-accent);
+}
+
+@media (max-width: 800px) {
+  .status-bar__adjust {
+    display: none;
+  }
+}
+
 /* The toolbar already shows the active tool. */
 @media (max-width: 900px) {
   .status-bar__tool {

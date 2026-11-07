@@ -12,6 +12,7 @@ import {
   recordEdit,
   recordRedo,
   recordUndo,
+  replaceLatestEdit,
 } from './editHistory'
 import { ARRAY_OVERHEAD_BYTES, PAYLOAD_OVERHEAD_BYTES, retainedBytes } from './historyBytes'
 import { type HistoryEntry, createHistoryEntry } from './historyEntry'
@@ -284,6 +285,67 @@ describe('edit history', () => {
     const undone = recordUndo(history, v(2), b, v(3))!
     recordRedo(undone, v(3), b, v(4))
     clearEditHistory(history)
+    expect(history).toEqual(snapshot)
+  })
+})
+
+describe('replacing the latest edit (Phase 3 Step 9)', () => {
+  it('replaces the next Undo in place, keeping the count and older entries, bound to the new version', () => {
+    const [a, b, b2] = [entryOf(10), entryOf(20), entryOf(30)]
+    const history = recordAll(createEditHistory(), [a, b])
+    const replaced = replaceLatestEdit(history, v(2), b, b2, v(9))!
+    expectEntries(replaced.undo, [a, b2])
+    expect(replaced.redo).toEqual([])
+    expect(replaced.version).toEqual(v(9))
+    expect(replaced.retainedBytes).toBe(historyRetainedBytes([a, b2]))
+    expect(replaced.limits).toBe(history.limits)
+    expect(nextUndo(replaced, v(9))).toBe(b2)
+    expect(nextUndo(replaced, v(2))).toBeNull()
+    // Replacing again: still one entry for the edit.
+    const again = replaceLatestEdit(replaced, v(9), b2, b, v(10))!
+    expectEntries(again.undo, [a, b])
+    expect(again.retainedBytes).toBe(history.retainedBytes)
+  })
+
+  it('refuses anything but the next Undo of the bound version, and any history with something to redo', () => {
+    const [a, b, c] = [entryOf(1), entryOf(2), entryOf(3)]
+    const history = recordAll(createEditHistory(), [a, b])
+    expect(replaceLatestEdit(history, v(2), a, c, v(3))).toBeNull()
+    expect(replaceLatestEdit(history, v(1), b, c, v(3))).toBeNull()
+    expect(replaceLatestEdit(history, v(2, 7), b, c, v(3, 7))).toBeNull()
+    expect(replaceLatestEdit(createEditHistory(), v(0), a, c, v(1))).toBeNull()
+    // With b undone, a is the next Undo, but b can still be redone: its patch applies only to a's result.
+    const undone = recordUndo(history, v(2), b, v(3))!
+    expect(replaceLatestEdit(undone, v(3), a, c, v(4))).toBeNull()
+    // Once redone, nothing is left to redo and b can be replaced again.
+    const redone = recordRedo(undone, v(3), b, v(4))!
+    expectEntries(replaceLatestEdit(redone, v(4), b, c, v(5))!.undo, [a, c])
+  })
+
+  it('drops the oldest entries when a larger replacement exceeds the budget, never the replacement', () => {
+    const limits = { maxEntries: 25, maxBytes: entryBytes(100) * 3 }
+    const older = [entryOf(100), entryOf(100)]
+    const latest = entryOf(100)
+    const history = recordAll(createEditHistory(limits), [...older, latest])
+    expect(history.undo).toHaveLength(3)
+    const larger = entryOf(250)
+    const replaced = replaceLatestEdit(history, v(3), latest, larger, v(4))!
+    expectEntries(replaced.undo, [older[1], larger])
+    expect(replaced.retainedBytes).toBeLessThanOrEqual(limits.maxBytes)
+    // Alone above the budget, it is still kept.
+    const huge = entryOf(10_000)
+    expectEntries(replaceLatestEdit(replaced, v(4), larger, huge, v(5))!.undo, [huge])
+  })
+
+  it('never modifies the history it replaces in', () => {
+    const [a, b, c] = [entryOf(1), entryOf(2), entryOf(3)]
+    const history = recordAll(createEditHistory(), [a, b])
+    const snapshot = { ...history, undo: [...history.undo], redo: [...history.redo], version: { ...history.version! } }
+    Object.freeze(history.undo)
+    Object.freeze(history.redo)
+    Object.freeze(history.version)
+    Object.freeze(history)
+    replaceLatestEdit(history, v(2), b, c, v(3))
     expect(history).toEqual(snapshot)
   })
 })

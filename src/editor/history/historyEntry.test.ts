@@ -4,10 +4,12 @@ import { createPixelBuffer } from '../../image/pixelBuffer'
 import type { PixelBuffer, SelectionMask } from '../types'
 import { createCropPatch } from './cropPatch'
 import { retainedBytes } from './historyBytes'
+import { deleteSelectionWithEdges } from '../../image/edit/deleteWithEdges'
 import {
   type MagicWandClick,
   createHistoryEntry,
   entryPayloads,
+  remadeHistoryEntry,
   restoreSelectionAfter,
   restoreSelectionBefore,
   sizeAfter,
@@ -193,5 +195,69 @@ describe('history entries', () => {
     })
     restoreSelectionBefore(entry)
     expect([selection.data, base.data, pixels.data]).toEqual(copies)
+  })
+})
+
+describe('history entries made again (Phase 3 Step 9)', () => {
+  /** A 12 × 9 object on a light background, its background selected, deleted with `settings`. */
+  function scene() {
+    const data = new Uint8ClampedArray(12 * 9 * 4)
+    for (let y = 0; y < 9; y++) {
+      for (let x = 0; x < 12; x++) {
+        const inside = x >= 3 && x < 9 && y >= 2 && y < 7
+        const edge = inside && (x === 3 || x === 8 || y === 2 || y === 6)
+        data.set(inside ? (edge ? [120, 120, 140, 255] : [20, 20, 60, 255]) : [240, 240, 240, 255], (y * 12 + x) * 4)
+      }
+    }
+    const pixels = createPixelBuffer(12, 9, data)
+    const rows = Array.from({ length: 9 }, (_, y) => Array.from({ length: 12 }, (_, x) => (x >= 3 && x < 9 && y >= 2 && y < 7 ? '.' : '#')).join(''))
+    return { pixels, selection: mask(...rows) }
+  }
+  const patchFor = (pixels: PixelBuffer, selection: SelectionMask, cleanup: number, feather: number) => {
+    const result = deleteSelectionWithEdges(pixels, selection, { cleanup, feather })!
+    return createPixelPatch(pixels, result.pixels, result.bounds)!
+  }
+
+  it('record the edge amounts a Delete was made with, as a copy', () => {
+    const { pixels, selection } = scene()
+    const settings = { cleanup: 2, feather: 1 }
+    const entry = createHistoryEntry({ kind: 'delete-selection', patch: patchFor(pixels, selection, 2, 1), selectionBefore: selection, magicWandBefore: null, selectionAfter: null, edgeSettings: settings })
+    expect(entry.edgeSettings).toEqual(settings)
+    expect(entry.edgeSettings).not.toBe(settings)
+    // Other edits record none.
+    const plain = createHistoryEntry({ kind: 'delete-selection', patch: patchFor(pixels, selection, 0, 0), selectionBefore: selection, magicWandBefore: null, selectionAfter: null })
+    expect('edgeSettings' in plain).toBe(false)
+  })
+
+  it('keep the same encoded selections and click, with the new patch, amounts and retained bytes', () => {
+    const { pixels, selection } = scene()
+    const base = mask(...Array.from({ length: 9 }, () => '#...........'))
+    const entry = createHistoryEntry({ kind: 'delete-selection', patch: patchFor(pixels, selection, 0, 0), selectionBefore: selection, magicWandBefore: click(base), selectionAfter: null, edgeSettings: { cleanup: 0, feather: 0 } })
+    const patch = patchFor(pixels, selection, 3, 2)
+    const remade = remadeHistoryEntry(entry, patch, { cleanup: 3, feather: 2 })
+    expect(remade.kind).toBe('delete-selection')
+    expect(remade.patch).toBe(patch)
+    expect(remade.selectionBefore).toBe(entry.selectionBefore)
+    expect(remade.magicWandBefore).toBe(entry.magicWandBefore)
+    expect(remade.selectionAfter).toBeNull()
+    expect(remade.edgeSettings).toEqual({ cleanup: 3, feather: 2 })
+    expect(remade.retainedBytes).toBe(retainedBytes(entryPayloads(remade)))
+    expect(remade.retainedBytes).not.toBe(entry.retainedBytes)
+    // The selection and click come back exactly as from the original entry.
+    const restored = restoreSelectionBefore(remade)
+    expect(sameSelection(restored.selection, selection)).toBe(true)
+    expect(sameSelection(restored.magicWand!.base, base)).toBe(true)
+    // The original entry is untouched.
+    expect(entry.edgeSettings).toEqual({ cleanup: 0, feather: 0 })
+    expect(entry.patch).not.toBe(patch)
+  })
+
+  it('refuse a patch for another image size, and crops', () => {
+    const { pixels, selection } = scene()
+    const entry = createHistoryEntry({ kind: 'delete-selection', patch: patchFor(pixels, selection, 0, 0), selectionBefore: selection, magicWandBefore: null, selectionAfter: null, edgeSettings: { cleanup: 0, feather: 0 } })
+    const other = deletePatch(image, corner())
+    expect(() => remadeHistoryEntry(entry, other, { cleanup: 1, feather: 0 })).toThrow(RangeError)
+    const crop = createHistoryEntry({ kind: 'auto-trim', patch: createCropPatch(pixels, { x: 1, y: 1, width: 4, height: 4 })!, selectionBefore: null, magicWandBefore: null, selectionAfter: null })
+    expect(() => remadeHistoryEntry(crop, patchFor(pixels, selection, 1, 0), { cleanup: 1, feather: 0 })).toThrow(RangeError)
   })
 })

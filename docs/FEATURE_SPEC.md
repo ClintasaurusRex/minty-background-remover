@@ -347,13 +347,23 @@ Decided after the Step 7 comparison (owner): background-colour decontamination (
 
 As implemented (Phase 3 Step 8; details in `IMAGE_PROCESSING_SPEC.md` and `IMPLEMENTATION_PLAN.md`):
 
-- Two controls beside Delete Selection, "Edge cleanup" and "Feather", each 0–5 px in whole pixels. They only set what the next Delete does: changing them never changes the image, and an edit already made is not re-applied (that would be Step 9).
+- Two controls beside Delete Selection, "Edge cleanup" and "Feather", each 0–5 px in whole pixels. They set what the next Delete does: changing them never changes the image by itself. (Since Phase 3 Step 9, a finished change right after a Delete also updates that Delete; see below.)
 - Edge cleanup removes the deleted background's colour from the unselected edge pixels up to that many pixels in: their alpha is lowered and their colour corrected, so the edge looks right over any background. Pixels it cannot explain as a blend of the object and the background are left alone. 1 px suits screenshots, icons and vector art; 2–4 px soft photographs.
 - Feather fades the object's edge inward over that many pixels. Lines, wiring, small text and other features up to about 3–4 px across are never feathered, and every shape keeps its middle at full strength; thicker shapes' edges fade, outlines included.
 - Neither ever restores deleted pixels, grows the object, raises alpha or shows deleted colour; the image border and transparency already in the image are never treated as deleted background.
 - Delete, cleanup and feathering are one edit: one Undo step restores every pixel exactly, and Redo repeats it.
 - Limits: colour flattened onto the background in the file cannot be recovered; cleanup trusts the selection (a selection that leaked into the object makes the damage larger); at larger amounts a solid grey part next to a dark outline can be taken for a blend. Near 50 megapixels Delete with these amounts can take one to a few seconds.
 - The amounts are kept for the session, like the Magic Wand options.
+
+As implemented (Phase 3 Step 9, re-applying the last Delete; details in `IMPLEMENTATION_PLAN.md`):
+
+- Right after Delete Selection (and after Redo of one), while nothing has been selected since, a finished change of Edge cleanup or Feather updates that Delete: it is made again with the amounts now set, as if it had been made with them. The user can try amounts without Undo, reselecting and Delete.
+- A change is finished when the slider is released, the last arrow, Page, Home or End key is released, Enter is pressed, or focus leaves the control, as for the tolerance. Dragging or holding a key computes nothing until then; typing applies on Enter; Escape cancels. Only an actual change counts: moving through the controls, or changing an amount and back before finishing, never updates the Delete, even when the amounts shown differ from the result's (after Redo).
+- Every update starts again from the image as it was before the Delete and the selection it deleted, never from the previous result, so updating any number of times gives exactly what one Delete with the final amounts gives, and returning to earlier amounts gives exactly the earlier result (0 / 0: the exact Delete).
+- It stays one edit: one Undo restores the image as it was before the Delete, with its selection and Magic Wand click; Redo restores the latest result. No Undo steps are added, and nothing else in the history changes.
+- Once anything is selected (a Magic Wand click, Select All, Invert, Grow, Shrink, including a selection cleared again), after Undo, after another edit, and while another image opens or the replace confirmation is open, the amounts only set the next Delete again. Magic Wand options never update a Delete.
+- The update is announced, for example "Delete Selection updated with Edge cleanup 2 px and Feather 1 px: 1,204 edge pixels were cleaned up or feathered." The tooltips of the two controls say whether they set the next Delete or are updating the last one, and while they would update it the status bar shows "Edge settings update last Delete".
+- Near 50 megapixels an update takes about as long as the Delete itself with those amounts (one to a few seconds on edge-dense images), and the page pauses meanwhile, as for Delete.
 
 ---
 

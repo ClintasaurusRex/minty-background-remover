@@ -279,7 +279,7 @@ Who holds what:
 | --- | --- | --- |
 | The current display image (`documentBitmap`) | The editor state | By `ImageCanvas` (its `createDisplayImageOwner`), after the commit that replaces it, once the replacement is drawn |
 | A display image a command has created but not dispatched | The command | By the command, if it is stale or anything fails (Step 5's history commands create it last, so nothing fails after it) |
-| A display image whose action the reducer rejected | The dispatcher (`app/editDispatch.ts`, Step 6) | Released right after `flushSync` has committed the action, when the committed state does not hold it. (An image replaced before it was drawn cannot occur: each action is committed on its own.) |
+| A display image whose action the reducer rejected (an edit, Undo, Redo, or since Step 9 an adjusted Delete) | The dispatcher (`app/editDispatch.ts`, Step 6) | Released right after `flushSync` has committed the action, when the committed state does not hold it. (An image replaced before it was drawn cannot occur: each action is committed on its own.) |
 | Edit history (patches and encoded selections; no images or pixel buffers) | The editor state (`history`) | Garbage collection, when entries are dropped by the limits, Redo is cleared by a new edit, or another image opens |
 | An import's bitmap that lost to a newer import | The import runner | Closed by the runner |
 | Image canvas backing store and checkerboard pattern | `workspaceRenderer` (one per `ImageCanvas` mount) | `dispose()` in the effect clean-up; the pattern is remade on restoration |
@@ -364,6 +364,30 @@ scripts/browser/edge-cleanup.mjs   the controls, exact results against the algor
 - The edge passes are pure (`PixelBuffer` and `SelectionMask` in, the edited copy out), so they run in Node tests and could move to a Worker with Delete. They write only the copy Delete made, before it becomes a document: copy-on-write is unchanged, and Delete with edges still makes exactly one image-sized copy.
 - The patch region is the bounds of every changed pixel, so the existing XOR pixel patches record the colour and alpha changes; history, Undo, Redo, version checks and display-image ownership are unchanged.
 - The amounts are editor state like the Magic Wand options: the reducer only stores them (rounded, clamped); the command reads them when Delete runs.
+
+Step 9 (re-applying the last Delete when an edge amount changes):
+
+```text
+src/
+├── editor/history/historyEntry.ts   edgeSettings in a Delete's entry; remadeHistoryEntry (same encoded
+│                                    selections and click, new patch and amounts)
+├── editor/history/editHistory.ts    replaceLatestEdit: the next Undo replaced in place (Redo must be empty)
+├── editor/editorState.ts            adjustableEdit; the edit-adjusted action; mergeEdgeSettings
+├── editor/editCommands.ts           adjustableDelete (constant time), adjustDeleteCommand
+├── app/useEditCommands.ts           commitEdgeSettings: the amount, then the adjustment through
+│                                    dispatchEditAction (never while the confirmation is open)
+└── components/Toolbar/MagicWandOptions.tsx  the amount controls commit like the tolerance control
+
+scripts/browser/edge-adjust.mjs      drags, held keys, typing, exact results against Node, Undo / Redo,
+                                     when nothing may be adjusted, timings; lib/edges.mjs (shared with
+                                     edge-cleanup.mjs)
+```
+
+- No pixel buffer is kept for this. The Delete's history entry already holds everything: its XOR patch applied backwards to the current pixels gives the pixels before the Delete exactly, its encoded selection the selection it deleted, and (new) the amounts it was made with. `adjustDeleteCommand` rebuilds the pixels before the Delete, runs `deleteSelectionWithEdges` on them with the new amounts, makes a patch between the two, a new revision and, last, its display image. Each adjustment starts from those pixels, never from the previous result.
+- The entry is replaced, not added to: `remadeHistoryEntry` shares the old entry's encoded selections and click (never encoded again), and `replaceLatestEdit` puts it in the old entry's place, recounts the retained bytes (dropping the oldest entries if a larger patch exceeds the budget, never the Delete itself) and binds the history to the new version. Redo must be empty: a Redo entry's patch was made from the old result.
+- `adjustableEdit` (editor state) names the Delete that can be adjusted. It is set when a Delete is applied, adjusted or redone, and forgotten by every selection change (click, re-apply, Select All, Clear, Invert, Grow, Shrink), Undo and another image; view changes, option and amount changes, announcements and failures keep it. `adjustableDelete` additionally requires it to be the history's next Undo for the open version, nothing to redo, nothing selected, no Magic Wand click and no import in progress; the reducer checks the same (except the import, a non-permanent availability rule kept in the commands) plus the usual version, new-content and size checks, so a stale adjustment is rejected permanently and its display image released by `dispatchEditAction`.
+- The controls commit only actual changes (review correction): `finishAdjustment` compares a finished adjustment with the amount its interaction started from (focus, slider press, previous adjustment), kept per control in a ref; an unchanged finish only sets the amount (`edge-settings-changed`). `App` computes `adjustableDelete` once per render for the controls' tooltips and the status bar's `LastDeleteNote`.
+- Committing an amount dispatches `edge-settings-changed` (always) and, unless the replace confirmation is open, the adjustment computed from the committed state with the full new amounts, inside `flushSync` like every edit. React 19 renders the queued amount change and the adjustment in order in that pass. The edit depth does not change.
 
 Planned for later steps (subject to review at each step): `image/trim/autoTrim.ts` and its tool.
 

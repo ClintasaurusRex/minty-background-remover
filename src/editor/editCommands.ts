@@ -1,10 +1,13 @@
 import { createDisplayImage } from '../canvas/displayImage'
-import { deleteSelectionWithEdges } from '../image/edit/deleteWithEdges'
+import { type EdgeSettings, deleteSelectionWithEdges } from '../image/edit/deleteWithEdges'
 import { isEditableTarget } from '../utils/domTargets'
 import { type EditorAction, type EditorState, documentVersion, isImporting } from './editorState'
 import { nextRedo, nextUndo } from './history/editHistory'
-import type { EditKind } from './history/historyEntry'
+import { type EditKind, type HistoryEntry, remadeHistoryEntry } from './history/historyEntry'
+import { applyPixelPatch, createPixelPatch } from './history/pixelPatch'
+import { decodeSelection } from './history/selectionCodec'
 import { type CreateDisplayImage, completedEditCommand, describeCause, redoCommand, undoCommand } from './historyCommands'
+import { createEditedDocument } from './imageDocument'
 import type { ShortcutKey } from './selectionCommands'
 
 /*
@@ -118,9 +121,87 @@ export function deleteSelectionCommand(
       region: result.bounds,
       changedPixels: result.count,
       ...(result.edgePixels > 0 ? { edgePixels: result.edgePixels } : {}),
+      edgeSettings: state.edgeSettings,
     },
     createImage,
   )
+}
+
+/*
+ * Adjusting the last Delete (Phase 3 Step 9; FEATURE_SPEC.md §9). Right after Delete Selection,
+ * while nothing has been selected since, committing another Edge cleanup or Feather amount makes
+ * that Delete again with the new amounts, as if it had been made with them, instead of setting
+ * them only for the next Delete. It stays one edit: its history entry is replaced, not added to.
+ *
+ * Everything needed is in the Delete's history entry: its patch gives back the pixels before it
+ * (applied backwards to the current pixels, exactly), and it recorded the selection it deleted and
+ * the amounts it was made with. Each adjustment starts again from those pixels and that selection,
+ * never from an earlier result, so adjusting never builds on earlier cleanup or feathering.
+ */
+
+/**
+ * The Delete Selection that committed edge amounts would make again, or null. Constant time, so
+ * the controls can check it on every render.
+ *
+ * It is the Delete just applied, made again or redone, while it is still the latest thing done to
+ * the image: the state's adjustable edit (editorState.ts: forgotten as soon as anything is
+ * selected or the image or history changes otherwise), still the history's next Undo for the open
+ * document with nothing to redo, with nothing selected and no Magic Wand click recorded, and no
+ * other image opening (that would replace the result anyway).
+ */
+export function adjustableDelete(state: EditorState): HistoryEntry | null {
+  const entry = state.adjustableEdit
+  const version = documentVersion(state)
+  if (!entry || !version || isImporting(state)) return null
+  if (state.selection !== null || state.lastMagicWandOperation !== null || state.history.redo.length > 0) return null
+  if (nextUndo(state.history, version) !== entry) return null
+  return entry.kind === 'delete-selection' && entry.edgeSettings && entry.patch.kind === 'pixel-patch' ? entry : null
+}
+
+/**
+ * The last Delete Selection made again with `settings` (whole pixels from 0 to 5, as the editor
+ * keeps them):
+ *
+ * - The pixels before the Delete: its patch applied backwards to the current pixels, byte for byte
+ *   (hidden colour included). The selection: the one its entry recorded, decoded.
+ * - The result: deleteSelectionWithEdges of those with `settings`, exactly what Delete would have
+ *   given with them (with 0 / 0 the exact Delete of Step 6). A new revision and its display image.
+ * - The entry replaced by one with the new patch and amounts and the same selection and Magic Wand
+ *   click, so one Undo still restores the image before the Delete, with its selection, and Redo
+ *   the latest result.
+ *
+ * Returns null, computing nothing, when there is no Delete to adjust (adjustableDelete) or its
+ * result was made with `settings` already. Returns `edit-failed` (operation 'adjust'), changing
+ * nothing, when the result cannot be made or displayed (for example for lack of memory).
+ *
+ * Peak memory: the current pixels, the pixels before the Delete, the result and the decoded
+ * selection, plus Delete's own strips: one image-sized buffer more than the Delete itself.
+ */
+export function adjustDeleteCommand(
+  state: EditorState,
+  settings: EdgeSettings,
+  createImage: CreateDisplayImage = createDisplayImage,
+): EditorAction | null {
+  const entry = adjustableDelete(state)
+  const { document } = state
+  const version = documentVersion(state)
+  if (!entry || !document || !version || !entry.edgeSettings || entry.patch.kind !== 'pixel-patch') return null
+  if (entry.edgeSettings.cleanup === settings.cleanup && entry.edgeSettings.feather === settings.feather) return null
+  try {
+    const before = applyPixelPatch(document.pixels, entry.patch)
+    const selection = decodeSelection(entry.selectionBefore)
+    const result = deleteSelectionWithEdges(before, selection, settings)
+    // The Delete changed pixels when it was made from these pixels and this selection, so it does
+    // again; a result without changes would mean a damaged entry.
+    const patch = result && createPixelPatch(before, result.pixels, result.bounds)
+    if (!result || !patch) throw new Error('The Delete made again from its history entry changed nothing')
+    const replacement = remadeHistoryEntry(entry, patch, settings)
+    const next = createEditedDocument(document, result.pixels)
+    const image = createImage(next.pixels)
+    return { type: 'edit-adjusted', version, entry, replacement, document: next, image, edgePixels: result.edgePixels }
+  } catch (cause) {
+    return { type: 'edit-failed', error: { operation: 'adjust', detail: describeCause(cause) } }
+  }
 }
 
 /**

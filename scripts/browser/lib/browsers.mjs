@@ -205,6 +205,26 @@ export async function launchChrome({ dpr = 1, width = 1400, height = 900, reduce
       async type(text) {
         await send('Input.insertText', { text })
       },
+      /** The left mouse button pressed, moved while held, and released: separate steps, so a drag can be observed midway. */
+      async mouseDown(x, y) {
+        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
+        await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 })
+      },
+      async mouseMove(x, y) {
+        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'left', buttons: 1 })
+      },
+      async mouseUp(x, y) {
+        await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 })
+      },
+      /** A key pressed and held (`repeat`: an auto-repeat of the held key), and released, as separate steps. */
+      async keyDown(name, { repeat = false } = {}) {
+        const info = keyInfo(name)
+        await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', autoRepeat: repeat, key: info.key, code: info.code, windowsVirtualKeyCode: info.keyCode, nativeVirtualKeyCode: info.keyCode })
+      },
+      async keyUp(name) {
+        const info = keyInfo(name)
+        await send('Input.dispatchKeyEvent', { type: 'keyUp', key: info.key, code: info.code, windowsVirtualKeyCode: info.keyCode, nativeVirtualKeyCode: info.keyCode })
+      },
       /** Runs a Chrome DevTools Protocol command on the page. */
       cdp: (method, params = {}) => send(method, params),
       close: () => closeBrowser(child, profile, socket, () => send('Browser.close')),
@@ -303,6 +323,26 @@ export async function launchFirefox({ dpr = 1, width = 1400, height = 900, reduc
       async type(text) {
         const actions = [...text].flatMap((value) => [{ type: 'keyDown', value }, { type: 'keyUp', value }])
         await send('input.performActions', { context, actions: [{ type: 'key', id: 'keyboard', actions }] })
+      },
+      /** The left mouse button pressed, moved while held, and released: separate steps, so a drag can be observed midway. */
+      async mouseDown(x, y) {
+        await pointer([
+          { type: 'pointerMove', x: Math.round(x), y: Math.round(y), origin: 'viewport' },
+          { type: 'pointerDown', button: 0 },
+        ])
+      },
+      async mouseMove(x, y) {
+        await pointer([{ type: 'pointerMove', x: Math.round(x), y: Math.round(y), origin: 'viewport' }])
+      },
+      async mouseUp() {
+        await pointer([{ type: 'pointerUp', button: 0 }])
+      },
+      /** A key pressed and held (pressing it again while held is an auto-repeat), and released, as separate steps. */
+      async keyDown(name) {
+        await send('input.performActions', { context, actions: [{ type: 'key', id: 'keyboard', actions: [{ type: 'keyDown', value: keyInfo(name).webdriver }] }] })
+      },
+      async keyUp(name) {
+        await send('input.performActions', { context, actions: [{ type: 'key', id: 'keyboard', actions: [{ type: 'keyUp', value: keyInfo(name).webdriver }] }] })
       },
       /** Releases every key and button still held. */
       release: () => send('input.releaseActions', { context }),
