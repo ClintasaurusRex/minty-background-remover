@@ -389,7 +389,7 @@ scripts/browser/edge-adjust.mjs      drags, held keys, typing, exact results aga
 - The controls commit only actual changes (review correction): `finishAdjustment` compares a finished adjustment with the amount its interaction started from (focus, slider press, previous adjustment), kept per control in a ref; an unchanged finish only sets the amount (`edge-settings-changed`). `App` computes `adjustableDelete` once per render for the controls' tooltips and the status bar's `LastDeleteNote`.
 - Committing an amount dispatches `edge-settings-changed` (always) and, unless the replace confirmation is open, the adjustment computed from the committed state with the full new amounts, inside `flushSync` like every edit. React 19 renders the queued amount change and the adjustment in order in that pass. The edit depth does not change.
 
-Step 10 (Auto Trim algorithm; not yet called by the application):
+Step 10 (Auto Trim algorithm; called by the Auto Trim tool since Step 11):
 
 ```text
 src/image/trim/
@@ -403,7 +403,32 @@ src/image/trim/
 - The trimmed pixels come from `cropPixels` in `editor/history/cropPatch.ts`, so the edit, its Undo (`restoreCroppedPixels`) and its Redo (`cropPixels`) share one crop. It is the first module under `image/` to import from `editor/history/`; moving `cropPixels` to `image/` would be a separate refactor.
 - A `crop` plan's `kept` rectangle is what the existing `CompletedCrop` takes, so Step 11 needs no new history type. `completedEditCommand` records the crop patch, makes the trimmed pixels, a new revision and its display image. The reducer, version binding, limits and display-image ownership are unchanged. A whole-image rectangle records nothing (`createCropPatch` returns null). `autoTrimHistory.test.ts` shows the round trips through the real commands and reducer.
 
-Planned for later steps (subject to review at each step): the Auto Trim tool (Step 11).
+Step 11 (the Auto Trim tool):
+
+```text
+src/
+├── editor/autoTrimPadding.ts             the padding the tool offers: 5 by default, 0–50, presets
+│                                         0 / 5 / 10 / 20, the field's range, clamping
+├── editor/editCommands.ts                'auto-trim' edit action (availableEditActions.autoTrim),
+│                                         autoTrimCommand
+├── editor/editorState.ts                 autoTrimPadding (reset by each successful import),
+│                                         auto-trim-padding-changed, the reason in edit-unchanged,
+│                                         sizes and dropped Undo steps in the applied notice,
+│                                         edit-notice-dismissed, Fit after a size change
+├── editor/editFeedback.ts                Auto Trim texts; isShownEditNotice
+├── components/Toolbar/AutoTrimOptions.tsx  the options row: Padding presets and field, Trim
+├── components/Toolbar/ToolOptions.tsx    the row of the active tool
+└── components/Workspace/EditNoticeMessage.tsx  outcomes shown as well as announced
+scripts/browser/auto-trim.mjs             the tool in Chrome and Firefox; lib/gpu.mjs (shared with
+                                          gpu-crash.mjs)
+```
+
+- No new history type, command path or ownership rule: `autoTrimCommand` calls `planAutoTrim` with the state's padding (threshold 0) and passes a `crop` plan's `kept` to `completedEditCommand`, which records the crop patch, crops once with `cropPixels`, makes the new revision and, last, its display image. `nothing-visible` and `unchanged` plans become `edit-unchanged` with the reason; an exception becomes `edit-failed`. It runs through `editActionCommand` and `dispatchEditAction` like Delete Selection (availability decided in the commands, `flushSync` dispatch, release of a rejected action's image).
+- The reducer's checks are those of every edit. What is new there: a size change (Auto Trim, its Undo and Redo) fits the new image to the workspace, replacing the provisional crop view of Step 5; the applied notice carries the sizes before and after, and the number of older Undo steps `recordEdit` dropped to stay within the limits (counted for every edit, shown only for Auto Trim); `edit-notice-dismissed` hides a shown notice.
+- The padding lives in the editor state, not in the control, so the command always computes with the padding the user sees; it is reset to 5 by each successful import and kept by a failed one. Nothing is persisted.
+- `ToolOptions` shows the active tool's row. The Workspace shows notices that `isShownEditNotice` selects (Auto Trim with nothing to trim, a trim that dropped Undo steps) in its polite status region, and announces all other outcomes in the hidden one, so each outcome is announced once.
+
+Planned for later steps (subject to review at each step): Phase 3 final quality assurance (Step 12).
 
 Key rules:
 
@@ -605,7 +630,7 @@ Initial web application should avoid unnecessary persistent storage.
 Potential local preferences may eventually include:
 
 - Last Magic Wand tolerance (not persisted yet; Phase 2 keeps it for the current session only)
-- Last Auto Trim padding
+- Last Auto Trim padding (not persisted; Phase 3 Step 11 resets it to 5 px whenever another image is opened, owner's provisional decision)
 - UI preferences
 
 Browser storage may be used later for small preferences.

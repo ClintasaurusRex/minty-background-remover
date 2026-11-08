@@ -6,10 +6,12 @@ import { type EdgeSettings, MAX_EDGE_PIXELS, NO_EDGE_TREATMENT } from '../image/
 import type { ImportError } from '../image/import/errors'
 import { sharesPixelMemory } from '../image/pixelBuffer'
 import type { MagicWandOptions } from '../image/selection/magicWand'
+import { DEFAULT_AUTO_TRIM_PADDING, clampAutoTrimPadding } from './autoTrimPadding'
 import {
   type EditHistory,
   clearEditHistory,
   createEditHistory,
+  isBoundTo,
   recordEdit,
   recordRedo,
   recordUndo,
@@ -68,10 +70,11 @@ export interface EditorState {
   readonly workspace: WorkspaceMetrics | null
   /**
    * Whether the next workspace resize places the image again, as when it was opened,
-   * instead of keeping its centre. Set by the import that first makes a tool active:
-   * that tool's options row then appears above the workspace and makes it smaller, and
-   * an image fitted to the workspace without the row would be too large for it (or
-   * overflow it where the row wraps). Cleared by that resize and by any change of view.
+   * instead of keeping its centre. Set by an import that makes the Magic Wand active when
+   * it was not (the first image, or one opened while Auto Trim was active): its options row
+   * then replaces the previous one (or none) above the workspace and can change its height,
+   * and an image fitted to the workspace as it was would no longer fit it (or overflow it where
+   * the row wraps). Cleared by that resize and by any change of view.
    */
   readonly placeOnNextResize: boolean
   /** The most recent import still in progress. Results of any other import are stale. */
@@ -94,6 +97,12 @@ export interface EditorState {
    * its own action.
    */
   readonly edgeSettings: EdgeSettings
+  /**
+   * Auto Trim's padding (Phase 3 Step 11): whole pixels from 0 to 50 kept around the visible
+   * pixels on each side, as far as the image reaches. 5 by default, and set back to 5 whenever
+   * another image is opened. Changing it never changes the image; Trim uses it.
+   */
+  readonly autoTrimPadding: number
   /**
    * The selected pixels of the open document, or null for no selection. Always the
    * document's size. Cleared when another image is opened; kept on tool changes.
@@ -159,10 +168,21 @@ export type EditNotice =
       readonly operation: EditKind
       readonly changedPixels: number | null
       readonly edgePixels?: number
+      /** For an edit that changed the image's size (Auto Trim): its size before and after. */
+      readonly resized?: { readonly from: Size; readonly to: Size }
+      /**
+       * Undo steps the history dropped to stay within its limits (25 entries, 256 MiB) when it
+       * recorded this edit, oldest first; absent when none. Redo steps a new edit always discards
+       * are not counted.
+       */
+      readonly droppedUndoSteps?: number
     }
   | { readonly kind: 'undone' | 'redone'; readonly operation: EditKind }
-  /** The edit would have changed no pixel (Delete with only fully transparent pixels selected): nothing happened. */
-  | { readonly kind: 'unchanged'; readonly operation: EditKind }
+  /**
+   * The edit would have changed no pixel (Delete with only fully transparent pixels selected, Auto
+   * Trim with nothing to trim): nothing happened. `trim`: why Auto Trim had nothing to do.
+   */
+  | { readonly kind: 'unchanged'; readonly operation: EditKind; readonly trim?: AutoTrimNoChange }
   /**
    * The latest edit was made again with other amounts (Phase 3 Step 9: the last Delete with the
    * Edge cleanup and Feather amounts committed): `edgeSettings` as used, and how many edge pixels
@@ -174,6 +194,13 @@ export type EditNotice =
       readonly edgeSettings: EdgeSettings
       readonly edgePixels: number
     }
+
+/** Why Auto Trim changed nothing (Phase 3 Step 11). */
+export type AutoTrimNoChange =
+  /** No pixel of the image is visible: every alpha is 0. */
+  | { readonly kind: 'nothing-visible' }
+  /** The visible pixels, with `padding` around them, already reach every edge of the image. */
+  | { readonly kind: 'no-border'; readonly padding: number }
 
 /**
  * An edit, Undo or Redo that could not be completed (for example, for lack of memory). The
@@ -281,6 +308,11 @@ export type EditorAction =
    */
   | { readonly type: 'edge-settings-changed'; readonly settings: Partial<EdgeSettings> }
   /**
+   * Sets Auto Trim's padding, rounded to a whole number and clamped to 0–50; values that are not
+   * finite are ignored. Never changes the image.
+   */
+  | { readonly type: 'auto-trim-padding-changed'; readonly padding: number }
+  /**
    * Replaces the selection with one computed for `version` of the open document (null
    * selects nothing). Ignored unless `version` is the open document's current version
    * and the mask is the document's size. The state keeps the mask itself, without
@@ -331,9 +363,15 @@ export type EditorAction =
     }
   /**
    * An edit of `version` that would have changed no pixel, so nothing was recorded and nothing
-   * changes but the announcement. Ignored for any other version.
+   * changes but the announcement. Ignored for any other version. `trim`: why Auto Trim had
+   * nothing to do.
    */
-  | { readonly type: 'edit-unchanged'; readonly version: DocumentVersion; readonly operation: EditKind }
+  | {
+      readonly type: 'edit-unchanged'
+      readonly version: DocumentVersion
+      readonly operation: EditKind
+      readonly trim?: AutoTrimNoChange
+    }
   /**
    * Undo of `entry`, computed from `version`: the restored pixels as a new revision, its
    * display image, and the selection and Magic Wand click from before the edit, the click
@@ -380,6 +418,8 @@ export type EditorAction =
   /** An edit, Undo or Redo failed; nothing else changes. */
   | { readonly type: 'edit-failed'; readonly error: EditError }
   | { readonly type: 'edit-error-dismissed' }
+  /** Hides the latest edit outcome's message (the ones shown in the workspace, editFeedback.ts). */
+  | { readonly type: 'edit-notice-dismissed' }
 
 export const initialEditorState: EditorState = {
   document: null,
@@ -394,6 +434,7 @@ export const initialEditorState: EditorState = {
   activeTool: null,
   magicWand: DEFAULT_MAGIC_WAND_SETTINGS,
   edgeSettings: NO_EDGE_TREATMENT,
+  autoTrimPadding: DEFAULT_AUTO_TRIM_PADDING,
   selection: null,
   lastMagicWandOperation: null,
   history: createEditHistory(),
@@ -436,15 +477,17 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         document: result.document,
         documentBitmap: result.bitmap,
         viewport: initialViewport(result.document, state.workspace),
-        // The first image makes the Magic Wand active, and its options row is about to
-        // take room from the workspace.
-        placeOnNextResize: state.activeTool === null,
+        // The image makes the Magic Wand active: for the first image, or after Auto Trim, its
+        // options row is about to take the place of none or another one above the workspace.
+        placeOnNextResize: state.activeTool !== 'magic-wand',
         pendingImportId: null,
         importError: null,
         pan: null,
         // The selection and the click that made it belonged to the previous image.
         // Magic Wand options are kept.
         activeTool: 'magic-wand',
+        // Auto Trim's padding starts at its default for every image (owner decision, Step 11).
+        autoTrimPadding: DEFAULT_AUTO_TRIM_PADDING,
         selection: null,
         lastMagicWandOperation: null,
         // Edits of the previous image cannot apply to this one.
@@ -539,6 +582,12 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case 'edge-settings-changed':
       return withEdgeSettings(state, action.settings)
 
+    case 'auto-trim-padding-changed': {
+      if (!Number.isFinite(action.padding)) return state
+      const padding = clampAutoTrimPadding(action.padding)
+      return padding === state.autoTrimPadding ? state : { ...state, autoTrimPadding: padding }
+    }
+
     case 'selection-applied': {
       const { version, selection } = action
       if (!fitsDocument(state, version, selection) || selection === state.selection) return state
@@ -583,7 +632,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case 'edit-unchanged': {
       const { document } = state
       if (!document || !isVersionOf(action.version, document)) return state
-      return withEditFeedback(state, null, { kind: 'unchanged', operation: action.operation })
+      return withEditFeedback(state, null, {
+        kind: 'unchanged',
+        operation: action.operation,
+        ...(action.trim ? { trim: action.trim } : {}),
+      })
     }
 
     case 'edit-failed':
@@ -591,6 +644,9 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'edit-error-dismissed':
       return state.editError === null ? state : { ...state, editError: null }
+
+    case 'edit-notice-dismissed':
+      return state.editNotice === null ? state : { ...state, editNotice: null }
   }
 }
 
@@ -614,23 +670,38 @@ function applyEdit(state: EditorState, action: EditAction<'edit-applied'>): Edit
     return state
   }
   if (!patchFits(entry, current, next) || !fitsSize(selection, next)) return state
+  const history = recordEdit(state.history, version, entry, versionOf(next))
+  const dropped = droppedUndoSteps(state.history, version, history)
   const notice: EditNotice = {
     kind: 'applied',
     operation: entry.kind,
     changedPixels: action.changedPixels ?? null,
     ...(action.edgePixels ? { edgePixels: action.edgePixels } : {}),
+    ...(sameSize(current, next) ? {} : { resized: { from: sizeOf(current), to: sizeOf(next) } }),
+    ...(dropped > 0 ? { droppedUndoSteps: dropped } : {}),
   }
   return {
     ...withEditFeedback(state, null, notice),
-    ...moveContent(state, next, contentShift(entry, 1)),
+    ...viewAfterEdit(state, next),
     document: next,
     documentBitmap: image,
     selection,
     lastMagicWandOperation: null,
-    history: recordEdit(state.history, version, entry, versionOf(next)),
+    history,
     adjustableEdit: adjustableAfter(entry, selection),
     editDepth: state.editDepth + 1,
   }
+}
+
+/**
+ * How many Undo steps recording an edit of the document at `from` dropped: the entries `before`
+ * offered for Undo there, plus the new one, that `after` no longer holds. The history drops the
+ * oldest entries when the new one would exceed its limits (editHistory.ts, recordEdit). Redo
+ * entries, which a new edit always discards, are not Undo steps and are not counted.
+ */
+function droppedUndoSteps(before: EditHistory, from: DocumentVersion, after: EditHistory): number {
+  const offered = isBoundTo(before, from) ? before.undo.length : 0
+  return offered + 1 - after.undo.length
 }
 
 function undoEdit(state: EditorState, action: EditAction<'edit-undone'>): EditorState {
@@ -646,7 +717,7 @@ function undoEdit(state: EditorState, action: EditAction<'edit-undone'>): Editor
   if (!history) return state
   return {
     ...withEditFeedback(state, null, { kind: 'undone', operation: entry.kind }),
-    ...moveContent(state, next, contentShift(entry, -1)),
+    ...viewAfterEdit(state, next),
     document: next,
     documentBitmap: image,
     selection,
@@ -667,7 +738,7 @@ function redoEdit(state: EditorState, action: EditAction<'edit-redone'>): Editor
   if (!history) return state
   return {
     ...withEditFeedback(state, null, { kind: 'redone', operation: entry.kind }),
-    ...moveContent(state, next, contentShift(entry, 1)),
+    ...viewAfterEdit(state, next),
     document: next,
     documentBitmap: image,
     selection,
@@ -765,35 +836,24 @@ function fitsSize(mask: SelectionMask | null, size: Size): boolean {
   return !mask || sameSize(mask, size)
 }
 
-/**
- * Where the new image's top-left pixel was in the current image, in image pixels: the kept
- * rectangle's corner for a crop or its Redo (direction 1), the opposite for its Undo (-1),
- * nothing for same-size edits.
- */
-function contentShift(entry: HistoryEntry, direction: 1 | -1): Point {
-  const { patch } = entry
-  if (patch.kind !== 'crop-patch') return { x: 0, y: 0 }
-  return { x: direction * patch.kept.x, y: direction * patch.kept.y }
+function sizeOf(size: Size): Size {
+  return { width: size.width, height: size.height }
 }
 
 /**
- * The view after the document changes to `next`. Same-size edits keep it exactly. When the
- * size changes (a crop, or its Undo), the zoom is kept and the image moves so that the pixels
- * both images have stay where they were on screen, then is kept reachable; Undo of a crop
- * therefore returns to the view before it. (Provisional: the view after Auto Trim is
- * confirmed in Phase 3 Step 10, P3-D6.)
+ * The view after the document changes to `next`. Same-size edits (Delete Selection, its Undo,
+ * Redo and adjustments) keep it exactly. When the size changes (Auto Trim, its Undo and its Redo,
+ * the only size changes so far) the new image is fitted to the workspace exactly as Fit does:
+ * larger images fitted, smaller ones at 100%, centred (owner decision for Phase 3 Step 11; it
+ * replaces the provisional crop view of Step 5, which kept the zoom and moved the image).
  */
-function moveContent(state: EditorState, next: ImageDocument, shift: Point): Pick<EditorState, 'viewport' | 'pan'> {
+function viewAfterEdit(state: EditorState, next: ImageDocument): Pick<EditorState, 'viewport' | 'pan' | 'placeOnNextResize'> {
   const { viewport, workspace, document: current } = state
-  if (!viewport || !workspace || !current || (sameSize(current, next) && shift.x === 0 && shift.y === 0)) {
-    return { viewport, pan: state.pan }
+  if (!viewport || !workspace || !current || sameSize(current, next)) {
+    return { viewport, pan: state.pan, placeOnNextResize: state.placeOnNextResize }
   }
-  const moved: ViewportState = {
-    zoom: viewport.zoom,
-    offset: { x: viewport.offset.x + shift.x * viewport.zoom, y: viewport.offset.y + shift.y * viewport.zoom },
-  }
-  const reachable = keepImageReachable(moved, next, workspace.size)
-  return { viewport: reachable, pan: rebasePan(state.pan, reachable) }
+  const fitted = settled(fitViewport(next, workspace.size), null, workspace)
+  return { viewport: fitted, pan: rebasePan(state.pan, fitted), placeOnNextResize: false }
 }
 
 /**

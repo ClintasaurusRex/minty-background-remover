@@ -1,9 +1,10 @@
-import type { EditError, EditNotice } from './editorState'
+import { formatDimensions } from './documentInfo'
+import type { AutoTrimNoChange, EditError, EditNotice } from './editorState'
 import type { EditKind } from './history/historyEntry'
 
 /*
- * Text for edit outcomes: what is announced after Delete Selection, Undo and Redo, and the
- * message shown when one fails.
+ * Text for edit outcomes: what is announced after Delete Selection, Auto Trim, Undo and Redo, and
+ * the message shown when one fails.
  */
 
 const EDIT_NAMES: Readonly<Record<EditKind, string>> = {
@@ -27,6 +28,12 @@ export function editNoticeText(notice: EditNotice): string {
         if (edge === 0) return deleted
         return `${deleted} ${edge.toLocaleString('en-CA')} edge ${edge === 1 ? 'pixel was' : 'pixels were'} cleaned up or feathered.`
       }
+      if (notice.operation === 'auto-trim' && notice.resized) {
+        const { from, to } = notice.resized
+        const trimmed = `Auto Trim applied: ${formatDimensions(from.width, from.height)} trimmed to ${formatDimensions(to.width, to.height)}.`
+        const dropped = notice.droppedUndoSteps ?? 0
+        return dropped > 0 ? `${trimmed} ${droppedUndoStepsText(dropped)}` : trimmed
+      }
       return `${editName(notice.operation)} applied.`
     }
     case 'undone':
@@ -34,9 +41,9 @@ export function editNoticeText(notice: EditNotice): string {
     case 'redone':
       return `Redone: ${editName(notice.operation)}.`
     case 'unchanged':
-      return notice.operation === 'delete-selection'
-        ? 'Nothing was deleted: the selected pixels are already transparent.'
-        : `${editName(notice.operation)} changed nothing.`
+      if (notice.operation === 'delete-selection') return 'Nothing was deleted: the selected pixels are already transparent.'
+      if (notice.trim) return nothingToTrimText(notice.trim)
+      return `${editName(notice.operation)} changed nothing.`
     case 'adjusted': {
       const { cleanup, feather } = notice.edgeSettings
       const edge = notice.edgePixels
@@ -47,6 +54,32 @@ export function editNoticeText(notice: EditNotice): string {
       return `${editName(notice.operation)} updated with Edge cleanup ${cleanup} px and Feather ${feather} px: ${changed}`
     }
   }
+}
+
+/** Why Auto Trim changed nothing, in words. */
+function nothingToTrimText(reason: AutoTrimNoChange): string {
+  if (reason.kind === 'nothing-visible') return 'Nothing to trim: the image has no visible pixels.'
+  return reason.padding === 0
+    ? 'Nothing to trim: visible pixels already reach every edge of the image.'
+    : `Nothing to trim: no side has more than ${reason.padding} px of transparent space.`
+}
+
+/** The older Undo steps an edit's history entry pushed out, in words. */
+function droppedUndoStepsText(count: number): string {
+  return count === 1
+    ? 'Undo history is full, so the oldest Undo step is no longer available.'
+    : `Undo history is full, so the ${count.toLocaleString('en-CA')} oldest Undo steps are no longer available.`
+}
+
+/**
+ * Whether an outcome is also shown as a message in the workspace, not only announced (Phase 3
+ * Step 11): Auto Trim finding nothing to trim (otherwise clicking Trim would seem to do nothing),
+ * and an Auto Trim whose history entry pushed older Undo steps out of the history. Other outcomes
+ * are only announced: the image itself shows them.
+ */
+export function isShownEditNotice(notice: EditNotice): boolean {
+  if (notice.operation !== 'auto-trim') return false
+  return notice.kind === 'unchanged' || (notice.kind === 'applied' && (notice.droppedUndoSteps ?? 0) > 0)
 }
 
 /**

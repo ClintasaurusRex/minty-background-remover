@@ -75,7 +75,7 @@ Flip
 
 Tool names should remain visible rather than relying exclusively on icons.
 
-Tools work on the open image, so available tools are disabled until an image is open. Tools that are not available yet stay disabled with a "coming soon" tooltip. The active tool is shown pressed (`aria-pressed`), with a tinted background and border so the state is not colour-only. In Phase 2 the Magic Wand is the only available tool; while it is active over an image, the pointer is a crosshair.
+Tools work on the open image, so available tools are disabled until an image is open. Tools that are not available yet stay disabled with a "coming soon" tooltip. The active tool is shown pressed (`aria-pressed`), with a tinted background and border so the state is not colour-only. In Phase 2 the Magic Wand is the only available tool; while it is active over an image, the pointer is a crosshair. Auto Trim is available too since Phase 3 Step 11 (below); while it is active, clicks on the image do nothing and the pointer is the ordinary one.
 
 ---
 
@@ -347,6 +347,22 @@ Default:
 A **Trim Tight** shortcut may use 0 px.
 
 After deleting a background, Auto Trim may be surfaced prominently because it is a common next action.
+
+As implemented (Phase 3 Step 11; owner's provisional decisions):
+
+```text
+Padding  [0] [5] [10] [20]  [ 5 ] px      [⌗ Trim]
+```
+
+- Auto Trim is the last tool in the toolbar (its icon, the label "Auto Trim", the tooltip "Remove empty transparent space around the image"). Choosing it presses it and replaces the Magic Wand's options row with its own. The row is one line at the widths tested (640 px and up); its groups wrap as units like the Magic Wand's. Opening another image makes the Magic Wand active again, as before.
+- Padding: the visible label "Padding" names the group. The presets 0, 5, 10 and 20 are toggle buttons in a framed row like New / Add / Subtract: the one equal to the padding is pressed (`aria-pressed`, tinted background and border), none when the padding is another number. Their accessible names include the unit ("5 px"); tooltips say what they keep ("No padding: trim tight to the visible pixels", "10 px of padding").
+- The field (accessible name "Padding in pixels, 0 to 50", followed by the unit "px") follows the tolerance field's conventions with the range 0–50: a whole number from 0 to 50 applies as it is typed; anything else waits for Enter or leaving the field, when a number is rounded and clamped and other text restores the padding; Up / Down step by 1 and Page Up / Page Down by 10; Escape cancels an unfinished entry. Enter in the field never trims.
+- The padding is 5 px by default and goes back to 5 px whenever another image is opened. Changing it never changes the image.
+- Trim: an icon and the visible label "Trim" (its accessible name), with a tooltip that says what it will keep ("Trim the image to its visible pixels with 5 px of padding on each side, where the image has that much"; at 0 px "…removing all the transparent space around them"). One click trims; there is no preview. While another image is opening it is `aria-disabled` and its tooltip adds "— not available while another image is opening". Its label and size never change, and focus stays on it after trimming.
+- Tab order: the presets, the field, then Trim. No keyboard shortcut runs Auto Trim.
+- After a trim the selection is cleared and the trimmed image is fitted to the workspace, as Fit does; Undo and Redo of a trim fit the image they restore. The header's Undo and Redo read "Undo Auto Trim" / "Redo Auto Trim".
+- Feedback: a trim is announced ("Auto Trim applied: 1,920 × 1,080 px trimmed to 642 × 410 px."); the image itself shows it. When there is nothing to trim, a dismissible message at the top of the workspace says why (in the style of the import notices, in the polite status region, so it is announced once): "Nothing to trim: the image has no visible pixels.", "Nothing to trim: no side has more than 5 px of transparent space." or, at 0 px, "Nothing to trim: visible pixels already reach every edge of the image." When a trim makes the history drop older Undo steps, the same kind of message adds "Undo history is full, so the oldest Undo step is no longer available." (or "the 3 oldest Undo steps are"). A later outcome replaces the message; opening another image or its dismiss button removes it. A failed trim shows "Auto Trim could not be completed. The image and selection have not changed." as an alert, like other edit failures.
+- Not provided: a separate Trim Tight action, a padding slider, a threshold control, a preview of the kept rectangle.
 
 ---
 

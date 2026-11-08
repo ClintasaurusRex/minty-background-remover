@@ -123,3 +123,18 @@
   width: 16px;
   height: 16px;
 }
+
+/* Auto Trim's padding (0–50 px): presets, a two-digit field and the unit. */
+.tool-options__padding {
+  gap: var(--space-2);
+}
+
+.tool-options__number--padding {
+  width: 2.75em;
+}
+
+/* Trim: the one action in Auto Trim's row that edits the image, marked by its icon. */
+.tool-options__trim svg {
+  width: 16px;
+  height: 16px;
+}

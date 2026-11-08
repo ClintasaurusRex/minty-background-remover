@@ -25,7 +25,8 @@ import { type AutoTrimPlan, autoTrimPixels, planAutoTrim } from './autoTrim'
  * Auto Trim and the existing edit history (Phase 3 Step 10): a 'crop' plan's kept rectangle is
  * all an Auto Trim edit needs (CompletedCrop.kept), and the Step 3 crop patches and Step 5
  * history commands then record, undo and redo it exactly. These tests drive the commands and the
- * reducer directly, as Step 11's tool will; nothing in the application calls Auto Trim yet.
+ * reducer directly; the application's Auto Trim (autoTrimCommand, Phase 3 Step 11) does the same,
+ * tested in editor/autoTrimCommand.test.ts.
  */
 
 let images: FakeDisplayImages

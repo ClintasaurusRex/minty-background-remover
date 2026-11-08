@@ -385,15 +385,18 @@ describe('edit history: Undo and Redo', () => {
       }
     }
     expect(cropped.selection).toBe(after)
-    // The pixels both images have stay where they were on screen.
-    const zoom = before.viewport!.zoom
-    expect(cropped.viewport).toEqual({ zoom, offset: { x: before.viewport!.offset.x + 2 * zoom, y: before.viewport!.offset.y + zoom } })
+    // A size change fits the new image to the workspace, exactly as Fit does (Phase 3 Step 11):
+    // Fit then changes nothing.
+    expect(cropped.viewport).not.toEqual(before.viewport)
+    expect(reduce(cropped, { type: 'zoom-fitted' })).toBe(cropped)
 
     const undone = undo(cropped)
     expect(undone.document).toMatchObject({ width: 8, height: 6 })
     expect(sameBytes(undone.document!.pixels, original)).toBe(true)
     expect(sameSelection(undone.selection, before.selection)).toBe(true)
+    // The opened image was placed by fitting it, so fitting it again gives the same view.
     expect(undone.viewport).toEqual(before.viewport)
+    expect(reduce(undone, { type: 'zoom-fitted' })).toBe(undone)
     expect(undone.documentBitmap).toMatchObject({ width: 8, height: 6 })
 
     const redone = redo(undone)
@@ -403,14 +406,22 @@ describe('edit history: Undo and Redo', () => {
     expect(redone.viewport).toEqual(cropped.viewport)
   })
 
-  it('keeps a cropped image reachable when the crop would move it out of view', () => {
+  it('fits a cropped image, and the image restored by Undo, whatever the view was', () => {
     const state = start(randomImage(400, 300, randomSource(3)))
     // Zoomed in on the image's right edge, then everything but the left column is cropped away.
     const zoomed = reduce(state, { type: 'zoom-scaled', anchor: { x: 990, y: 300 }, factor: 32 })
     const cropped = edit(zoomed, cropEdit(zoomed, { x: 0, y: 0, width: 1, height: 300 }))
+    expect(reduce(cropped, { type: 'zoom-fitted' })).toBe(cropped)
     const { offset, zoom } = cropped.viewport!
-    expect(offset.x).toBeLessThan(WORKSPACE.size.width)
-    expect(offset.x + zoom).toBeGreaterThan(0)
+    expect(offset.x).toBeGreaterThanOrEqual(0)
+    expect(offset.x + zoom).toBeLessThanOrEqual(WORKSPACE.size.width)
+    expect(offset.y).toBeGreaterThanOrEqual(0)
+    expect(offset.y + 300 * zoom).toBeLessThanOrEqual(WORKSPACE.size.height)
+    // Zoomed in again, then undone: the whole image is fitted again, not the zoom kept.
+    const rezoomed = reduce(cropped, { type: 'zoom-scaled', anchor: { x: 500, y: 300 }, factor: 4 })
+    const undone = undo(rezoomed)
+    expect(reduce(undone, { type: 'zoom-fitted' })).toBe(undone)
+    expect(undone.viewport).toEqual(state.viewport)
   })
 
   it('restores the selection from before the edit on Undo and the one after it on Redo', () => {

@@ -45,6 +45,7 @@ const KEYS = {
   PageDown: { key: 'PageDown', code: 'PageDown', keyCode: 34, webdriver: '\uE00F' },
   End: { key: 'End', code: 'End', keyCode: 35, webdriver: '\uE010' },
   Home: { key: 'Home', code: 'Home', keyCode: 36, webdriver: '\uE011' },
+  Space: { key: ' ', code: 'Space', keyCode: 32, webdriver: '\uE00D' },
 }
 function keyInfo(name) {
   if (KEYS[name]) return KEYS[name]

@@ -5,8 +5,8 @@ import { validatePixelBuffer } from '../pixelBuffer'
 /*
  * Auto Trim (Phase 3 Step 10): the rectangle of visible content, the rectangle to keep around it
  * with padding, and the trimmed image. Pure and synchronous: no DOM, canvas or editor state, so
- * it runs in Node tests and could move to a Web Worker unchanged. Nothing in the application
- * calls it yet; the Auto Trim tool, its controls and its edit are Step 11.
+ * it runs in Node tests and could move to a Web Worker unchanged. The application calls it through
+ * autoTrimCommand (editor/editCommands.ts, Phase 3 Step 11), which records the plan's crop.
  *
  * Visibility comes from alpha alone (P3-D6): a pixel is visible when its alpha is above the
  * threshold, 0 by default, so every pixel with alpha 1 or more counts, however faint (anti-aliased

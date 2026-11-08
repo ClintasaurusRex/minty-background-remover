@@ -50,6 +50,7 @@ function App() {
   useSelectionShortcuts(stateRef, dispatch, isConfirming)
   const { run: runEditAction, commitEdgeSettings } = useEditCommands(stateRef, dispatch, isConfirming)
   const deleteSelection = useCallback(() => runEditAction('delete-selection'), [runEditAction])
+  const autoTrim = useCallback(() => runEditAction('auto-trim'), [runEditAction])
   const undo = useCallback(() => runEditAction('undo'), [runEditAction])
   const redo = useCallback(() => runEditAction('redo'), [runEditAction])
   const cancelReplace = useCallback(() => answerQuestion(false), [answerQuestion])
@@ -65,6 +66,7 @@ function App() {
   const dismissImportError = useCallback(() => dispatch({ type: 'import-error-dismissed' }), [])
   const dismissImportNotice = useCallback(() => dispatch({ type: 'import-notice-dismissed' }), [])
   const dismissEditError = useCallback(() => dispatch({ type: 'edit-error-dismissed' }), [])
+  const dismissEditNotice = useCallback(() => dispatch({ type: 'edit-notice-dismissed' }), [])
   const zoomWithWheel = useCallback(
     (anchor: Point, factor: number) => dispatch({ type: 'zoom-scaled', anchor, factor }),
     [],
@@ -107,6 +109,11 @@ function App() {
   // while that Delete can still be adjusted (Phase 3 Step 9).
   const changeEdgeSettings = useCallback(
     (settings: Partial<EdgeSettings>) => dispatch({ type: 'edge-settings-changed', settings }),
+    [],
+  )
+  // Auto Trim's padding only sets what the next Trim keeps; it never trims by itself.
+  const changePadding = useCallback(
+    (padding: number) => dispatch({ type: 'auto-trim-padding-changed', padding }),
     [],
   )
   const runSelectionAction = useCallback((selectionAction: SelectionAction) => {
@@ -163,6 +170,10 @@ function App() {
           adjustsLastDelete={adjustsLastDelete}
           canDeleteSelection={editActions.deleteSelection}
           onDeleteSelection={deleteSelection}
+          padding={state.autoTrimPadding}
+          onPaddingChange={changePadding}
+          canAutoTrim={editActions.autoTrim}
+          onAutoTrim={autoTrim}
         />
       </div>
       <Workspace
@@ -180,6 +191,7 @@ function App() {
         onResize={handleResize}
         onDismissError={dismissImportError}
         onDismissEditError={dismissEditError}
+        onDismissEditNotice={dismissEditNotice}
         onDismissNotice={dismissImportNotice}
         onDropFiles={openDroppedFiles}
         onOpenImage={openFilePicker}

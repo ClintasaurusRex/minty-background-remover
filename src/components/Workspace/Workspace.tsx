@@ -2,13 +2,14 @@ import { useCallback, useRef } from 'react'
 import { clientToViewport } from '../../canvas/coordinates'
 import type { DisplayImage } from '../../canvas/displayImage'
 import type { EditError, EditNotice, ImportNotice, WorkspaceMetrics } from '../../editor/editorState'
-import { editNoticeText } from '../../editor/editFeedback'
+import { editNoticeText, isShownEditNotice } from '../../editor/editFeedback'
 import type { PanGestureEffect } from '../../editor/panGesture'
 import type { PointerPress } from '../../editor/selectionCommands'
 import type { ImageDocument, Point, SelectionMask, ViewportState } from '../../editor/types'
 import type { ImportError } from '../../image/import/errors'
 import { OpenIcon } from '../icons/icons'
 import { EditErrorMessage } from './EditErrorMessage'
+import { EditNoticeMessage } from './EditNoticeMessage'
 import { EmptyState } from './EmptyState'
 import { ImageCanvas } from './ImageCanvas'
 import { ImportErrorMessage } from './ImportErrorMessage'
@@ -30,13 +31,19 @@ interface WorkspaceProps {
   importNotice: ImportNotice | null
   /** The last failed edit, Undo or Redo, shown until dismissed or replaced. */
   editError: EditError | null
-  /** The last successful edit outcome, announced to assistive technology (the image itself shows it). */
+  /**
+   * The last successful edit outcome, announced to assistive technology (the image itself shows
+   * it). Some are also shown as a message (isShownEditNotice: Auto Trim with nothing to trim, or
+   * dropping older Undo steps).
+   */
   editNotice: EditNotice | null
   /** Changes with every new edit outcome, so a repeated message is announced again. */
   editFeedbackId: number
   onResize: (workspace: WorkspaceMetrics) => void
   onDismissError: () => void
   onDismissEditError: () => void
+  /** Hides the edit outcome's message. */
+  onDismissEditNotice: () => void
   onDismissNotice: () => void
   onDropFiles: (files: readonly File[], skippedCount: number) => void
   onOpenImage: () => void
@@ -72,6 +79,7 @@ export function Workspace({
   onResize,
   onDismissError,
   onDismissEditError,
+  onDismissEditNotice,
   onDismissNotice,
   onDropFiles,
   onOpenImage,
@@ -98,6 +106,8 @@ export function Workspace({
   const pan = useSpacePan(workspaceRef, imageShown, onPanGesture, handleToolPress)
   usePointerPosition(workspaceRef, canvasRef, imageShown, onPointerPosition)
   const dropActive = useFileDrop(workspaceRef, onDropFiles)
+  // An outcome shown as a message is announced by its own status region, not again by the hidden one.
+  const shownNotice = editNotice !== null && isShownEditNotice(editNotice)
 
   const className = [
     'workspace',
@@ -141,12 +151,16 @@ export function Workspace({
       )}
 
       <div className="workspace__messages">
-        <div role="status">
+        <div className="workspace__status" role="status">
           {dropActive && <span className="visually-hidden">Drop to open the image.</span>}
           {importing && <p className="workspace-message workspace-message--progress">Opening image…</p>}
           {importNotice && !(importing && importNotice.kind === 'ignored-files') && (
             // The ignored-files notice waits until the import it belongs to has finished.
             <ImportNoticeMessage notice={importNotice} onDismiss={onDismissNotice} />
+          )}
+          {/* A new key per outcome, so the same message is announced again. */}
+          {editNotice && shownNotice && (
+            <EditNoticeMessage key={editFeedbackId} notice={editNotice} onDismiss={onDismissEditNotice} />
           )}
         </div>
         {importError && <ImportErrorMessage error={importError} onDismiss={onDismissError} />}
@@ -155,7 +169,7 @@ export function Workspace({
       </div>
       {/* Announced once per outcome: a new element for each, never on re-renders. */}
       <div className="visually-hidden" role="status">
-        {editNotice && <span key={editFeedbackId}>{editNoticeText(editNotice)}</span>}
+        {editNotice && !shownNotice && <span key={editFeedbackId}>{editNoticeText(editNotice)}</span>}
       </div>
     </main>
   )

@@ -34,7 +34,7 @@ import type { DocumentVersion, ImageDocument, PixelBuffer, Rectangle, SelectionM
  *
  * The application runs them through editCommands.ts (availability) and app/editDispatch.ts
  * (dispatch and display-image release), from the Delete Selection, Undo and Redo controls and
- * shortcuts (Phase 3 Step 6).
+ * shortcuts (Phase 3 Step 6) and the Auto Trim control (Phase 3 Step 11).
  */
 
 /**

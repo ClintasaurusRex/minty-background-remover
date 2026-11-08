@@ -271,6 +271,115 @@ export async function ensureEdgeFixtures() {
   return FIXTURES
 }
 
+export const TRIM_FIXTURE_FILES = [
+  'trim-pump.png',
+  'trim-valve.png',
+  'trim-empty.png',
+  'trim-edges.png',
+  'trim-4k.png',
+  'trim-photo-4k.png',
+  'trim-photo-50mp.png',
+  'trim-empty-50mp.png',
+]
+const TRIM_VERSION = '1'
+
+/**
+ * The images the Auto Trim script (auto-trim.mjs, Phase 3 Step 11) opens, generated on first use.
+ * Drawn with Chrome's canvas (anti-aliased shapes, text and shadows) or exactly in Node:
+ *
+ *   trim-pump.png         640 × 480 flat grey background around an HMI pump and valve with pipes,
+ *                         2 px outlines, 1 px wiring reaching out to x = 579, a status light's glow
+ *                         and text: delete the background (Magic Wand at 2, 2, tolerance 10), trim
+ *   trim-valve.png        360 × 240 transparent PNG: a valve symbol with a stem and handwheel, a
+ *                         soft shadow fading to alpha 1, an anti-aliased 1 px line and a faint dot;
+ *                         nothing to delete, so its own transparency is trimmed
+ *   trim-empty.png        300 × 200 fully transparent
+ *   trim-edges.png        160 × 100 transparent with a 1 px opaque frame along every edge
+ *   trim-4k.png           3840 × 2160 of the pump's flat grey with trim-pump.png in the middle
+ *   trim-photo-4k.png     3840 × 2160 photographic noise (a 61 × 37 tile, so the PNG stays small)
+ *                         around a flat grey box with the pump at its centre: deleting the noise
+ *                         leaves a different hidden colour in every removed pixel
+ *   trim-photo-50mp.png   the same at 8660 × 5773, the box a quarter of the image (Step 10's
+ *                         worst-case history entry, about 150 MB)
+ *   trim-empty-50mp.png   8660 × 5773 fully transparent: the longest bounds scan
+ */
+export async function ensureTrimFixtures() {
+  fs.mkdirSync(FIXTURES, { recursive: true })
+  const stamp = path.join(FIXTURES, 'TRIM_VERSION')
+  const current = fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8') === TRIM_VERSION
+  if (current && TRIM_FIXTURE_FILES.every((file) => fs.existsSync(path.join(FIXTURES, file)))) return FIXTURES
+  const png = (file, image) => fs.writeFileSync(path.join(FIXTURES, file), encodePng(image.width, image.height, image.data))
+  const browser = await launchChrome()
+  let pump
+  let valve
+  try {
+    await browser.open('about:blank')
+    const pixels = async (w, h, draw) => {
+      const base64 = await browser.eval(`(async () => {
+        const c = new OffscreenCanvas(${w}, ${h}), x = c.getContext('2d')
+        ${draw}
+        const bytes = new Uint8Array(x.getImageData(0, 0, ${w}, ${h}).data.buffer)
+        let out = ''
+        for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000))
+        return btoa(out)
+      })()`)
+      return { width: w, height: h, data: new Uint8Array(Buffer.from(base64, 'base64')) }
+    }
+    pump = await pixels(640, 480, TRIM_PUMP)
+    valve = await pixels(360, 240, TRIM_VALVE)
+  } finally {
+    await browser.close()
+  }
+  png('trim-pump.png', pump)
+  png('trim-valve.png', valve)
+  png('trim-empty.png', { width: 300, height: 200, data: new Uint8Array(300 * 200 * 4) })
+  const edges = { width: 160, height: 100, data: new Uint8Array(160 * 100 * 4) }
+  for (let y = 0; y < 100; y++) {
+    for (let x = 0; x < 160; x++) if (x === 0 || y === 0 || x === 159 || y === 99) edges.data.set([20, 60, 140, 255], (y * 160 + x) * 4)
+  }
+  png('trim-edges.png', edges)
+  const grey = [0xd0, 0xd4, 0xd8, 255]
+  png('trim-4k.png', place(pump, filled(3840, 2160, () => grey), 1600, 840))
+  const noise = noiseTile()
+  const photo = (width, height, boxWidth, boxHeight) => {
+    const image = filled(width, height, (x, y) => noise[(y % 37) * 61 + (x % 61)])
+    const left = Math.floor((width - boxWidth) / 2)
+    const top = Math.floor((height - boxHeight) / 2)
+    const box = new Uint32Array(image.data.buffer)
+    const value = new Uint32Array(new Uint8Array(grey).buffer)[0]
+    for (let y = top; y < top + boxHeight; y++) box.fill(value, y * width + left, y * width + left + boxWidth)
+    return place(pump, image, left + Math.floor((boxWidth - pump.width) / 2), top + Math.floor((boxHeight - pump.height) / 2))
+  }
+  png('trim-photo-4k.png', photo(3840, 2160, 960, 640))
+  png('trim-photo-50mp.png', photo(8660, 5773, 4330, 2886))
+  png('trim-empty-50mp.png', { width: 8660, height: 5773, data: new Uint8Array(8660 * 5773 * 4) })
+  fs.writeFileSync(stamp, TRIM_VERSION)
+  return FIXTURES
+}
+
+/** A width × height image whose pixel (x, y) is `colour(x, y)` (RGBA). */
+function filled(width, height, colour) {
+  const data = new Uint8Array(width * height * 4)
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) data.set(colour(x, y), (y * width + x) * 4)
+  return { width, height, data }
+}
+
+/** `image` with `source` copied over it, its top-left corner at (left, top). */
+function place(source, image, left, top) {
+  for (let y = 0; y < source.height; y++) {
+    const from = y * source.width * 4
+    image.data.set(source.data.subarray(from, from + source.width * 4), ((top + y) * image.width + left) * 4)
+  }
+  return image
+}
+
+/** 61 × 37 opaque pixels of a mid grey with up to ±10 levels of noise per channel. */
+function noiseTile() {
+  let seed = 11
+  const random = () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 2 ** 32
+  return Array.from({ length: 61 * 37 }, () => [150, 156, 162].map((v) => v + Math.round(random() * 20 - 10)).concat(255))
+}
+
 function tile(image, width, height) {
   const source = new Uint32Array(image.data.buffer, image.data.byteOffset, image.width * image.height)
   const data = new Uint8Array(width * height * 4)
@@ -303,6 +412,43 @@ const HMI = `
   x.fillStyle = '#ffffff'; x.fillRect(300, 270, 150, 34); x.strokeStyle = '#555555'; x.strokeRect(300.5, 270.5, 149, 33)
   x.fillStyle = '#111111'; x.font = 'bold 13px sans-serif'; x.fillText('P-101  RUN', 314, 292)
   x.fillStyle = '#333333'; x.font = '9px sans-serif'; x.fillText('TAG-0042 FLOW 12.5', 20, 300)`
+
+// The pump scene of edge-hmi.png, moved into a larger flat background with room on every side.
+const TRIM_PUMP = `
+  x.fillStyle = '#d0d4d8'; x.fillRect(0, 0, 640, 480)
+  x.translate(80, 90)
+  const pipe = (y0, h) => { const g = x.createLinearGradient(0, y0, 0, y0 + h); g.addColorStop(0, '#80858e'); g.addColorStop(0.45, '#f1f3f6'); g.addColorStop(1, '#5f646d'); return g }
+  x.fillStyle = pipe(150, 30); x.fillRect(40, 150, 120, 30)
+  x.fillStyle = pipe(90, 26); x.fillRect(250, 90, 180, 26)
+  const body = x.createRadialGradient(200, 140, 8, 220, 165, 84); body.addColorStop(0, '#f4f5f7'); body.addColorStop(1, '#70757e')
+  x.fillStyle = body; x.beginPath(); x.arc(220, 165, 80, 0, Math.PI * 2); x.fill()
+  x.lineWidth = 2; x.strokeStyle = '#2b2d33'; x.stroke()
+  x.fillStyle = '#26282d'; x.beginPath(); x.moveTo(195, 125); x.lineTo(265, 165); x.lineTo(195, 205); x.closePath(); x.fill()
+  // A valve on the outlet pipe: two triangles meeting at the stem.
+  x.fillStyle = '#3d7a3d'; x.beginPath(); x.moveTo(330, 80); x.lineTo(360, 103); x.lineTo(330, 126); x.closePath(); x.moveTo(390, 80); x.lineTo(360, 103); x.lineTo(390, 126); x.closePath(); x.fill()
+  x.strokeStyle = '#1e3d1e'; x.lineWidth = 2; x.stroke()
+  x.fillStyle = '#1e3d1e'; x.fillRect(359, 62, 2, 41); x.fillRect(346, 58, 28, 5)
+  x.lineWidth = 1
+  x.strokeStyle = '#000000'; x.beginPath(); x.moveTo(224, 40.5); x.lineTo(499.5, 40.5); x.lineTo(499.5, 72); x.stroke()
+  x.strokeStyle = '#c00000'; x.beginPath(); x.moveTo(224, 60.5); x.lineTo(400, 60.5); x.stroke()
+  x.strokeStyle = '#109040'; x.beginPath(); x.moveTo(60, 20); x.lineTo(148, 40); x.stroke()
+  const led = x.createRadialGradient(380, 230, 3, 380, 230, 16); led.addColorStop(0, '#30f070'); led.addColorStop(0.45, '#20c050'); led.addColorStop(1, 'rgba(32, 192, 80, 0)')
+  x.fillStyle = led; x.fillRect(360, 210, 40, 40)
+  x.fillStyle = '#ffffff'; x.fillRect(300, 270, 150, 34); x.strokeStyle = '#555555'; x.strokeRect(300.5, 270.5, 149, 33)
+  x.fillStyle = '#111111'; x.font = 'bold 13px sans-serif'; x.fillText('P-101  RUN', 314, 292)
+  x.fillStyle = '#333333'; x.font = '9px sans-serif'; x.fillText('TAG-0042 FLOW 12.5', 40, 290)`
+
+// A valve symbol on transparency, with a soft shadow and faint anti-aliased details.
+const TRIM_VALVE = `
+  x.clearRect(0, 0, 360, 240)
+  x.save(); x.shadowColor = 'rgba(0, 0, 0, 0.6)'; x.shadowBlur = 10; x.shadowOffsetX = 4; x.shadowOffsetY = 6
+  x.fillStyle = '#c62828'; x.beginPath(); x.moveTo(110, 90); x.lineTo(180, 130); x.lineTo(110, 170); x.closePath(); x.moveTo(250, 90); x.lineTo(180, 130); x.lineTo(250, 170); x.closePath(); x.fill()
+  x.restore()
+  x.strokeStyle = '#4a0d0d'; x.lineWidth = 2; x.stroke()
+  x.fillStyle = '#333333'; x.fillRect(179, 72, 2, 58)
+  x.strokeStyle = '#333333'; x.lineWidth = 3; x.beginPath(); x.ellipse(180, 66, 30, 8, 0, 0, Math.PI * 2); x.stroke()
+  x.strokeStyle = '#000000'; x.lineWidth = 1; x.beginPath(); x.moveTo(60, 200); x.lineTo(300, 182); x.stroke()
+  x.fillStyle = '#000000'; x.beginPath(); x.arc(320.5, 40.5, 0.35, 0, Math.PI * 2); x.fill()`
 
 const LINES = `
   x.fillStyle = '#ffffff'; x.fillRect(0, 0, 300, 200)
@@ -379,4 +525,7 @@ if (import.meta.main) {
   fs.rmSync(path.join(dir, 'EDGE_VERSION'), { force: true })
   await ensureEdgeFixtures()
   for (const file of EDGE_FIXTURE_FILES) console.log(`${file}  ${fs.statSync(path.join(dir, file)).size} bytes`)
+  fs.rmSync(path.join(dir, 'TRIM_VERSION'), { force: true })
+  await ensureTrimFixtures()
+  for (const file of TRIM_FIXTURE_FILES) console.log(`${file}  ${fs.statSync(path.join(dir, file)).size} bytes`)
 }

@@ -388,7 +388,7 @@ for visible content.
 
 The canvas is then reduced to those bounds plus padding.
 
-Algorithm implemented in Phase 3 Step 10, not yet available in the application (the tool is Step 11). The threshold and the edge behaviour below are provisional until the owner confirms P3-D6:
+Algorithm implemented in Phase 3 Step 10 and available as the Auto Trim tool since Step 11. The threshold and the edge behaviour below are the owner's provisional decisions (P3-D6):
 
 - Visible means alpha of 1 or more (threshold 0), so faint anti-aliasing, feathered edges, 1-pixel lines and soft shadows are never cut off. Colour hidden under fully transparent pixels by Delete never counts.
 - One faint stray pixel far from the content therefore keeps that side from being trimmed.
@@ -396,7 +396,16 @@ Algorithm implemented in Phase 3 Step 10, not yet available in the application (
 - Every kept pixel stays exactly as it was. Nothing is resampled, blurred, recoloured or scaled.
 - A fully transparent image has nothing visible to trim. An image whose content with its padding already reaches every edge (for example one already trimmed) has nothing to trim. Neither changes the image or adds an Undo step.
 - An Auto Trim is one Undo step. Undo restores the original size and every pixel exactly; Redo trims again.
-- Still open for Step 11: whether a threshold is ever offered, the range for custom padding, and the selection and view after a trim.
+
+As implemented (Phase 3 Step 11, owner's provisional decisions):
+
+- Auto Trim is a toolbar tool. While it is active, its options row offers the padding (presets 0, 5, 10 and 20 px, and a field for any whole number from 0 to 50 px: the custom padding) and Trim, which trims at once with the padding shown. There is no preview and no threshold control.
+- The padding is 5 px by default and goes back to 5 px whenever another image is opened. Changing it never changes the image; only Trim does.
+- A trim clears the selection and the Magic Wand click; Undo brings both back. The trimmed image, and the image restored by Undo or Redo, is fitted to the workspace as Fit does.
+- Messages: a trim announces the size before and after ("Auto Trim applied: 1,920 × 1,080 px trimmed to 642 × 410 px."). Nothing to trim is shown in the workspace and announced: "Nothing to trim: the image has no visible pixels.", "Nothing to trim: no side has more than 5 px of transparent space." or, at 0 px, "Nothing to trim: visible pixels already reach every edge of the image." A failed trim changes nothing and says so.
+- History keeps its limits (25 steps, 256 MB). When a trim makes the history drop older Undo steps, a message in the workspace says so ("Undo history is full, so the 3 oldest Undo steps are no longer available.").
+- A trim is an edit like Delete: it counts as an unexported edit, and right after a Delete it ends the time when Edge cleanup and Feather update that Delete.
+- Not added: a separate Trim Tight action (preset 0 then Trim does it), and a keyboard shortcut.
 
 ### Padding
 

@@ -14,8 +14,8 @@ describe('TOOLS', () => {
     }
   })
 
-  it('makes the Magic Wand the first and only available tool in Phase 2', () => {
+  it('makes the Magic Wand the first tool; Auto Trim is available from Phase 3 Step 11', () => {
     expect(TOOLS[0]).toMatchObject({ id: 'magic-wand', available: true })
-    expect(TOOLS.filter((tool) => tool.available).map((tool) => tool.id)).toEqual(['magic-wand'])
+    expect(TOOLS.filter((tool) => tool.available).map((tool) => tool.id)).toEqual(['magic-wand', 'auto-trim'])
   })
 })

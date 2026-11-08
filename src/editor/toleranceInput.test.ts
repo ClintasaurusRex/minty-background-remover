@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { AUTO_TRIM_PADDING_RANGE, paddingFieldEvent } from './autoTrimPadding'
 import {
   type ToleranceFieldEvent,
   type ToleranceSliderEvent,
@@ -524,6 +525,72 @@ function amountControl(initial: number) {
     blurField: () => fieldEvent({ type: 'blur' }),
   }
 }
+
+describe('the same field behaviour for the Auto Trim padding (0–50 px, Phase 3 Step 11)', () => {
+  const range = AUTO_TRIM_PADDING_RANGE
+
+  it('uses 0–50 with Page steps of 10', () => {
+    expect(range).toEqual({ max: 50, pageStep: 10 })
+  })
+
+  it('applies 0–50 as typed, waits for anything larger or not a whole number, and clamps when committed', () => {
+    expect([0, 5, 20, 50].map((n) => exactToleranceInput(String(n), range))).toEqual([0, 5, 20, 50])
+    for (const text of ['51', '100', '-1', '2.5', '1e1', 'px', '']) expect(exactToleranceInput(text, range)).toBeNull()
+    expect(committedToleranceInput('60', range)).toBe(50)
+    expect(committedToleranceInput('12.5', range)).toBe(13)
+    expect(committedToleranceInput('-4', range)).toBe(0)
+    expect(committedToleranceInput('1e1', range)).toBe(10)
+    expect(committedToleranceInput('five', range)).toBeNull()
+  })
+
+  it('steps by 1 with the arrows and by 10 with the Page keys, within 0–50', () => {
+    expect(steppedTolerance(5, 'ArrowUp', range)).toBe(6)
+    expect(steppedTolerance(0, 'ArrowDown', range)).toBe(0)
+    expect(steppedTolerance(45, 'PageUp', range)).toBe(50)
+    expect(steppedTolerance(5, 'PageDown', range)).toBe(0)
+    expect(steppedTolerance(50, 'ArrowUp', range)).toBe(50)
+    expect(steppedTolerance(5, 'End', range)).toBeNull()
+  })
+
+  it('runs the whole entry as the padding field uses it (paddingFieldEvent): every change and commit sets the padding', () => {
+    let padding = 5
+    let state = initialToleranceFieldState(padding)
+    const send = (event: ToleranceFieldEvent) => {
+      const result = paddingFieldEvent(state, event, padding)
+      state = result.state
+      // The padding control sets the padding for both (AutoTrimOptions.tsx).
+      if (result.change !== undefined) padding = result.change
+      if (result.commit !== undefined) padding = result.commit
+      return result
+    }
+    send({ type: 'focus' })
+    send({ type: 'input', text: '1' })
+    expect(padding).toBe(1)
+    send({ type: 'input', text: '12' })
+    expect(padding).toBe(12)
+    send({ type: 'key-down', key: 'Enter' })
+    expect(padding).toBe(12)
+    send({ type: 'input', text: '75' })
+    expect(padding).toBe(12)
+    send({ type: 'blur' })
+    expect(padding).toBe(50)
+    send({ type: 'focus' })
+    send({ type: 'input', text: '3' })
+    expect(padding).toBe(3)
+    expect(send({ type: 'key-down', key: 'Escape' }).handled).toBe(true)
+    expect(padding).toBe(50)
+    send({ type: 'input', text: 'abc' })
+    send({ type: 'key-down', key: 'Enter' })
+    expect(padding).toBe(50)
+    send({ type: 'key-down', key: 'PageDown' })
+    send({ type: 'key-down', key: 'PageDown' })
+    expect(padding).toBe(30)
+    send({ type: 'key-up', key: 'PageDown' })
+    expect(padding).toBe(30)
+    send({ type: 'key-down', key: 'ArrowUp' })
+    expect(padding).toBe(31)
+  })
+})
 
 describe('Edge amount controls commit only actual changes (Phase 3 Step 9 correction)', () => {
   it('finishAdjustment: a change only when the finished value differs from the start; the next start is that value', () => {

@@ -25,6 +25,7 @@ function renderWorkspace(editError: EditError | null, editNotice: EditNotice | n
       onResize: noop,
       onDismissError: noop,
       onDismissEditError: noop,
+      onDismissEditNotice: noop,
       onDismissNotice: noop,
       onDropFiles: noop,
       onOpenImage: noop,
@@ -56,6 +57,28 @@ describe('edit feedback in the workspace', () => {
     )
     expect(markup).not.toContain('RangeError')
     expect(markup).toContain('<span class="visually-hidden">Dismiss message</span>')
+  })
+
+  it('shows Auto Trim with nothing to trim as a dismissible message in the polite status region, announced once', () => {
+    const markup = renderWorkspace(null, { kind: 'unchanged', operation: 'auto-trim', trim: { kind: 'nothing-visible' } })
+    expect(markup).toMatch(
+      /<div class="workspace__status" role="status"><div class="workspace-message"><p class="workspace-message__text">Nothing to trim: the image has no visible pixels\.<\/p><button[^>]*title="Dismiss"/,
+    )
+    expect(markup).toContain('<span class="visually-hidden">Dismiss message</span>')
+    // Not announced a second time by the hidden region.
+    expect(markup).toContain('<div class="visually-hidden" role="status"></div>')
+    expect(markup).not.toContain('role="alert"')
+  })
+
+  it('shows a trim that pushed older Undo steps out of the history; a plain trim is only announced', () => {
+    const resized = { from: { width: 400, height: 300 }, to: { width: 30, height: 20 } }
+    const dropped = renderWorkspace(null, { kind: 'applied', operation: 'auto-trim', changedPixels: null, resized, droppedUndoSteps: 3 })
+    expect(dropped).toContain(
+      '<p class="workspace-message__text">Auto Trim applied: 400 × 300 px trimmed to 30 × 20 px. Undo history is full, so the 3 oldest Undo steps are no longer available.</p>',
+    )
+    const plain = renderWorkspace(null, { kind: 'applied', operation: 'auto-trim', changedPixels: null, resized })
+    expect(plain).not.toContain('workspace-message__text')
+    expect(plain).toContain('<div class="visually-hidden" role="status"><span>Auto Trim applied: 400 × 300 px trimmed to 30 × 20 px.</span></div>')
   })
 
   it('EditErrorMessage alone', () => {

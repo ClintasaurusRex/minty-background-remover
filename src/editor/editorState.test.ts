@@ -70,6 +70,7 @@ describe('editorReducer: imports', () => {
       activeTool: null,
       magicWand: { tolerance: 20, floodMode: 'contiguous', selectionMode: 'new' },
       edgeSettings: { cleanup: 0, feather: 0 },
+      autoTrimPadding: 5,
       selection: null,
       lastMagicWandOperation: null,
       history: {
@@ -878,7 +879,7 @@ describe('editorReducer: tools and Magic Wand options', () => {
 
   it('ignores tools that are not available yet', () => {
     const state = opened()
-    for (const tool of ['crop', 'replace-color', 'auto-trim'] as const) {
+    for (const tool of ['crop', 'replace-color'] as const) {
       expect(reduce(state, { type: 'tool-selected', tool })).toBe(state)
     }
   })

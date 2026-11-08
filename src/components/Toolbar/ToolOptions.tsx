@@ -1,12 +1,22 @@
 import type { ToolId } from '../../editor/types'
+import { AutoTrimOptions, type AutoTrimOptionsProps } from './AutoTrimOptions'
 import { MagicWandOptions, type MagicWandOptionsProps } from './MagicWandOptions'
 
-interface ToolOptionsProps extends MagicWandOptionsProps {
+interface ToolOptionsProps extends MagicWandOptionsProps, AutoTrimOptionsProps {
   /** The active tool, whose options are shown; null (no image open) shows nothing. */
   activeTool: ToolId | null
 }
 
 /** The contextual second toolbar row: the active tool's options, if it has any. */
-export function ToolOptions({ activeTool, ...magicWand }: ToolOptionsProps) {
-  return activeTool === 'magic-wand' ? <MagicWandOptions {...magicWand} /> : null
+export function ToolOptions({ activeTool, padding, onPaddingChange, canAutoTrim, onAutoTrim, ...magicWand }: ToolOptionsProps) {
+  switch (activeTool) {
+    case 'magic-wand':
+      return <MagicWandOptions {...magicWand} />
+    case 'auto-trim':
+      return (
+        <AutoTrimOptions padding={padding} onPaddingChange={onPaddingChange} canAutoTrim={canAutoTrim} onAutoTrim={onAutoTrim} />
+      )
+    default:
+      return null
+  }
 }

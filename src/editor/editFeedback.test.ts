@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { editErrorMessage, editName, editNoticeText } from './editFeedback'
+import { editErrorMessage, editName, editNoticeText, isShownEditNotice } from './editFeedback'
 
 describe('editNoticeText', () => {
   it('announces a Delete with the number of pixels made transparent', () => {
@@ -31,6 +31,52 @@ describe('editNoticeText', () => {
     const text = editNoticeText({ kind: 'unchanged', operation: 'delete-selection' })
     expect(text).toBe('Nothing was deleted: the selected pixels are already transparent.')
     expect(editNoticeText({ kind: 'unchanged', operation: 'auto-trim' })).toBe('Auto Trim changed nothing.')
+  })
+})
+
+describe('Auto Trim outcomes (Phase 3 Step 11)', () => {
+  const resized = { from: { width: 1920, height: 1080 }, to: { width: 642, height: 410 } }
+
+  it('announces a trim with the size before and after', () => {
+    expect(editNoticeText({ kind: 'applied', operation: 'auto-trim', changedPixels: null, resized })).toBe(
+      'Auto Trim applied: 1,920 × 1,080 px trimmed to 642 × 410 px.',
+    )
+  })
+
+  it('adds the older Undo steps the trim pushed out of the history', () => {
+    expect(editNoticeText({ kind: 'applied', operation: 'auto-trim', changedPixels: null, resized, droppedUndoSteps: 1 })).toBe(
+      'Auto Trim applied: 1,920 × 1,080 px trimmed to 642 × 410 px. Undo history is full, so the oldest Undo step is no longer available.',
+    )
+    expect(editNoticeText({ kind: 'applied', operation: 'auto-trim', changedPixels: null, resized, droppedUndoSteps: 12 })).toBe(
+      'Auto Trim applied: 1,920 × 1,080 px trimmed to 642 × 410 px. Undo history is full, so the 12 oldest Undo steps are no longer available.',
+    )
+  })
+
+  it('says why nothing was trimmed', () => {
+    expect(editNoticeText({ kind: 'unchanged', operation: 'auto-trim', trim: { kind: 'nothing-visible' } })).toBe(
+      'Nothing to trim: the image has no visible pixels.',
+    )
+    expect(editNoticeText({ kind: 'unchanged', operation: 'auto-trim', trim: { kind: 'no-border', padding: 0 } })).toBe(
+      'Nothing to trim: visible pixels already reach every edge of the image.',
+    )
+    expect(editNoticeText({ kind: 'unchanged', operation: 'auto-trim', trim: { kind: 'no-border', padding: 5 } })).toBe(
+      'Nothing to trim: no side has more than 5 px of transparent space.',
+    )
+  })
+
+  it('shows only nothing-to-trim and dropped Undo steps as messages; everything else is announced only', () => {
+    expect(isShownEditNotice({ kind: 'unchanged', operation: 'auto-trim', trim: { kind: 'nothing-visible' } })).toBe(true)
+    expect(isShownEditNotice({ kind: 'unchanged', operation: 'auto-trim', trim: { kind: 'no-border', padding: 5 } })).toBe(true)
+    expect(isShownEditNotice({ kind: 'applied', operation: 'auto-trim', changedPixels: null, resized, droppedUndoSteps: 2 })).toBe(true)
+    expect(isShownEditNotice({ kind: 'applied', operation: 'auto-trim', changedPixels: null, resized })).toBe(false)
+    expect(isShownEditNotice({ kind: 'undone', operation: 'auto-trim' })).toBe(false)
+    expect(isShownEditNotice({ kind: 'redone', operation: 'auto-trim' })).toBe(false)
+    // Delete is unchanged (Phase 3 Step 6): announced only, even when it drops Undo steps.
+    expect(isShownEditNotice({ kind: 'unchanged', operation: 'delete-selection' })).toBe(false)
+    expect(isShownEditNotice({ kind: 'applied', operation: 'delete-selection', changedPixels: 3, droppedUndoSteps: 2 })).toBe(false)
+    expect(editNoticeText({ kind: 'applied', operation: 'delete-selection', changedPixels: 3, droppedUndoSteps: 2 })).toBe(
+      'Selection deleted: 3 pixels are now transparent.',
+    )
   })
 })
 

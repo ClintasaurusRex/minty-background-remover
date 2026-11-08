@@ -1,5 +1,6 @@
 import { createDisplayImage } from '../canvas/displayImage'
 import { type EdgeSettings, deleteSelectionWithEdges } from '../image/edit/deleteWithEdges'
+import { type AutoTrimPlan, planAutoTrim } from '../image/trim/autoTrim'
 import { isEditableTarget } from '../utils/domTargets'
 import { type EditorAction, type EditorState, documentVersion, isImporting } from './editorState'
 import { nextRedo, nextUndo } from './history/editHistory'
@@ -12,7 +13,8 @@ import type { ShortcutKey } from './selectionCommands'
 
 /*
  * Edit commands as the application offers them: Delete Selection, Undo and Redo, from the Magic
- * Wand options row, the header and the keyboard (Phase 3 Step 6).
+ * Wand options row, the header and the keyboard (Phase 3 Step 6), and Auto Trim from its options
+ * row (Phase 3 Step 11).
  *
  * As with selection commands, the pixel work happens here, outside the reducer, from the latest
  * committed state; the reducer only accepts or rejects the result. The actions carry a new
@@ -26,7 +28,7 @@ import type { ShortcutKey } from './selectionCommands'
  */
 
 /** The edit actions offered as controls and shortcuts. */
-export type EditAction = 'delete-selection' | 'undo' | 'redo'
+export type EditAction = 'delete-selection' | 'auto-trim' | 'undo' | 'redo'
 
 export interface AvailableEditActions {
   /**
@@ -35,13 +37,18 @@ export interface AvailableEditActions {
    * render.
    */
   readonly deleteSelection: boolean
+  /**
+   * An image is open. Auto Trim may still find nothing to trim; it then changes nothing and says
+   * why. Deciding that beforehand would mean reading the image's pixels on every render.
+   */
+  readonly autoTrim: boolean
   /** The edit Undo would undo, or null when there is nothing to undo. */
   readonly undo: EditKind | null
   /** The edit Redo would redo, or null when there is nothing to redo. */
   readonly redo: EditKind | null
 }
 
-const NOTHING_AVAILABLE: AvailableEditActions = { deleteSelection: false, undo: null, redo: null }
+const NOTHING_AVAILABLE: AvailableEditActions = { deleteSelection: false, autoTrim: false, undo: null, redo: null }
 
 /**
  * Which edit actions can run now. Constant time, so the controls can check it on every render.
@@ -55,6 +62,7 @@ export function availableEditActions(state: EditorState): AvailableEditActions {
   if (!version || isImporting(state)) return NOTHING_AVAILABLE
   return {
     deleteSelection: state.selection !== null,
+    autoTrim: true,
     undo: nextUndo(state.history, version)?.kind ?? null,
     redo: nextRedo(state.history, version)?.kind ?? null,
   }
@@ -74,6 +82,8 @@ export function editActionCommand(
   switch (action) {
     case 'delete-selection':
       return available.deleteSelection ? deleteSelectionCommand(state, createImage) : null
+    case 'auto-trim':
+      return available.autoTrim ? autoTrimCommand(state, createImage) : null
     case 'undo':
       return available.undo ? undoCommand(state, createImage) : null
     case 'redo':
@@ -125,6 +135,51 @@ export function deleteSelectionCommand(
     },
     createImage,
   )
+}
+
+/**
+ * Auto Trim (FEATURE_SPEC.md §10; Phase 3 Step 11): the image cropped to its visible pixels (alpha
+ * 1 or more) with `state.autoTrimPadding` pixels around them on each side, as far as the image
+ * reaches (planAutoTrim, Step 10, with its provisional threshold 0). Every kept byte stays exactly
+ * as it was. One edit: the crop recorded through completedEditCommand as a crop patch (the removed
+ * pixels, hidden colour included, so Undo restores every byte), a new revision of the smaller size
+ * and its display image, created last. The selection and the Magic Wand click are cleared; Undo
+ * brings them back.
+ *
+ * When there is nothing to trim, returns `edit-unchanged` with the reason: no visible pixel at all
+ * (a fully transparent image), or visible pixels whose padding already reaches every edge (for
+ * example an image already trimmed). Then nothing is recorded, the revision, history, selection
+ * and view stay, and nothing is allocated beyond the bounds scan's few bytes.
+ *
+ * Returns null without an image. Returns `edit-failed`, changing nothing, when the trim cannot be
+ * made or displayed (for example for lack of memory).
+ *
+ * Does not check availability (an import in progress); editActionCommand does.
+ */
+export function autoTrimCommand(state: EditorState, createImage: CreateDisplayImage = createDisplayImage): EditorAction | null {
+  const { document } = state
+  const version = documentVersion(state)
+  if (!document || !version) return null
+  const padding = state.autoTrimPadding
+  let plan: AutoTrimPlan
+  try {
+    plan = planAutoTrim(document.pixels, { padding })
+  } catch (cause) {
+    return { type: 'edit-failed', error: { operation: 'auto-trim', detail: describeCause(cause) } }
+  }
+  switch (plan.kind) {
+    case 'nothing-visible':
+      return { type: 'edit-unchanged', version, operation: 'auto-trim', trim: { kind: 'nothing-visible' } }
+    case 'unchanged':
+      return { type: 'edit-unchanged', version, operation: 'auto-trim', trim: { kind: 'no-border', padding } }
+    case 'crop':
+      // completedEditCommand records the crop patch and crops once (cropPixels), as Redo does.
+      return completedEditCommand(
+        state,
+        { kind: 'auto-trim', change: 'crop', version, kept: plan.kept, selection: null },
+        createImage,
+      )
+  }
 }
 
 /*

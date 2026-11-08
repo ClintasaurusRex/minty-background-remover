@@ -604,9 +604,11 @@ The UI should inform the user that there is nothing visible to trim.
 
 Phase 3 Step 10: such an image gives the result `nothing-visible`, with no rectangle at all, so no image of zero size can be made. An image whose content with its padding already reaches every edge, for example one already trimmed with that padding, gives `unchanged`. Neither is an edit.
 
+Phase 3 Step 11: the tool shows and announces "Nothing to trim: the image has no visible pixels." for the first, and "Nothing to trim: no side has more than 5 px of transparent space." (at 0 px: "…visible pixels already reach every edge of the image.") for the second. Nothing is recorded, and the revision, Redo and the unexported-edits state stay as they are.
+
 ### Implementation (Phase 3 Step 10)
 
-`image/trim/autoTrim.ts`, pure and synchronous like the other pixel algorithms. Nothing in the application calls it yet; the tool is Phase 3 Step 11.
+`image/trim/autoTrim.ts`, pure and synchronous like the other pixel algorithms. The Auto Trim tool (Phase 3 Step 11) calls `planAutoTrim` with the padding it shows and threshold 0, and records a `crop` plan's kept rectangle as below.
 
 - `findVisibleBounds(pixels, alphaThreshold = 0)`: the smallest rectangle containing every visible pixel, or null.
   - It reads rows from the top and from the bottom until the first visible pixel, then each row in between only outside the columns found so far.
@@ -626,7 +628,9 @@ For history, a `crop` plan's kept rectangle is what an Auto Trim edit records (`
 - The removed pixels' hidden colour must be kept exactly. An earlier Delete's patch restores colour by flipping alpha only, so undoing a trim and then that Delete would otherwise show wrong colours.
 - A removed border of transparent black or one hidden colour therefore costs a few bytes. A deleted photographic background costs 4 bytes per removed pixel: about 143 MB for a 50 MP image trimmed to a quarter of its area.
 
-Measurements, tests and the threshold study: `IMPLEMENTATION_PLAN.md`, Phase 3 Step 10.
+Measurements, tests and the threshold study: `IMPLEMENTATION_PLAN.md`, Phase 3 Step 10. The tool, its browser timings and memory: Phase 3 Step 11.
+
+In the editor (Phase 3 Step 11): a trim is one edit through `completedEditCommand`, with a new revision of the kept size and its display image. It clears the selection and the Magic Wand click (Undo restores both). The trimmed image, and the image Undo or Redo of a trim restores, is fitted to the workspace. The history keeps its limits; when recording a trim drops older Undo steps, the user is told how many.
 
 ---
 

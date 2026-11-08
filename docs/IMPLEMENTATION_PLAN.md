@@ -318,7 +318,7 @@ Decisions approved by the project owner after review of the Phase 3 architecture
 - P3-D3: Delete needs a selection and clears it; Undo restores it.
 - P3-D4: Edge cleanup and feathering default to 0 px, to protect fine 2D technical graphics. Whether they run as part of Delete or as a separate action is decided with P3-D5. (Resolved after Step 7: both run as part of Delete Selection, one history entry, 0–5 px each, default 0.)
 - P3-D5: The cleanup algorithm stays undecided until the prototype comparison (Step 7). (Resolved: Candidate B, background-colour decontamination, approved by the owner after reviewing the Step 7 comparison; implemented in Step 8.)
-- P3-D6: Auto Trim uses alpha-based visible bounds and adjustable padding. The threshold, padding at the image edge, and the effect on the selection and the view are confirmed in Step 10. (Step 10 implemented the algorithm with a provisional threshold of 0, every alpha of 1 or more visible, and padding clipped at each image edge. Both still await owner confirmation; the selection and view after Auto Trim belong to the Step 11 integration and are still open. See Step 10.)
+- P3-D6: Auto Trim uses alpha-based visible bounds and adjustable padding. The threshold, padding at the image edge, and the effect on the selection and the view are confirmed in Step 10. (Step 10 implemented the algorithm with a provisional threshold of 0, every alpha of 1 or more visible, and padding clipped at each image edge. Step 11 uses them as the owner's provisional decisions for the tool, with the selection cleared and the view fitted after a trim. See Steps 10 and 11.)
 - P3-D7: Undo / Redo covers image edits, not individual selection changes.
 - P3-D8: History limits: 25 entries and 256 MB, always keeping the newest entry even if it alone exceeds the budget.
 - P3-D9: Shortcuts: Delete, Ctrl + Z, Ctrl + Y and Ctrl + Shift + Z.
@@ -338,8 +338,8 @@ Phase 3 is implemented in twelve reviewed steps, each stopping for review:
 7. Edge cleanup prototype and visual comparison (owner decision P3-D5). Done; Candidate B approved.
 8. Edge cleanup and feathering. Its manual QA also runs the nine deferred Step 6 checks. Implemented; awaiting owner manual QA.
 9. Re-apply the last Delete when cleanup or feathering changes. Provisionally approved and committed as a checkpoint; its manual QA, like Step 8's, is still outstanding.
-10. Auto Trim algorithm. Implemented; awaiting owner review (not connected to the application).
-11. Auto Trim tool (second manual checkpoint).
+10. Auto Trim algorithm. Committed as a checkpoint (`d16b997`).
+11. Auto Trim tool (second manual checkpoint). Implemented; awaiting owner review and manual QA.
 12. Final quality assurance, performance, memory and Phase 3 readiness. Revisits Step 6 owner decision 1 (synchronous Delete, Undo and Redo on large images). Phase 3 sign-off and merge require every deferred Step 6 check to be completed or explicitly dispositioned.
 
 The unsaved-edits warning (P3-D12) is implemented with Step 6, which first gives the editor edits to protect.
@@ -602,7 +602,7 @@ Required Step 6 safeguard (abandoned display images). Commands compute from the 
 
 This is safe because no state can hold that image later: only its own action carries it, that action has been processed, rejection is permanent (point 8 above), and no state brings back a replaced image. Releasing is idempotent, so an image the canvas has already released is harmless to release again. The approach must be verified in the browser with Step 6, including React Strict Mode; if it is not adopted, such images stay with garbage collection, as approved in Step 4.
 
-Viewport for size changes (provisional): a crop, and its Redo, keep the zoom and move the image so the pixels both images have stay where they were on screen; Undo of a crop moves it back, returning exactly to the view before the crop. The image is kept reachable. Same-size edits never change the view. The view after Auto Trim is confirmed in Step 10 (P3-D6).
+Viewport for size changes (provisional): a crop, and its Redo, keep the zoom and move the image so the pixels both images have stay where they were on screen; Undo of a crop moves it back, returning exactly to the view before the crop. The image is kept reachable. Same-size edits never change the view. The view after Auto Trim is confirmed in Step 10 (P3-D6). (Replaced in Step 11: a size change now fits the new image to the workspace, as Fit does.)
 
 Tests: 64 added (921 in total).
 
@@ -1074,7 +1074,7 @@ Manual QA checklist (owner, desktop, Chrome and Firefox). Not yet run: none is m
 | 9.16 Status bar note | After 9.1, click the image to select; then Escape; then Ctrl + Z, Ctrl + Y; narrow the window below 800 px | The note disappears on selecting and stays away after Escape; it is back after Ctrl + Y; below 800 px it is hidden and the toolbar and status bar do not change height |
 | 9.14 Real assets | Your VTScada screenshots: Delete at 0 / 0, then try Edge cleanup 1–2 and Feather 1 | Easier tuning than Undo and Delete; note anything surprising |
 
-#### Step 10: Auto Trim Algorithm (implemented; awaiting owner review)
+#### Step 10: Auto Trim Algorithm (committed as a checkpoint, `d16b997`)
 
 The Auto Trim algorithm as pure functions, tested on their own. Nothing in the application calls them yet: the Auto Trim tool, its padding controls, Trim Tight, its edit, Undo / Redo integration in the editor, the selection and view after a trim, and its messages are Step 11. The manual QA of Steps 8 and 9 (with the nine deferred Step 6 checks) is still outstanding and is not affected: no existing module changed.
 
@@ -1259,6 +1259,163 @@ Step 11 integration notes (not decisions):
   - shortcuts and availability (no image, an import in progress);
   - focus after trimming and announcements;
   - the selection and view (decisions 4 and 5), and browser timings and manual QA.
+
+#### Step 11: Auto Trim Tool (implemented; awaiting owner review and manual QA)
+
+The second manual checkpoint. Auto Trim works in the application: the toolbar's Auto Trim tool, its options row (padding presets, a padding field and Trim), one Undo step per trim, messages when there is nothing to trim, and a message when a trim makes the history drop older Undo steps. The Step 10 algorithm is used as it is (`planAutoTrim`, threshold 0); the Magic Wand, Delete Selection, Edge cleanup, Feather and Step 9's adjusting are unchanged. The manual QA of Steps 8 and 9, with the nine deferred Step 6 checks, is still outstanding and is not replaced by this step's checklist.
+
+The owner's provisional decisions for Step 11, as applied:
+
+1. Visibility threshold 0 (every alpha of 1 or more is visible); no threshold control.
+2. Padding is clipped at the image's edges; no pixel is ever added.
+3. Padding: 5 px by default, whole numbers from 0 to 50, back to 5 px when another image is opened successfully (a failed import keeps it). Changing it never changes the image.
+4. A trim clears the selection and the Magic Wand click; Undo restores both (the click bound to the restored version, so a committed tolerance re-applies it exactly).
+5. The trimmed image is fitted to the workspace, exactly as Fit does. Applied as well to Undo and Redo of a trim (see decision 2 below).
+6. Short messages for a trim, for an image with no visible pixels, and for an image with nothing to trim (below).
+7. The 256 MiB budget is unchanged. Older Undo steps actually dropped by a trim are counted, and a message says so; nothing warns by image size, and nothing blocks.
+8. No preview: one click on Trim trims; Undo takes it back.
+
+Conflicts with approved specifications, flagged rather than settled silently:
+
+- Presets: `PROJECT_BRIEF.md`, `FEATURE_SPEC.md` §10 and `UI_UX_SPEC.md` (Auto Trim UX) ask for quick options 0, 5, 10 and 20 px and a custom value. They are implemented as four preset buttons and a field taking any whole number from 0 to 50 (the custom value). The range 0–50 is the owner's; the specifications gave none.
+- Trim Tight: the brief says a one-click Trim Tight action "may" use 0 px, and the Phase 3 work list names it. It is not added as its own control: preset 0, then Trim. Owner decision 1 below.
+- Where Trim lives: Auto Trim is a toolbar tool with its own options row, as the Toolbar section of `UI_UX_SPEC.md` lists it, so trimming after a Delete means choosing Auto Trim, then Trim (two clicks). `UI_UX_SPEC.md` says Auto Trim "may be surfaced prominently" after a Delete; nothing was added to the Magic Wand row. Owner decision 1 below.
+- Nothing to trim is shown as a message in the workspace as well as announced. Step 6 decision 5 had a Delete that changes nothing announced only; Delete keeps that behaviour. Owner decision 3 below.
+- The view: Step 5's provisional crop view (zoom kept, kept pixels stationary) is replaced by Fit (owner decision 5), for the trim, its Undo and its Redo.
+- `ARCHITECTURE.md` (Persistence) lists "Last Auto Trim padding" as a possible preference; the padding now goes back to 5 px with each image, and nothing is stored.
+
+Modules:
+
+```text
+src/
+├── editor/autoTrimPadding.ts           DEFAULT_AUTO_TRIM_PADDING (5), MAX_AUTO_TRIM_PADDING (50),
+│                                       the presets, the field's range (Page keys step 10),
+│                                       paddingFieldEvent (the field), clamping
+├── editor/editCommands.ts              EditAction 'auto-trim', availableEditActions.autoTrim (an
+│                                       image open, no import running), autoTrimCommand
+├── editor/editorState.ts               autoTrimPadding (reset by a successful import), the action
+│                                       auto-trim-padding-changed, AutoTrimNoChange in edit-unchanged,
+│                                       resized and droppedUndoSteps in the applied notice,
+│                                       edit-notice-dismissed, Fit after a size change, and
+│                                       placeOnNextResize after an import while Auto Trim is active
+├── editor/editFeedback.ts              Auto Trim texts; isShownEditNotice
+├── editor/tools.ts                     Auto Trim available
+├── components/Toolbar/AutoTrimOptions.tsx    the options row
+├── components/Toolbar/ToolOptions.tsx        the active tool's row (Magic Wand or Auto Trim)
+├── components/Workspace/EditNoticeMessage.tsx  an outcome shown as a dismissible message
+├── components/Workspace/Workspace.tsx        shown outcomes in the polite status region
+└── app/App.tsx                               wiring
+```
+
+Also changed: `ToolOptions.css`, `Workspace.css`; comments in `image/trim/autoTrim.ts`, `historyCommands.ts` and `autoTrimHistory.test.ts`. Browser scripts: `auto-trim.mjs` (new), `fixtures.mjs` (the `trim-*` fixtures), `lib/gpu.mjs` (the GPU-process lookup, moved out of `gpu-crash.mjs` so both scripts share it), `lib/browsers.mjs` (a Space key), `README.md`. The Step 10 algorithm, the Magic Wand, Delete, Edge cleanup, Feather and Step 9 code are unchanged. No dependency was added or removed.
+
+The tool:
+
+- The toolbar's Auto Trim (its icon, the label and the tooltip "Remove empty transparent space around the image") is available whenever an image is open. Choosing it presses it and replaces the Magic Wand's options row with its own: "Padding", the presets 0, 5, 10 and 20 (toggle buttons, the one equal to the padding pressed, none for other amounts; accessible names "0 px" to "20 px"), the field ("Padding in pixels, 0 to 50", unit "px"), then Trim (an icon and "Trim").
+- The field follows the tolerance field's conventions (`toleranceInput.ts`) with the range 0–50: a whole number from 0 to 50 applies as it is typed; other text waits for Enter or leaving the field, when a number is rounded and clamped and anything else restores the padding; Up / Down step by 1, Page Up / Page Down by 10; Escape cancels an unfinished entry. Every change only sets the padding (`auto-trim-padding-changed`); Enter never trims.
+- Trim's tooltip says what it will keep ("…with 5 px of padding on each side, where the image has that much"; at 0 px "…removing all the transparent space around them"). While another image is opening it is `aria-disabled` and its tooltip adds "— not available while another image is opening". Its label and size never change; focus stays on it after a trim.
+- While Auto Trim is the tool, clicks on the image do nothing (the Magic Wand's crosshair is gone). Space panning, wheel zoom, Delete, Ctrl + Z / Y / Shift + Z, Ctrl + A and Escape work as before. Opening another image makes the Magic Wand active, as before, and the next workspace resize places the image again (its row can be taller than Auto Trim's).
+- No keyboard shortcut runs Auto Trim.
+
+Integration:
+
+- `autoTrimCommand` plans with the state's padding (`planAutoTrim`, threshold 0). A `crop` plan goes to `completedEditCommand` as `{ kind: 'auto-trim', change: 'crop', kept, selection: null }`: the crop patch (every removed pixel, hidden colour included), the trimmed pixels cut once by `cropPixels`, a new revision and, last, its display image. `nothing-visible` and `unchanged` become `edit-unchanged` with the reason, computing and allocating nothing more. An exception becomes `edit-failed` ('auto-trim').
+- It runs like Delete Selection: `editActionCommand` (availability: an image open, no import running), `useEditCommands` (nothing while the replace confirmation is open), `dispatchEditAction` (`flushSync`, then the image released if the reducer rejected the action).
+- The reducer applies a trim with the checks every edit has (version, the selection and click it was computed with, a newer revision with its own memory, a display image of its size, the patch's sizes). Stale trims (two from one state, one computed before a selection change, another edit, Undo or another image) are rejected permanently, and their display images released.
+- Accepted: one entry (Redo cleared), the selection and click cleared, the edit depth up by one (an unexported edit), Step 9's adjustable Delete forgotten, the view fitted, and the notice with the sizes before and after and the Undo steps dropped.
+- Undo and Redo use the existing crop patches: Undo restores the original size and every byte, the selection and the click from before the trim; Redo crops again. Both fit the image they restore.
+- No-ops change nothing but the announcement: no entry, revision, display image or depth change; Redo is kept.
+
+Messages (`editFeedback.ts`):
+
+| Outcome | Text | Shown |
+| --- | --- | --- |
+| Trim | "Auto Trim applied: 1,920 × 1,080 px trimmed to 642 × 410 px." | Announced (the image shows it) |
+| Trim dropping older Undo steps | The same, then "Undo history is full, so the oldest Undo step is no longer available." or "…the 3 oldest Undo steps are no longer available." | Message in the workspace, announced once |
+| No visible pixels | "Nothing to trim: the image has no visible pixels." | Message, announced once |
+| Padding reaches every edge | "Nothing to trim: no side has more than 5 px of transparent space." (0 px: "Nothing to trim: visible pixels already reach every edge of the image.") | Message, announced once |
+| Undo / Redo | "Undone: Auto Trim." / "Redone: Auto Trim." | Announced |
+| Failure | "Auto Trim could not be completed. The image and selection have not changed." (with the memory hint when it applies) | Alert, as other edit failures |
+
+A shown message sits in the workspace's polite status region (with the import messages), so it is announced once and not again by the hidden region. It has a dismiss button, and goes when a later outcome replaces it or another image opens.
+
+History eviction: when `recordEdit` keeps the history within its limits (25 entries, 256 MiB) it drops the oldest entries. The reducer counts the Undo steps the history offered before the edit, plus the new one, that it no longer holds (`droppedUndoSteps`). Redo entries, which every new edit discards, are not counted. It is counted for every edit but shown only for Auto Trim; Delete keeps its Step 6 announcement. Both limits count: in the browsers the 26th step (a trim after 25 Deletes) drops one, and in the unit tests a trim's large entry drops older ones by bytes. Near 50 MP a trim of a deleted photographic background retains about 150 MB (below), so a history already holding over about 100 MB loses its oldest steps.
+
+Tests: 39 added (1,191 in total, 66 files, all passing): `autoTrimCommand.test.ts` (23: padding 0 / 5 / 50, clipping, sizes and Fit, thin lines and partial alpha after real Magic Wand Deletes with hidden colour, fully transparent, opaque, every-edge and already-trimmed no-ops, Redo and depth kept by no-ops, selection and click cleared and restored, three Undo / Redo cycles, Magic Wand + Delete with Edge cleanup and Feather + Trim + two Undos + two Redos, Step 9 eligibility, availability and padding reset, stale trims, release of a rejected trim's image, Strict Mode replays, failures, eviction by bytes and by count, a 4K trim, padding clamping), plus feedback texts (4), markup (6 options row, 2 workspace) and the padding field (4). Existing tests updated for the new tool, availability and the Fit view. 30 deliberately introduced defects (the padding ignored, the visible bounds kept instead of the padded ones, silent or wrong no-ops, availability, the padding not reset, clamped or validated, re-placing after Auto Trim, dropped steps miscounted, sizes missing, Undo not fitted, fitting the wrong image, notices not dismissible, not shown, shown for Delete or announced twice, wrong texts, range and default, presets never pressed, `disabled` instead of `aria-disabled`, the row or the tool missing) were each caught. One only after a change: the padding field using the tolerance's 0–100 range survived, because the reducer clamps every padding to 50 anyway (the only effect: 51–100 applied while typed instead of on Enter). The field's behaviour moved into `paddingFieldEvent` (`autoTrimPadding.ts`), which the field test now drives, and the browser script checks that 75 waits for Enter.
+
+Browser verification: `scripts/browser/auto-trim.mjs` (headless Chrome and Firefox, device pixel ratio 1):
+
+- Production build: 146 checks pass without timings (Chrome 75, Firefox 71), 174 with them. With `--kill-test-gpu-process` Chrome passes 77: after a trim the GPU process is killed and the canvas is restored showing the trimmed image exactly, and Undo afterwards shows the image before the trim.
+- Development server (React Strict Mode): the same 146 checks pass, with no React warnings or console errors in either browser. (A first Strict Mode run was discarded: the defect-injection run was editing `src/` while the development server served it.)
+- One live display image after every section in both browsers.
+- Regressions, all passing: `smoke.mjs` 340, `edit-workflow.mjs --no-perf` 507, `edit-ownership.mjs` 52, `edge-cleanup.mjs --no-perf` 885, `edge-adjust.mjs --no-perf` 175, `gpu-crash.mjs --kill-test-gpu-process` 23.
+- Not checked headless: Enter and Space on buttons in Firefox (headless Firefox has no window focus and does not activate buttons from keys; checked in Chrome); in Firefox, Tab order is checked in a fresh session (after the other sections, Tab alternated between the first two buttons of an options row, the Magic Wand's as well); the visible focus ring; screen readers; the real clipboard and drag and drop.
+
+Measurements: production build, headless, this machine, one run each. Times are the whole synchronous handler (the click on Trim or the key press, to the commit and its layout effects, display image included); every trim was checked byte for byte in the page, and every Undo:
+
+| Image | Browser | Delete | Trim | Undo | Redo | History after the trim |
+| --- | --- | --- | --- | --- | --- | --- |
+| 3840 × 2160, flat background → 470 × 295 | Chrome | 177 ms | 36 ms | 27 ms | 3 ms | under 0.05 MB |
+| | Firefox | 95 ms | 26 ms | 45 ms | 4 ms | under 0.05 MB |
+| 3840 × 2160, photographic background → 970 × 650 | Chrome | 122 ms | 100 ms | 30 ms | 4 ms | 29.2 MB |
+| | Firefox | 97 ms | 118 ms | 45 ms | 7 ms | 29.2 MB |
+| 8660 × 5773, flat background (`big50mp.png`) → 7410 × 4710 | Chrome | 808 ms | 248 ms | 162 ms | 124 ms | 0.2 MB |
+| | Firefox | 502 ms | 212 ms | 232 ms | 160 ms | 0.2 MB |
+| 8660 × 5773, photographic background → 470 × 294 | Chrome | 513 ms | 797 ms | 153 ms | 9 ms | 143.1 MB |
+| | Firefox | 499 ms | 694 ms | 232 ms | 12 ms | 143.1 MB |
+
+- Nothing to trim near 50 MP: a fully transparent image (the longest scan) 259 ms in Chrome and 48 ms in Firefox (Chrome's first call of the scan; Node measured about 30 ms warm in Step 10); an opaque one 1 ms in both.
+- Display image: 14 ms (Chrome) and 25 ms (Firefox) at 4K for Undo; 59 ms and 103 ms for the 7410 × 4710 trim; 80 ms and 150 ms for a full 50 MP Undo; about 1 ms for the small trimmed images. The rest of a trim is the crop patch (every removed pixel, run-length encoded) and the crop itself.
+- On the 50 MP photographic fixture the Magic Wand also took the flat box around the pump, so the trim kept only the pump: about 37.5 million removed pixels hid different colours (the noise), the rest one colour. Its 143.1 MB entry matches Step 10's Node figure. The 4K one kept the box (970 × 650).
+- Memory (Chrome, JavaScript heap 3.1 MB and ArrayBuffers after garbage collection, measured after Redo): 34 MB (4K flat), 65 MB (4K photographic: the 29 MB entry and the image), 326 MB (50 MP flat) and 336 MB (50 MP photographic: the 143 MB entry, plus the full-size image React's previous render still holds until its next render). One live display image after every step, in both browsers.
+
+Known limitations (Step 11):
+
+- Synchronous like Delete: near 50 MP a trim of a deleted photographic background pauses the page for about 0.7–0.8 s (0.2–0.25 s for a flat background), with no progress indication; at 4K about 0.1 s at most (Step 6 decision 1, revisited in Step 12).
+- A 50 MP trim of a deleted photographic background retains about 150 MB of history; older steps are dropped when the history already holds over about 100 MB (the message says so).
+- Threshold 0: a faint stray pixel blocks trimming on its side; no preview reveals it.
+- Clipped padding can be uneven.
+- Trimming after a Delete takes two clicks (choose Auto Trim, then Trim).
+- Where the Magic Wand row wraps (75 px at 1400 px wide, Auto Trim's 39 px), switching tools resizes the workspace; the view keeps its centre.
+- A nothing-to-trim message stays until dismissed, replaced or another image opens.
+- Delete and Step 9 adjustments can also drop Undo steps; they stay silent, as before.
+- Headless Firefox: Enter and Space on buttons are not checkable, and Tab alternated between two buttons after long sessions (also in the Magic Wand row).
+
+Owner decisions raised (Step 11):
+
+1. Where Trim lives: a tool with its own row (implemented), or also a Trim action in the Magic Wand row after a Delete; and whether a separate Trim Tight control is wanted.
+2. View after Undo and Redo of a trim: Fit (implemented) or something else.
+3. Nothing-to-trim and eviction shown as visible messages (implemented) versus announced only like Delete's no-op; and whether Delete should report dropped steps too.
+4. Eviction message for both limits (implemented) or only the memory budget.
+5. Padding control: presets plus a 0–50 field, no slider, reset per image.
+6. Message wording.
+7. Large-image synchronous pauses (Step 12).
+
+Manual QA checklist (owner, desktop, Chrome and Firefox). Not yet run: none is marked passed. Images: `node scripts/browser/fixtures.mjs` writes `trim-*.png` (and the earlier fixtures) to `scripts/browser/fixtures/`; your own pump, valve and VTScada images are just as important. Look at results at 100–800% over the checkerboard.
+
+| Check | Action | Passes when | Known limitation |
+| --- | --- | --- | --- |
+| 11.1 The tool | Open `trim-pump.png`; click Auto Trim in the toolbar; click on the image | Auto Trim is pressed; the row shows "Padding", 0 5 10 20 (5 pressed), the field "5" and "px", then Trim; the Magic Wand row is gone; the status bar says "Tool: Auto Trim"; clicking the image selects nothing | — |
+| 11.2 Padding computes nothing | Click 10, 20, 0; type 37 and Enter; 75 and Enter; "abc" and Enter; 3 then Escape; Up, Down, Page Up, Page Down in the field | The pressed preset follows (none for 37); 75 becomes 50; "abc" and Escape restore the previous value; the image, the status bar size and Undo never change | — |
+| 11.3 Pump after Delete | Magic Wand, tolerance 10, click the grey background (top-left corner); Delete; Auto Trim, padding 5, Trim | The image shrinks to the pump, valve, wires, status light and text with 5 px around them; the 1-pixel black wire's right end and the "P-101 RUN" box are inside; the whole result is fitted in the workspace; no selection outline; the status bar shows the new size | — |
+| 11.4 Your pump and valve images | Your own equipment graphics (and `trim-valve.png`): Delete the background if it has one, then Trim at 0, Undo, at 20, Undo, at 50 | 0: tight to the outermost visible pixels, faint shadow and anti-aliasing included; 20 and 50: padding stops at the image's edges where there is not that much room (sides can differ); the image is never enlarged | A faint stray pixel or a soft shadow far from the object keeps that side from being trimmed (threshold 0) |
+| 11.5 Thin lines and faint edges | `edge-lines.png`: Magic Wand Global, click the white, Edge cleanup 1, Delete; Auto Trim at 0 | Every line, the hairline, the dots and the sub-pixel dot are kept; at 400–800% no faint edge pixel along the result's border is cut | — |
+| 11.6 Fit | Zoom to 400% and pan to a corner, then Trim | The whole trimmed image is shown, fitted (or at 100% if it is smaller than the workspace), centred | — |
+| 11.7 Undo and Redo | After 11.3: Ctrl + Z, Ctrl + Z, Ctrl + Y, Ctrl + Shift + Z; then the header's Undo and Redo | First Undo: the full-size image with its deleted (checkerboard) border, fitted; second: the original with its selection (marching ants); Redo: the Delete result; Redo: the trimmed image exactly as before. The buttons read "Undo Auto Trim" / "Redo Auto Trim" | — |
+| 11.8 Selection after Undo | After the second Undo in 11.7, drag the tolerance slider and release | The selection is re-applied from the original click, as before the Delete | — |
+| 11.9 After a Delete (Step 9) | Delete; note "Edge settings update last Delete" in the status bar; Trim; go back to the Magic Wand and change Edge cleanup | The note is gone after the trim; changing the amount does not change the image (it is for the next Delete) | — |
+| 11.10 Nothing to trim | After 11.3 press Trim again at 5; open `trim-empty.png` and Trim; open `trim-edges.png`, padding 0, Trim; open any opaque screenshot and Trim | A message at the top of the workspace says why ("…no side has more than 5 px of transparent space.", "…the image has no visible pixels.", "…visible pixels already reach every edge of the image."); the image, its size and Undo do not change; the × closes the message | — |
+| 11.11 Already trimmed | After 11.3: Trim at 0 | The 5 px border goes; one more Undo step; Undo brings it back | — |
+| 11.12 Opening images | Set padding 20 and open another image | The padding is back to 5, the Magic Wand is active, the new image is fitted | — |
+| 11.13 Replace confirmation | After a trim, open another image (button, drop or Ctrl + V); while the dialog is open try Trim; Cancel; Trim again | Nothing happens behind the dialog; after Cancel the trimmed image and Undo are unchanged and Trim works | — |
+| 11.14 Keyboard only | Tab to Auto Trim in the toolbar, Enter; Tab through the presets and press Space on one; in the field use the arrows and Enter; Tab to Trim, press Enter, then Space | Every control shows a focus ring; Enter and Space activate; Enter in the field never trims; focus stays on Trim; Shift + Tab goes back | Please check in Firefox: button keys could not be checked in headless Firefox |
+| 11.15 Screen reader (Orca) | Move through the row; Trim; Trim again | Presets read as toggle buttons "5 px" (pressed or not); the field reads "Padding in pixels, 0 to 50"; the trim is announced once with both sizes; the nothing-to-trim message is read once | — |
+| 11.16 Large images | `trim-4k.png` and `trim-photo-4k.png` (Magic Wand at 2, 2, tolerance 10 and 20, Delete, Trim, Undo, Redo); then `trim-photo-50mp.png` (tolerance 20) and `big50mp.png` (tolerance 20 at 10, 10) | 4K: each step well under half a second; 50 MP: Trim, Undo and Redo pause the page for about the times in the measurements above; no error; Undo exact | The page pauses with no progress indication (synchronous, as Delete) |
+| 11.17 History eviction (where reproducible) | `trim-pump.png`, Magic Wand at tolerance 0: 25 separate Deletes (for example 24 single clicks on different shades of the pipes, then the background), then Trim | A message: "…Undo history is full, so the oldest Undo step is no longer available."; Undo reaches back 25 steps, not to the opened image | Large-image eviction needs over about 100 MB of earlier history before a 50 MP photographic trim |
+| 11.18 Firefox | Repeat 11.1, 11.3, 11.7, 11.10 and 11.14 in Firefox | As in Chrome | — |
+| 11.19 Narrow window | About 640 px wide: switch between the Magic Wand and Auto Trim; Trim; show a nothing-to-trim message | The Auto Trim row stays on one line with Trim visible; no sideways scrolling; the message fits; the image stays in view when the row height changes | Below 640 px the app scrolls sideways (its minimum width since Phase 1) |
+
+Still outstanding from earlier steps, unchanged by this checklist: the Step 8 manual QA (8.1–8.23), the Step 9 manual QA (9.1–9.16), and the nine deferred Step 6 checks (12, 14, 15, 16, 19, 20, 21, 22, 23). None of them is passed by Step 11's testing.
 
 ---
 

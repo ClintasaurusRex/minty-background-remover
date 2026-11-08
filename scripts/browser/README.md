@@ -218,6 +218,46 @@ reported, never checked.
 
 `lib/edges.mjs` holds the page helpers and input steps shared with `edge-cleanup.mjs`.
 
+### Auto Trim (Phase 3 Step 11)
+
+```sh
+npm run build
+node scripts/browser/auto-trim.mjs [--browser chrome|firefox|all] [--no-perf] [--no-stress]
+     [--kill-test-gpu-process]
+APP_URL=http://127.0.0.1:5173/ node scripts/browser/auto-trim.mjs --no-perf   # npm run dev: Strict Mode
+```
+
+It generates `trim-*.png` on first use (an HMI pump and valve on a flat background, a valve on
+transparency with a soft shadow, an empty image, a 1-pixel frame, and 4K and 50-megapixel images
+with flat and photographic backgrounds). With real clicks, key presses and typing, it checks that:
+
+- Auto Trim in the toolbar shows its options row: the padding presets (0, 5, 10, 20), the field
+  (0–50: typing, Enter, Escape, clamping, text that is not a number, arrows and Page keys), the
+  unit and Trim, with their names, tooltips and Tab order. Changing the padding computes nothing,
+  and clicks on the image select nothing while Auto Trim is the tool.
+- After Magic Wand and Delete, Trim gives exactly the rectangle a full alpha scan in the page
+  gives, cut from the image before the trim, every byte (hidden colour included). One entry; the
+  selection and click are cleared; the view is Fit; the canvas shows the result; the announcement
+  gives both sizes. Undo, Undo, Redo, Redo (keys and header buttons) are exact.
+- Nothing to trim (an opaque image, padding that reaches every edge, a fully transparent image, a
+  frame in every edge) changes nothing and shows a dismissible message. A transparent PNG keeps its
+  faintest pixels; padding 50 is clipped at the edges.
+- Trim is unavailable while another image opens and does nothing behind the replace confirmation;
+  the padding goes back to 5 with a new image. Keyboard only (button activation in Chrome only:
+  headless Firefox ignores Enter and Space on buttons). 25 Deletes then a trim: the oldest Undo
+  step is dropped and a message says so. 800 and 640 px windows (narrower ones are reported: the app
+  is at least 640 px wide).
+- With `--kill-test-gpu-process` (Chrome on Linux), the canvas shows the trimmed image exactly
+  after the GPU process is killed and restored.
+
+Then (unless `--no-perf`) it times Delete, Trim, Undo and Redo and reports the history size, live
+display images and, in Chrome, the JavaScript heap, at 4K and (unless `--no-stress`) near 50
+megapixels, with the longest and shortest no-op scans. Timings are reported, never checked.
+
+The keyboard section runs first: in headless Firefox, after the other sections in the same
+session, Tab alternated between the first two buttons of an options row (the Magic Wand's too),
+which a fresh session does not do.
+
 ## Maintenance notes
 
 - `lib/app.mjs` finds the editor state through React's internal fiber tree, because the app has
@@ -229,5 +269,7 @@ reported, never checked.
   `drawImage` in the page to count live display images and time their creation and drawing.
 - `lib/source.mjs` runs the app's TypeScript in Node 24 by type stripping, adding `.ts` to the
   app's extensionless imports. It needs the erasable-only TypeScript the project already uses.
+- `lib/gpu.mjs` finds the GPU process of the Chrome a script started (`gpu-crash.mjs`,
+  `auto-trim.mjs`).
 - Canvases are read by drawing them onto a separate canvas, never with their own `getImageData`.
   In Chrome, reading a canvas back can move it off the GPU, and then a crash would not affect it.

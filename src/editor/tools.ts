@@ -24,6 +24,6 @@ export const TOOLS: readonly ToolDefinition[] = [
     id: 'auto-trim',
     label: 'Auto Trim',
     description: 'Remove empty transparent space around the image',
-    available: false,
+    available: true,
   },
 ]

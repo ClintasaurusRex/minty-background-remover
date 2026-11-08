@@ -23,6 +23,7 @@ function render(
   canDeleteSelection = true,
   edgeSettings: EdgeSettings = NO_EDGE_TREATMENT,
   adjustsLastDelete = false,
+  autoTrim: { padding: number; canAutoTrim: boolean } = { padding: 5, canAutoTrim: true },
 ) {
   return renderToStaticMarkup(
     createElement(ToolOptions, {
@@ -40,6 +41,10 @@ function render(
       adjustsLastDelete,
       canDeleteSelection,
       onDeleteSelection: noop,
+      padding: autoTrim.padding,
+      onPaddingChange: noop,
+      canAutoTrim: autoTrim.canAutoTrim,
+      onAutoTrim: noop,
     }),
   )
 }
@@ -63,7 +68,7 @@ describe('ToolOptions', () => {
   })
 
   it('shows nothing for tools without options', () => {
-    for (const tool of ['crop', 'replace-color', 'auto-trim'] as const) expect(render(tool)).toBe('')
+    for (const tool of ['crop', 'replace-color'] as const) expect(render(tool)).toBe('')
   })
 
   it('shows the Magic Wand options while the Magic Wand is active', () => {
@@ -257,5 +262,86 @@ describe('Delete Selection control', () => {
     const markup = render('magic-wand')
     expect(markup.indexOf('Delete Selection</button>')).toBeGreaterThan(markup.indexOf('>Shrink<'))
     expect(markup).toMatch(/<div class="tool-options__group"><button[^>]*tool-options__delete/)
+  })
+})
+
+describe('Auto Trim options (Phase 3 Step 11)', () => {
+  const renderTrim = (padding = 5, canAutoTrim = true) =>
+    render('auto-trim', DEFAULT_MAGIC_WAND_SETTINGS, ALL, true, NO_EDGE_TREATMENT, false, { padding, canAutoTrim })
+
+  /** The opening tag of the Trim button (its content is an icon and the label). */
+  function trimTag(markup: string): string {
+    const match = /(<button[^>]*>)<svg[^]*?<\/svg>Trim<\/button>/.exec(markup)
+    if (!match) throw new Error('No Trim button')
+    return match[1]
+  }
+
+  /** The opening tag of the preset button labelled `label`. */
+  function presetTag(markup: string, label: string): string {
+    const match = new RegExp(`(<button[^>]*>)${label}</button>`).exec(markup)
+    if (!match) throw new Error(`No preset ${label}`)
+    return match[1]
+  }
+
+  it('shows its own row, not the Magic Wand options, while Auto Trim is active', () => {
+    const markup = renderTrim()
+    expect(markup).toMatch(/^<div class="tool-options" role="group" aria-label="Auto Trim options">/)
+    expect(markup).not.toContain('Magic Wand options')
+    expect(markup).not.toContain('Delete Selection')
+    expect(render('magic-wand')).not.toContain('Auto Trim options')
+  })
+
+  it('labels the padding, its presets and the field with the unit and range', () => {
+    const markup = renderTrim()
+    const labelId = /<div class="tool-options__group tool-options__padding" role="group" aria-labelledby="([^"]+)">/.exec(markup)![1]
+    expect(markup).toContain(`<span id="${labelId}" class="tool-options__label">Padding</span>`)
+    expect(markup).toContain('role="group" aria-label="Padding presets"')
+    for (const preset of [0, 5, 10, 20]) {
+      const tag = presetTag(markup, String(preset))
+      expect(tag).toContain('type="button"')
+      // The visible number is part of the accessible name, with its unit.
+      expect(tag).toContain(`aria-label="${preset} px"`)
+    }
+    const field = inputTag(markup, 'text')
+    expect(field).toContain('value="5"')
+    expect(field).toContain('aria-label="Padding in pixels, 0 to 50"')
+    expect(field).toContain('inputMode="numeric"')
+    expect(markup).toContain('<span class="tool-options__unit" aria-hidden="true">px</span>')
+    // No slider: the presets and the field are the control.
+    expect(markup).not.toContain('type="range"')
+  })
+
+  it('presses the preset equal to the padding, and none for other amounts', () => {
+    for (const padding of [0, 5, 10, 20]) {
+      const markup = renderTrim(padding)
+      expect(markup.match(/aria-pressed="true"/g)).toHaveLength(1)
+      expect(presetTag(markup, String(padding))).toContain('aria-pressed="true"')
+      expect(inputTag(markup, 'text')).toContain(`value="${padding}"`)
+    }
+    const custom = renderTrim(37)
+    expect(custom).not.toContain('aria-pressed="true"')
+    expect(inputTag(custom, 'text')).toContain('value="37"')
+  })
+
+  it('offers Trim with an icon and a tooltip that says what the padding does', () => {
+    const tag = trimTag(renderTrim(5))
+    expect(tag).toContain('type="button"')
+    expect(tag).toContain('aria-disabled="false"')
+    expect(tag).toContain('title="Trim the image to its visible pixels with 5 px of padding on each side, where the image has that much"')
+    expect(tag).not.toContain('aria-label')
+    expect(trimTag(renderTrim(0))).toContain('title="Trim the image to its visible pixels, removing all the transparent space around them"')
+  })
+
+  it('is aria-disabled, never disabled, while another image opens, with the same label', () => {
+    const tag = trimTag(renderTrim(5, false))
+    expect(tag).toContain('aria-disabled="true"')
+    expect(tag).toContain('— not available while another image is opening')
+    expect(tag).not.toMatch(/\sdisabled(=|\s|>)/)
+  })
+
+  it('keeps a sensible tab order: presets, field, then Trim', () => {
+    const markup = renderTrim()
+    const order = [presetTag(markup, '0'), presetTag(markup, '20'), inputTag(markup, 'text'), trimTag(markup)].map((tag) => markup.indexOf(tag))
+    expect([...order].sort((a, b) => a - b)).toEqual(order)
   })
 })
