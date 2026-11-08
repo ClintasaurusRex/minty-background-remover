@@ -428,7 +428,7 @@ scripts/browser/auto-trim.mjs             the tool in Chrome and Firefox; lib/gp
 - The padding lives in the editor state, not in the control, so the command always computes with the padding the user sees; it is reset to 5 by each successful import and kept by a failed one. Nothing is persisted.
 - `ToolOptions` shows the active tool's row. The Workspace shows notices that `isShownEditNotice` selects (Auto Trim with nothing to trim, a trim that dropped Undo steps) in its polite status region, and announces all other outcomes in the hidden one, so each outcome is announced once.
 
-Planned for later steps (subject to review at each step): Phase 3 final quality assurance (Step 12).
+Step 12 (final quality assurance) changed no module. It added `src/editor/phase3Workflow.test.ts`, which runs the application's own commands together against a model of every content state: Delete Selection, edge adjustments, Auto Trim, Undo, Redo, selection changes and imports, with no-ops, stale replays and failures (`IMPLEMENTATION_PLAN.md`, Phase 3 Step 12).
 
 Key rules:
 

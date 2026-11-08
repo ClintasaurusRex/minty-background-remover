@@ -864,6 +864,15 @@ Phase 3 Step 9: adjusting the last Delete with other edge amounts recomputes it 
 
 Phase 3 (P3-D11): pixel edits start synchronous on the main thread, like Phase 2 selection work, and are measured at 4K and 50 MP before anything else is decided. Measured in Step 6 (Delete Selection above): about 0.1 s at 4K in both browsers, about 0.5–0.65 s for a Delete and 0.23–0.33 s for Undo or Redo near 50 MP. Whether large images need a progress indication or a Worker is an open owner decision (`IMPLEMENTATION_PLAN.md`, Phase 3 Step 6). Copy-on-write buffers can be handed to a Web Worker later without changing the algorithms. How the display image is rebuilt after an edit (P3-D10) was verified in Phase 3 Step 4: synchronously through `OffscreenCanvas` (see Display Images), 13–15 ms at 4K and 77 ms at 50 MP in Chrome, 23–26 ms and 138 ms in Firefox.
 
+Phase 3 Step 12 (final measurements, production build, Chrome 157 and Firefox 159): nothing regressed against Steps 6–11.
+
+- At 4K every Delete, adjustment, Undo, Redo and trim finishes within 0.46 s; without edge amounts, in about 0.15 s or less.
+- Near 50 MP: 0.2–0.8 s without edge amounts, and 0.9–2.7 s with edge cleanup or feathering on edge-dense images. The work is synchronous, with no progress indication; this is Step 6 decision 1, revisited in Step 12, where the recommendation is to keep it synchronous for Phase 3.
+- Peak renderer memory during 50 MP operations is 0.38–0.51 GB above its level before the operation.
+- Retained memory returns to the same level after every cycle and when an image is replaced, including the 143 MB history of a photographic trim.
+
+Details: `IMPLEMENTATION_PLAN.md`, Phase 3 Step 12.
+
 ---
 
 ## Testing

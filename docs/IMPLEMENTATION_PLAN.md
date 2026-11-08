@@ -336,11 +336,11 @@ Phase 3 is implemented in twelve reviewed steps, each stopping for review:
 5. Edit history in the editor state. Done; approved.
 6. Delete Selection, Undo and Redo (first manual checkpoint). Approved for checkpoint commit with outstanding manual QA: 14 of 23 checks passed, 9 deferred (see Step 6).
 7. Edge cleanup prototype and visual comparison (owner decision P3-D5). Done; Candidate B approved.
-8. Edge cleanup and feathering. Its manual QA also runs the nine deferred Step 6 checks. Implemented; awaiting owner manual QA.
-9. Re-apply the last Delete when cleanup or feathering changes. Provisionally approved and committed as a checkpoint; its manual QA, like Step 8's, is still outstanding.
+8. Edge cleanup and feathering. Its manual QA also runs the nine deferred Step 6 checks. Implemented; its manual QA reconciled in Step 12.
+9. Re-apply the last Delete when cleanup or feathering changes. Provisionally approved and committed as a checkpoint; its manual QA reconciled in Step 12.
 10. Auto Trim algorithm. Committed as a checkpoint (`d16b997`).
-11. Auto Trim tool (second manual checkpoint). Implemented; awaiting owner review and manual QA.
-12. Final quality assurance, performance, memory and Phase 3 readiness. Revisits Step 6 owner decision 1 (synchronous Delete, Undo and Redo on large images). Phase 3 sign-off and merge require every deferred Step 6 check to be completed or explicitly dispositioned.
+11. Auto Trim tool (second manual checkpoint). Implemented and committed as a checkpoint (`d9fb99e`); its manual QA reconciled in Step 12.
+12. Final quality assurance, performance, memory and Phase 3 readiness. Revisits Step 6 owner decision 1 (synchronous Delete, Undo and Redo on large images). Phase 3 sign-off and merge require every deferred Step 6 check to be completed or explicitly dispositioned. Verification done, with no defect found; awaiting owner review and the three required owner items listed in Step 12.
 
 The unsaved-edits warning (P3-D12) is implemented with Step 6, which first gives the editor edits to protect.
 
@@ -762,7 +762,7 @@ Manual QA results (owner, desktop): approved for a checkpoint commit with deferr
 - Deferred, intentionally skipped (9): 12, 14, 15, 16, 19, 20, 21, 22, 23. They keep the numbers and descriptions below.
 - Failed: none reported.
 
-Deferred checks schedule: run the nine deferred checks after the next substantive coding round, preferably together with the Step 8 manual QA. Each must be completed or explicitly dispositioned by the owner (for example accepted as a known limitation, or moved to a later phase) before final Phase 3 sign-off and merge (Step 12).
+Deferred checks schedule: run the nine deferred checks after the next substantive coding round, preferably together with the Step 8 manual QA. Each must be completed or explicitly dispositioned by the owner (for example accepted as a known limitation, or moved to a later phase) before final Phase 3 sign-off and merge (Step 12). Status of each after Step 12: see Step 12, Reconciliation (five passed by automated checks or the owner's priority session; 15, 19, 21 and 23 still need a manual part or a disposition).
 
 | Check | Description (summary; full text below) | Status |
 |---|---|---|
@@ -812,7 +812,7 @@ An investigation outside the repository (nothing in the application changed). Th
 
 The prototype, the comparison page and the report are kept by the owner outside the repository (`~/minty-step7-review`).
 
-#### Step 8: Edge Cleanup and Feathering (implemented; awaiting owner manual QA)
+#### Step 8: Edge Cleanup and Feathering (committed as a checkpoint, `f2861e4`; manual QA reconciled in Step 12)
 
 Delete Selection now applies the Edge cleanup and Feather amounts set beside it, as one edit with one Undo step. Both default to 0 px, and then Delete is byte for byte the Step 6 Delete. Step 9 (re-applying the last Delete when an amount changes) was not part of this step; it is implemented in Step 9 below.
 
@@ -897,7 +897,7 @@ Owner decisions raised (Step 8):
 3. Large images: the synchronous pause grows to about 1–2.6 s near 50 MP with cleanup or feathering; keep synchronous until Step 12 (as Step 6 decision 1) or plan a progress indication.
 4. The announcement wording ("… 1,204 edge pixels were cleaned up or feathered.").
 
-Manual QA checklist (owner, desktop, Chrome and Firefox). Not yet run: none of these is marked passed. Images: `node scripts/browser/fixtures.mjs` writes the generated ones (`edge-*.png`, `edge-*.jpg`, `edge-svg.svg`) to `scripts/browser/fixtures/`; real VTScada screenshots and equipment photos are just as important. Look at results at 400–800% over the checkerboard.
+Manual QA checklist (owner, desktop, Chrome and Firefox). Not run as a whole; the status of each check after the owner's priority manual QA and Step 12's automated verification is in Step 12, Reconciliation. Images: `node scripts/browser/fixtures.mjs` writes the generated ones (`edge-*.png`, `edge-*.jpg`, `edge-svg.svg`) to `scripts/browser/fixtures/`; real VTScada screenshots and equipment photos are just as important. Look at results at 400–800% over the checkerboard.
 
 | Check | Action | Passes when | Known limitation |
 | --- | --- | --- | --- |
@@ -939,7 +939,7 @@ Carried forward from Step 6 (still deferred; the owner decides each before Phase
 | 22 | Window about 640 px wide | The options row wraps with Delete Selection (and now each amount control) as one unit; the header stays usable; the dialog fits | — |
 | 23 | In Firefox as well as Chrome, repeat Step 6 checks 1, 3, 9, 10 and 17 | All behave as in Chrome, including Escape and focus return in the dialog | Not checkable in headless Firefox |
 
-#### Step 9: Re-applying the Last Delete When Edge Settings Change (provisionally approved; committed as a checkpoint; manual QA outstanding)
+#### Step 9: Re-applying the Last Delete When Edge Settings Change (provisionally approved; committed as a checkpoint; manual QA reconciled in Step 12)
 
 Right after a Delete, a finished change of Edge cleanup or Feather updates that Delete instead of only setting the next one: the Delete is made again, from the image as it was before it and the selection it deleted, with the amounts now set. It stays one edit with one Undo step. Step 8's algorithms, its synchronous processing and its session-wide amounts are unchanged; Step 8's manual QA, including the nine deferred Step 6 checks, is still outstanding and is not affected by this step's own checklist below.
 
@@ -1053,7 +1053,7 @@ Problem found in review: after Redo the controls can show other amounts than the
 - Browser: `edge-adjust.mjs` adds the Redo mismatch (3 / 2 shown over a 1 / 0 result): Tab five times and Shift + Tab five times through both controls, focusing and leaving each part, a drag from 3 to 5 and back, ArrowRight and ArrowLeft held together, typing 4 then 3 and Enter, typing 5 then Escape, Enter and leaving without a change: nothing computed and the entry still 1 / 0; then Feather changed to 0 updates the Delete to exactly 3 / 0, and tabbing through again changes nothing. Also the status bar note (shown only while adjustable, gone with a selection, hidden at 760 px with no sideways scrolling, no height change). With the old behaviour put back on purpose, exactly the seven Redo mismatch checks fail.
 - The confirmation case changed accordingly: an amount committed by the focus move into the dialog is set (not applied); after Cancel, a different amount updates the Delete, while re-entering the same amount does not (a known limitation above).
 
-Manual QA checklist (owner, desktop, Chrome and Firefox). Not yet run: none is marked passed. Images from `node scripts/browser/fixtures.mjs` (`scripts/browser/fixtures/`), plus your own screenshots. Look at results at 400–800% over the checkerboard.
+Manual QA checklist (owner, desktop, Chrome and Firefox). Not run as a whole; the status of each check is in Step 12, Reconciliation. Images from `node scripts/browser/fixtures.mjs` (`scripts/browser/fixtures/`), plus your own screenshots. Look at results at 400–800% over the checkerboard.
 
 | Check | Action | Passes when |
 | --- | --- | --- |
@@ -1260,7 +1260,7 @@ Step 11 integration notes (not decisions):
   - focus after trimming and announcements;
   - the selection and view (decisions 4 and 5), and browser timings and manual QA.
 
-#### Step 11: Auto Trim Tool (implemented; awaiting owner review and manual QA)
+#### Step 11: Auto Trim Tool (committed as a checkpoint, `d9fb99e`; manual QA reconciled in Step 12)
 
 The second manual checkpoint. Auto Trim works in the application: the toolbar's Auto Trim tool, its options row (padding presets, a padding field and Trim), one Undo step per trim, messages when there is nothing to trim, and a message when a trim makes the history drop older Undo steps. The Step 10 algorithm is used as it is (`planAutoTrim`, threshold 0); the Magic Wand, Delete Selection, Edge cleanup, Feather and Step 9's adjusting are unchanged. The manual QA of Steps 8 and 9, with the nine deferred Step 6 checks, is still outstanding and is not replaced by this step's checklist.
 
@@ -1391,7 +1391,7 @@ Owner decisions raised (Step 11):
 6. Message wording.
 7. Large-image synchronous pauses (Step 12).
 
-Manual QA checklist (owner, desktop, Chrome and Firefox). Not yet run: none is marked passed. Images: `node scripts/browser/fixtures.mjs` writes `trim-*.png` (and the earlier fixtures) to `scripts/browser/fixtures/`; your own pump, valve and VTScada images are just as important. Look at results at 100–800% over the checkerboard.
+Manual QA checklist (owner, desktop, Chrome and Firefox). Not run as a whole; the status of each check is in Step 12, Reconciliation. Images: `node scripts/browser/fixtures.mjs` writes `trim-*.png` (and the earlier fixtures) to `scripts/browser/fixtures/`; your own pump, valve and VTScada images are just as important. Look at results at 100–800% over the checkerboard.
 
 | Check | Action | Passes when | Known limitation |
 | --- | --- | --- | --- |
@@ -1416,6 +1416,398 @@ Manual QA checklist (owner, desktop, Chrome and Firefox). Not yet run: none is m
 | 11.19 Narrow window | About 640 px wide: switch between the Magic Wand and Auto Trim; Trim; show a nothing-to-trim message | The Auto Trim row stays on one line with Trim visible; no sideways scrolling; the message fits; the image stays in view when the row height changes | Below 640 px the app scrolls sideways (its minimum width since Phase 1) |
 
 Still outstanding from earlier steps, unchanged by this checklist: the Step 8 manual QA (8.1–8.23), the Step 9 manual QA (9.1–9.16), and the nine deferred Step 6 checks (12, 14, 15, 16, 19, 20, 21, 22, 23). None of them is passed by Step 11's testing.
+
+#### Step 12: Final Quality Assurance and Release Readiness (verification done; awaiting owner review)
+
+Final QA of everything Phase 3 delivers: the owner's manual results recorded, every outstanding manual check reconciled, a full automated regression in Chrome and Firefox (production build and React Strict Mode), pixel integrity and history, large-image performance and memory, edge cases, failures and accessibility.
+
+No product defect was found, and no application code changed: the production bundle is byte-identical to `d9fb99e`'s (`index-DHnWpORN.js`). One regression test file was added (`src/editor/phase3Workflow.test.ts`), and no dependency was added or removed. No Phase 4 work was started.
+
+Readiness in one paragraph: every automated check passes in both browsers, in production and under Strict Mode, including GPU process loss. Every content state checked is restored byte for byte through Delete, edge adjustments, Auto Trim, Undo, Redo, no-ops, failures and image replacement, and history stays within its limits. Memory returns to the same level over long sessions and when images are replaced. Nothing has failed. What remains is manual: 19 of the 67 numbered checks, in whole or in part, mostly a screen-reader session, the owner's judgement of the large-image pauses, and Firefox focus behaviour that headless Firefox cannot show. Three of these must be completed or explicitly dispositioned before the merge (Remaining Owner QA below). Recommendation: **READY FOR OWNER REVIEW**. This is not a merge approval; the owner and ChatGPT decide.
+
+##### Owner Priority Manual QA (owner-reported)
+
+The project owner, with ChatGPT, ran a focused nine-test manual session in real desktop browsers and reported it at the start of Step 12 (recorded 2026-11-08). **All nine passed; no issues were reported.** These tests were performed by the owner, not by Claude; Claude has not repeated or observed them. `pump.png` and `valve.png` are the images named in the owner's report.
+
+| Test | What the owner checked | Result |
+| --- | --- | --- |
+| T1 | Magic Wand background deletion on `pump.png` | Passed |
+| T2 | Edge cleanup visual quality at 1 px | Passed |
+| T3 | Feathering at 3 px, inspecting the pump's outlines and fine details | Passed |
+| T4 | Adjusting the previous Delete by changing Feather after deleting | Passed |
+| T5 | Single-step Undo / Redo after edge adjustments | Passed |
+| T6 | Auto Trim with 5 px padding: geometry, content preservation and Fit | Passed |
+| T7 | Undo / Redo across both background deletion and Auto Trim | Passed |
+| T8 | Image replacement safety with `pump.png` and `valve.png`: Cancel, the confirmation, and the padding reset | Passed |
+| T9 | Real desktop Firefox: keyboard operation, editing, Auto Trim, Undo / Redo, and the responsive layout around 640 px | Passed |
+
+A numbered check below is marked passed by this session only where an owner test covers its full requirement as described; where it covers part of a check, the rest is shown separately.
+
+##### Reconciliation of every outstanding manual check
+
+Status codes:
+
+- **A**: passed by automated verification (evidence named). Headless browsers drive real input through Chrome's DevTools protocol and Firefox's WebDriver BiDi; this is not counted as a screen reader, a visual judgement, or physical interaction on a real display.
+- **O**: passed by the owner's nine-test session (test named).
+- **O + A**: the owner's session and automated checks together cover the whole check (each part named).
+- **M**: manual verification still required (the part not covered is named).
+- **L**: known limitation or accepted risk; needs the owner's disposition where marked.
+- **F**: failed or blocked. None.
+
+Evidence abbreviations: `edit-workflow`, `edge-cleanup`, `edge-adjust`, `auto-trim`, `smoke`, `edit-ownership`, `gpu-crash` are the scripts in `scripts/browser/` (Step 12 runs below; production build in Chrome 157 and Firefox 159, and the development server under React Strict Mode); "unit" is `npm test`; "workflow test" is the new `src/editor/phase3Workflow.test.ts`; "Step 12 scratch QA" is the supplementary browser script described under Automated Regression.
+
+Step 6 deferred checks (the nine that must be completed or dispositioned before Phase 3 sign-off and merge):
+
+| Check | Status | Evidence / what remains |
+| --- | --- | --- |
+| 12 Steps 1, 3, 4 with JPEG, WebP, SVG, soft-edged PNG, 1-px lines | A | `edit-workflow` (both browsers, production and Strict Mode): Delete exact byte for byte, Undo exact with the selection, committed tolerances re-apply after Undo exactly, for a PNG, WebP, JPEG, SVG, half-transparent SVG, every-alpha PNG and WebP, a 1-pixel-line PNG and a 4K screenshot |
+| 14 Delete on an already-transparent selection | A | `edit-workflow` no-op, Step 12 scratch QA (1 × 1 transparent image), unit: nothing changes, selection kept, "Nothing was deleted…" placed in the status region. Hearing it spoken belongs to check 21 |
+| 15 4K and near-50 MP responsiveness | M, L | Re-measured in Step 12 (Performance below). The feel is the owner's judgement; the pauses are an accepted-for-now limitation awaiting the Step 6 decision 1 revisit. **Disposition needed before merge** |
+| 16 No question without edits or after undoing every edit | A | `edit-workflow`: first and unedited images (picker), after undoing every edit (picker); paste and drop with synthetic events; the decision is the same function for every source (`hasUnexportedEdits`). Real drag-and-drop and Ctrl + V already passed manually with the confirmation in Step 6 check 18 |
+| 19 While the dialog is open nothing else happens; focus returns | A (Chrome), M (Firefox focus return) | `edit-workflow` (Delete, Ctrl + Z, a pasted image; Escape and focus return in Chrome); Step 12 scratch QA (Ctrl + O opens no picker and is prevented, a dropped file, no second question, both browsers). Firefox focus return after the dialog cannot be checked headless |
+| 20 Continue with an invalid file keeps the edits | A | `edit-workflow` (truncated PNG); Step 12 scratch QA (truncated PNG, a text file named `.png`, an SVG with a script, an empty file, in both browsers): an error, the edited pixels, revision, Undo history and depth unchanged, Undo still works |
+| 21 Screen reader (Orca) | M | Not performed. Automated checks only establish the names, roles, live regions and texts (Accessibility below) |
+| 22 About 640 px wide | O + A | T9 (layout around 640 px, Firefox); `edge-cleanup` and `auto-trim` (rows wrap as units at 640 px); Step 12 scratch QA (the dialog fits a 640 px window, no sideways scrolling, both browsers) |
+| 23 Firefox: Step 6 checks 1, 3, 9, 10, 17 | O + A, M (17 in Firefox) | T9 covers 1 and 3 in real Firefox; `edit-workflow` covers 9 (held Delete, held Ctrl + Z) and 10 (Delete and Ctrl + Z in the tolerance field) in Firefox; 17 in Firefox (Escape and focus return) remains manual |
+
+Step 8 checks:
+
+| Check | Status | Evidence / what remains |
+| --- | --- | --- |
+| 8.1 Defaults | A | `edge-cleanup`: both controls at 0 px, labels, units, range, Tab position |
+| 8.2 0 / 0 is Step 6 | A (+ T1) | `edge-cleanup`: at 0 / 0 the document is byte for byte the Step 6 Delete on `edge-hmi.png` and nine other images; T1 on `pump.png` |
+| 8.3 Cleanup on HMI art | O + A | T2 (`pump.png` at 1 px, visual); `edge-cleanup`: `edge-hmi.png` at 1 px byte for byte the algorithm's output in Node, in both browsers |
+| 8.4 Undo / Redo exact | O + A | T5, T7; `edge-cleanup`, `edge-adjust`: every byte restored, Redo exact, one step per Delete |
+| 8.5 Re-apply after Undo | A | `edit-workflow` (committed tolerances re-apply exactly after Undo); unit (Undo restores the click bound to the new revision; workflow test) |
+| 8.6 Thin lines, Edge cleanup 5 | A | unit (`edgeCleanup.test.ts`: all lines and their faint anti-aliasing kept); `edge-cleanup`: `edge-lines.png` byte-exact in both browsers. A visual look is optional |
+| 8.7 Feather spares thin features | A | unit (`feather.test.ts`, `adjustDelete.test.ts` thin lines: lines unchanged at every amount); `edge-cleanup`, `edge-adjust` (`edge-lines.png` byte-exact) |
+| 8.8 Feather on thick shapes | O | T3 (feather 3 px, outlines and fine details inspected on `pump.png`, no issues). The fading of outlines on thick shapes is the known effect of Step 8 decision 1 |
+| 8.9 Combined on a soft photo | M (low) | Bytes verified (`edge-cleanup`, `edge-photo.jpg` at 2 / 2 and 5 / 5); the owner has not looked at cleanup with feathering on a photograph |
+| 8.10 Logo on colour | A | Cleanup is byte-identical to the Step 7 prototype the owner reviewed visually on the same kind of scene (13,140 comparisons, Step 8); `edge-cleanup` `edge-logo.png` byte-exact |
+| 8.11 Corners and text | A | As 8.10 (`edge-corners.png`); unit (corners restored, small text kept) |
+| 8.12 Partially transparent PNG | A, L | As 8.10 (`edge-alpha.png`); limitation: flattened colour cannot be separated, and the browsers' import alters some partial-alpha colours (Step 8) |
+| 8.13 Image border | A | unit (border never background); `edge-cleanup` (`edge-border.png` byte-exact) |
+| 8.14 JPEG artwork | A, L | `edge-cleanup` (`edge-hmi.jpg` byte-exact); limitation recorded (grey next to a dark outline at larger amounts) |
+| 8.15 SVG | A, L | `edge-cleanup` (`edge-svg.svg` byte-exact); limitation recorded (as 8.14) |
+| 8.16 Keyboard | A, M (Firefox: leaving an emptied field) | `edge-cleanup`: Tab order, arrows, Home / End, typing, clamping, Escape, Delete inside a field, in both browsers; leaving an emptied field in Chrome. T9 (keyboard in Firefox, general) |
+| 8.17 Nothing while adjusting | A | `edge-cleanup` (with a selection nothing is computed), `edge-adjust` (drags and held keys compute nothing until finished) |
+| 8.18 Kept for the session | A | `edge-cleanup` (kept across a Delete, its Undo and opening another image); unit (kept across Redo); nothing is persisted, so a reload resets |
+| 8.19 No-op with amounts | A | unit (no-op whatever the amounts); workflow test (no-op Deletes with random amounts change nothing, keep Redo); spoken part: Orca |
+| 8.20 Screen reader | M | Not performed |
+| 8.21 Narrow window | O + A | T9; `edge-cleanup` (640 px: each amount control wraps as a unit) |
+| 8.22 Large images | M, L | Re-measured in Step 12; feel and acceptance as check 15 |
+| 8.23 Real assets | M (low; partly T2, T3) | `pump.png` passed at 1 px cleanup and 3 px feather; other VTScada screenshots and equipment photos not reported. Recommended, not blocking |
+
+Step 9 checks:
+
+| Check | Status | Evidence / what remains |
+| --- | --- | --- |
+| 9.1 Slider drag | O + A | T4 (adjusting Feather after a Delete on a real desktop); `edge-adjust`: a pointer drag with six moves computes nothing until release, then adjusts once; status bar note and "updating the last Delete" tooltip shown |
+| 9.2 Keyboard | A, M (low: the visible focus ring) | `edge-adjust`: each arrow press adjusts once at release; holding adjusts once (both browsers); focus stays on the slider (Chrome). T9's keyboard operation in Firefox passed, but the focus ring was not reported separately |
+| 9.3 Typing | A | `edge-adjust`: nothing until Enter; Escape restores |
+| 9.4 No build-up | A | `edge-adjust` and unit: every adjustment equals one fresh Delete with those amounts; 0 / 0 is the exact Delete; repeated amounts give identical bytes. Step 12 workflow test: 10 consecutive adjustments on three scenes and 76 random ones |
+| 9.5 One Undo | O + A | T5; `edge-adjust`: one Ctrl + Z restores every byte and the selection, Ctrl + Y the latest result, which can be adjusted again |
+| 9.6 Next Delete | A | `edge-adjust`, unit: with a selection the amounts set the next Delete; the first Delete unchanged; Undo one at a time |
+| 9.7 Magic Wand options | A | unit (`adjustDelete.test.ts`: options neither change the image nor end adjusting) |
+| 9.8 After Undo | A | unit; workflow test (Undo always ends adjusting; the restored selection is for the next Delete) |
+| 9.9 Confirmation | A (Chrome), M (Firefox, low) | `edge-adjust`: a typed amount while the dialog opens is set, not applied; after Cancel, Enter applies. The Firefox path depends on the blur that headless Firefox never fires |
+| 9.10 Thin lines | A | `edge-adjust` (`edge-lines.png`, seven adjustments, byte-exact), unit |
+| 9.11 Screen reader | M | Not performed |
+| 9.12 Large images | M, L | Re-measured in Step 12; as check 15 |
+| 9.13 Firefox | O + A, M (Tab out of an edited field in Firefox) | T4, T9 in real Firefox; `edge-adjust` 9.1–9.3 in Firefox except blur. Leaving a field commits through the same code as the tolerance field, which passed manually in Firefox in Phase 2 |
+| 9.14 Real assets | M (low; partly T4, T5) | As 8.23 |
+| 9.15 Redo with other amounts shown | A (Chrome), M (Firefox, low) | `edge-adjust`: Tab / Shift + Tab, focus moves, drag back, held keys, retyping, Escape never update the Delete; an actual change does. Focus events do not fire in headless Firefox |
+| 9.16 Status bar note | A | `edge-adjust`: shown only while adjustable, gone with a selection, back after Redo, hidden below 800 px with no height change |
+
+Step 11 checks:
+
+| Check | Status | Evidence / what remains |
+| --- | --- | --- |
+| 11.1 The tool | O + A | T6; `auto-trim`: row contents, presets, field, Trim, status bar, clicks select nothing |
+| 11.2 Padding computes nothing | A | `auto-trim`: presets, 37, 75 → 50, "abc", Escape, arrows, Page keys; image, size and Undo unchanged |
+| 11.3 Pump after Delete | O + A | T6 (5 px, geometry, content, Fit); `auto-trim` (`trim-pump.png` trimmed to exactly the full-scan rectangle, every byte) |
+| 11.4 Own pump and valve at 0, 20, 50 | A, M (low) | `auto-trim` and unit: 0 tight to the faintest pixel, 50 clipped per edge, never enlarged, byte-exact; T6 covered 5 px on `pump.png` only. The owner's pump and valve images at 0 / 20 / 50: recommended, not blocking |
+| 11.5 Thin lines and faint edges | A | unit (lines, hairline, single pixels after Deletes with four edge settings, trimmed at 0); `auto-trim` (faintest pixels of a soft shadow kept) |
+| 11.6 Fit | O + A | T6; `auto-trim` (fitted after the trim, Undo and Redo); unit (fitted whatever the zoom and pan were before) |
+| 11.7 Undo and Redo | O + A | T7; `auto-trim` (keys and header buttons, "Undo Auto Trim" / "Redo Auto Trim", exact) |
+| 11.8 Selection after Undo | A | unit (the click re-applies exactly after the second Undo); workflow test |
+| 11.9 After a Delete (Step 9) | A | `auto-trim`, unit: the note goes, the amounts then set the next Delete |
+| 11.10 Nothing to trim | A | `auto-trim` (four cases, messages, dismissal, both browsers); Step 12 scratch QA (1 × 1 images) |
+| 11.11 Already trimmed | A | unit (same or larger padding: nothing; smaller: trims further, one more step) |
+| 11.12 Opening images | O + A | T8 (padding reset); `auto-trim` |
+| 11.13 Replace confirmation | O + A | T8 (Cancel, the confirmation); `auto-trim` (Trim does nothing behind the dialog) |
+| 11.14 Keyboard only | O + A | T9 (keyboard operation including Auto Trim in real Firefox, where headless button activation is impossible); `auto-trim` in Chrome |
+| 11.15 Screen reader | M | Not performed |
+| 11.16 Large images | M, L | Re-measured in Step 12; as check 15 |
+| 11.17 History eviction | A | `auto-trim` (25 Deletes then a trim: message, oldest step dropped, both browsers); unit and workflow test (counts and bytes; the dropped count in the notice checked after every recorded edit) |
+| 11.18 Firefox | O + A | T9 (11.1, 11.3, 11.7, 11.14 in real Firefox); `auto-trim` (11.10 in Firefox) |
+| 11.19 Narrow window | O + A | T9; `auto-trim` (640 px: one line, Trim visible, message fits, no sideways scrolling) |
+
+Totals (67 numbered checks: 9 + 23 + 16 + 19; T1–T9 recorded separately):
+
+- Failed or blocked: none.
+- Fully passed (A, O or O + A, some with a recorded limitation): 48.
+- Still manual, in whole or in part: 19. They group into five short sessions:
+  - Screen reader (6.21, 8.20, 9.11, 11.15): one Orca session.
+  - Large-image pauses (6.15, 8.22, 9.12, 11.16): one judgement plus the owner's disposition.
+  - Firefox focus and blur (6.19 focus return, 6.23 check 17, 8.16 emptied field, 9.9, 9.13 Tab out, 9.15).
+  - Visual review of real assets (8.9, 8.23, 9.14, 11.4).
+  - The visible focus ring (9.2).
+
+11.14 is counted as passed by T9. Operating Auto Trim by keyboard in real Firefox, the part headless Firefox cannot do, is taken to include seeing where focus is. If the owner did not look at the focus rings during T9, 11.14 joins 9.2 for that part only.
+
+##### Remaining owner QA, ranked by risk
+
+Required before the Phase 3 merge (each completed, or explicitly dispositioned by the owner, as the Step 6 deferral requires):
+
+1. **Large-image pauses** (6.15, 8.22, 9.12, 11.16; Step 6 decision 1, revisited below). On the desktop, Chrome and Firefox: open `edge-hmi-50mp.png` (`node scripts/browser/fixtures.mjs` writes it to `scripts/browser/fixtures/`), Magic Wand tolerance 10 at the top-left corner, Delete; type 1 in Edge cleanup and press Enter, then 5 in Feather and Enter; Ctrl + Z, Ctrl + Y. Then `trim-photo-50mp.png`, tolerance 20 at the top-left, Delete, Auto Trim, Trim, Ctrl + Z, Ctrl + Y. Expect the pauses in the Performance table below (up to about 2.2–2.7 s for 5 / 5 on the edge-dense image, about 0.6–0.8 s for the photographic trim), no error, and the page responding again afterwards. Decide whether they are acceptable for Phase 3.
+2. **Screen reader, Orca on Linux** (6.21, 8.20, 9.11, 11.15), about 15 minutes, or an explicit decision to defer it to a dedicated accessibility pass. Check:
+   - After Delete: "Selection deleted: … pixels are now transparent." is read once. Ctrl + Z / Ctrl + Y read "Undone: Delete Selection." / "Redone: Delete Selection." once each.
+   - Tabbing to the header buttons reads "Undo Delete Selection" / "Redo Delete Selection".
+   - Opening another image after a Delete reads the dialog's title "Discard unexported edits?" and its text.
+   - The Edge cleanup slider reads "Edge cleanup" and "0 px"; its field reads "Edge cleanup in pixels, 0 to 5".
+   - Right after a Delete, changing an amount with the keyboard reads "Delete Selection updated with Edge cleanup … px and Feather … px: …" once.
+   - In the Auto Trim row, the presets read as toggle buttons "5 px" with their pressed state, and the field reads "Padding in pixels, 0 to 50".
+   - Trim reads "Auto Trim applied: … trimmed to … px." once. Pressing Trim again reads the nothing-to-trim message once.
+3. **Firefox dialog** (6.19 focus return, 6.23 check 17), 2 minutes, in real Firefox: Delete, then open another image with the button; press Escape. The dialog closes, nothing changes, and focus is back on the Open button. Repeat with Cancel.
+
+Recommended, not blocking (low risk; the logic is shared with paths already verified):
+
+4. **Firefox, leaving fields** (8.16, 9.9, 9.13, 9.15): in real Firefox, right after a Delete, type 2 in Edge cleanup and press Tab. The Delete updates once, and the status bar note stays. Clear the field, then Tab away: the value comes back and nothing is computed. Then the 9.15 sequence by keyboard.
+5. **Visual review on real assets** (8.9, 8.23, 9.14, 11.4, and the 9.2 focus ring): `edge-photo.jpg` at Edge cleanup 2 and Feather 2; your VTScada screenshots at cleanup 1; your valve trimmed at 0, 20 and 50 px. Note anything that looks worse than expected.
+
+##### Automated regression (Step 12)
+
+Unit and build (this machine, Node 24.18):
+
+| Command | Result |
+| --- | --- |
+| `npm run lint` | Clean |
+| `npm run typecheck` | Clean |
+| `npm test` | 67 files, 1,195 tests, all passing (baseline 66 files, 1,191; 4 added) |
+| `npm run build` | Passes; bundle unchanged (351.87 kB, 111.51 kB gzip) |
+
+Browser scripts (`scripts/browser/`, headless Chrome 157 and Firefox 159, device pixel ratio 1 unless stated). Passed means every check passed; nothing failed, and no check was skipped other than those the scripts skip by design: headless-Firefox focus, blur and button keys, which are reported in their output.
+
+| Script | Production build | Development server (React Strict Mode) |
+| --- | --- | --- |
+| `smoke.mjs` (formats, rendering, overlay at ratios 1 and 2) | 340 passed | — |
+| `edit-workflow.mjs` | 507 passed with `--no-perf`; 515 with timings and the 50 MP stress run | 507 passed |
+| `edit-ownership.mjs --mode both` | 52 passed (production and development) | (included) |
+| `edge-cleanup.mjs` | 885 passed with `--no-perf`; 901 with timings | 885 passed |
+| `edge-adjust.mjs` | 175 passed with `--no-perf`; 199 with timings | 175 passed |
+| `auto-trim.mjs` | 146 passed with `--no-perf`; 174 with timings; 77 with `--kill-test-gpu-process` (Chrome) | 146 passed |
+| `gpu-crash.mjs --kill-test-gpu-process` | 23 passed (software rendering), 23 (`--gpu`), 46 (`--dpr 1,2`) | — |
+
+The Strict Mode runs used the owner's own Vite development server, already running from this working tree on port 5173 (it was left running). No React warnings or console errors appeared in any run.
+
+Supplementary Step 12 browser QA (scratch scripts in the session's scratchpad, not added to the repository, which reuse `scripts/browser/lib/`). Production build, both browsers, all passing:
+
+- 1 × 1 images (opaque, alpha 1, alpha 0): Trim, Select All, Delete, Trim again, Undo and Redo are exact, with the right messages (18 checks per browser).
+- Phase 2 selection operations in the real application: Magic Wand New, Add and Subtract, Contiguous and Global; a committed tolerance re-applying an Add over its recorded base; Grow, Shrink, Invert, Select All and Clear. Each selection is identical to the same algorithms run in Node, and none adds history (16 checks per browser).
+- Invalid input after an edit (truncated PNG, text renamed `.png`, SVG with a script, empty file): an error each time; the edited pixels, revision, Undo history and depth are kept, and Undo still works.
+- Display-image failures in the middle of the workflow, for an adjustment, a trim and a Redo: an error, nothing changed, and the retry succeeds.
+- While the replace dialog is open: Ctrl + O, Delete, Ctrl + Z, a paste and a file drop do nothing and ask no second question. The dialog fits a 640 px window.
+- Long session: 20 cycles of replace, Delete, adjust, Trim, Undo × 2, Redo × 2 at 4K, alternating a flat and a photographic background, every state exact (30 cycles in Chrome in a second run).
+- 50 MP photographic Delete and trim, replaced twice.
+- Peak memory at 50 MP (Chrome).
+
+##### Pixel integrity and editing history
+
+`src/editor/phase3Workflow.test.ts` (4 tests, about 1 s) drives the application's own commands together:
+
+- `editActionCommand` for Delete Selection, Auto Trim, Undo and Redo; `adjustDeleteCommand` for committed amounts; real Magic Wand clicks and selection actions.
+- Mixed at random over 60 seeds × 90 steps with no-ops, replayed stale actions, display-image failures, imports in progress, failed and successful imports, under three history regimes: 1–5 entries; a 0-byte budget, which keeps only the newest entry; and the defaults, 25 entries and 256 MiB.
+- Its model keeps a copy of every content state, hidden colour included. Expected results come from the model's own copies, never from history:
+  - A trim, by a full alpha scan.
+  - A Delete at 0 / 0, by setting alpha 0 on the selected pixels.
+  - An adjusted Delete, by a fresh Delete of the model's copy of the pixels before it.
+- After every step it checks: the document byte for byte; the selection; the Magic Wand click, bound to the current revision; both stacks and their kinds; the retained-bytes recount; the 25-entry and byte limits; the dropped-steps count in the notice; edit depth and unexported state; adjustability; availability; padding and amounts; and a fresh revision with the action's own display image.
+- One run covered 284 Deletes, 76 adjustments, 76 trims, 303 Undos, 103 Redos, 565 no-ops, 726 stale replays, 49 failures, 167 imports and 25 evicted steps.
+- A fixed sequence on the thin-line, icon and JPEG-icon scenes: Delete, ten adjustments (some repeated, one back to 0 / 0), Trim at 0, Undo, Undo, Redo, Redo, Undo, Undo.
+- 13 deliberately introduced defects were run against it. It caught 11:
+  - adjustments building on the previous result;
+  - Undo keeping the edit depth;
+  - the dropped-steps count;
+  - Redo never adjustable;
+  - imports keeping the history or the depth;
+  - padding off by one;
+  - the selection before an edit not recorded;
+  - the entry limit off by one;
+  - adjusting while something can be redone;
+  - a trim keeping the Magic Wand click.
+
+  The other two are caught by the existing tests: Undo keeping the Delete adjustable (equivalent in this test, because Undo of a Delete always restores a selection, which blocks adjusting on its own), and an adjustment never evicting by bytes (not reachable with this test's budgets). The defects were introduced only in a scratch copy of `src/`, never in the repository, because the owner's development server was serving the working tree.
+
+How each pixel-integrity requirement is verified:
+
+| Requirement | Verified by |
+| --- | --- |
+| No-op operations leave the image byte-identical | Workflow test: no-op Deletes and trims return the same document, image and history objects; selection and option changes never touch pixels. Browser: the no-op checks in `edit-workflow` and `auto-trim` |
+| Deleted pixels keep their hidden RGB | Unit (Step 2 onwards); `edit-workflow` compares every RGB byte under alpha 0; the workflow test's guarantees check |
+| Edge cleanup and feathering are deterministic | `edge-cleanup` / `edge-adjust`: Chrome, Firefox and Node give identical bytes; the same amounts always give the same bytes |
+| Repeated adjustments never degrade | Workflow test and `adjustDelete.test.ts`: each adjustment equals one fresh Delete; back at 0 / 0, exactly the first Delete, with the same patch size |
+| Undo restores exact bytes; Redo recreates them | Every timed and checked Undo / Redo in the browser scripts; the workflow test at every step |
+| Auto Trim keeps every retained byte; its Undo restores pixels, size, selection and click | `auto-trim` (byte for byte against an in-page full scan); unit; workflow test |
+| No-ops keep Redo and create no entry | Workflow test (565 no-ops); `autoTrimCommand.test.ts` |
+| Mixed sequences (Delete → adjust → Trim → Undo → Redo) | Workflow test (fixed sequence and random mixes); scratch long session in both browsers |
+| Replacement never reuses another image's history | Workflow test (167 imports, then every earlier action replayed and rejected); `edit-workflow`; scratch 50 MP replacement |
+| 25-step and 256 MiB limits | Unit (`editHistory.test.ts`, 50 MP-sized entries); `auto-trim` (25 Deletes then a trim); workflow test (three regimes) |
+
+The only byte difference found anywhere is the browsers' import of partly transparent pixels, which store colour premultiplied (Phase 1 behaviour, recorded in Step 8). For example, a 1 × 1 pixel `(10, 200, 30, 1)` opens as `(0, 255, 0, 1)` in Chrome and `(255, 255, 255, 1)` in Firefox, and colour under alpha 0 in a file opens as 0, 0, 0. Alpha is always exact. Phase 3 edits work on the pixels as imported.
+
+##### Performance and memory (measured in Step 12)
+
+Production build, headless, this machine (i7-14700HX, 32 GB), one run each unless a range is given. Times are the whole synchronous handler, from the key press or click to the commit and its layout effects, display image included. They agree with the Step 6–11 measurements: nothing has regressed.
+
+| Operation | 3840 × 2160, Chrome / Firefox | 8660 × 5773 (50 MP), Chrome / Firefox |
+| --- | --- | --- |
+| Delete at 0 / 0, flat or screenshot background | 92–130 / 85–98 ms | 493–800 / 453–484 ms |
+| Delete at 0 / 0, edge-dense HMI | 91 / 84 ms | 517 / 500 ms |
+| Delete, Edge cleanup 1 / 5 (HMI) | 217 / 298 ms; 202 / 359 ms | 1,051 / 1,481 ms; 1,229 / 1,681 ms |
+| Delete, Feather 5 (HMI) | 221 / 241 ms | 1,291 / 1,425 ms |
+| Delete at 5 / 5 (HMI) | 437 / 462 ms | 2,247 / 2,590 ms |
+| Adjusting the last Delete (HMI, 1 / 0 to 5 / 5) | 187–378 / 200–462 ms | 1,060–2,227 / 1,177–2,722 ms |
+| Undo, Redo of a Delete | 34–66 / 48–85 ms | 196–324 / 247–347 ms |
+| Auto Trim, flat background | 23–66 / 29 ms | 235 / 199 ms |
+| Auto Trim, photographic background | 99–137 / 123 ms | 541–796 / 604–697 ms |
+| Undo of a trim | 26–30 / 48 ms | 146–157 / 218–237 ms |
+| Redo of a trim | 2–4 / 4–7 ms | 8–109 / 11–155 ms |
+| Nothing to trim, fully transparent image | — | 265 / 52 ms |
+
+Memory:
+
+- Live display images: exactly one after every section of every script, in both browsers.
+- Retained memory (Chrome, JavaScript heap and ArrayBuffers after garbage collection) was the same after every cycle:
+  - 4K Delete, Undo and Redo, 5 cycles: 37.1 MB.
+  - 50 MP, 3 cycles: 195.4 MB.
+  - 50 MP edge-dense, through ten Deletes at different amounts: 245–255 MB (the history entry grows from 2.1 to 10.6 MB with the amounts).
+  - After a 50 MP photographic trim: 382 MB. This is the 142.8 MB entry, the trimmed image, and the full image React's previous render keeps until its next render. Replacing the image brings it to 1.8 MB, twice in a row.
+- Peak resident memory of Chrome's renderer during 50 MP operations: 378–509 MB above its level just before (2–2.7 image-sized buffers), all returned afterwards.
+  - Delete at 0 / 0: +383 MB.
+  - Adjusting to cleanup 5: +422 MB; to 5 / 5: +509 MB.
+  - Undo / Redo: +430 / +378 MB.
+  - Photographic trim: +385 MB; its Undo +378 MB, its Redo +92 MB.
+  - The renderer peaked at 1.0–1.35 GB in total.
+- Long session (4K, 20 cycles in each browser, 30 more in Chrome):
+  - Every state was exact, with one live display image.
+  - ArrayBuffers were 32.8 MB (flat) and 63.9 MB (photographic, with its 29.2 MB entry) after every cycle.
+  - The JavaScript heap went from 2.4 to 3.3 MB over 30 cycles, rising less each time (+0.6, +0.2, +0.1 MB per ten cycles). This includes the test harness's own record of every bitmap created.
+  - No operation slowed progressively. Chrome's flat 4K trim stepped once, from 23–40 ms to 60–66 ms at the fifth or sixth cycle, then stayed flat to cycle 30. The same happened with only one kind of image, which suggests the JavaScript engine re-optimising, not anything the application accumulates. Firefox was flat throughout.
+- Edge-dense and flat 50 MP history entries stay at a few megabytes. Only the photographic trim is large (142.8 MB), as Step 10 measured.
+
+Feedback during long operations: there is none. The work is synchronous (P3-D11), so the page does not paint, and does not respond, until it ends. The cursor does not change and no message appears.
+
+- At 4K every operation finishes in under half a second (at most 0.46 s, Delete or an adjustment at 5 / 5). Without edge amounts, Delete, Undo, Redo and trims take about 0.15 s or less; with them, 0.16–0.46 s.
+- Near 50 MP, Delete, Undo, Redo and trims without edge amounts take 0.2–0.8 s. Edge cleanup and feathering on edge-dense images take about 0.9–2.7 s.
+- No error or hang was observed in any run. By design (Step 6), input that arrives during a pause is handled afterwards and computed from the committed state, so it never applies to a stale image. Input during a pause was not tested separately in Step 12.
+
+##### Edge cases and failures
+
+All verified in the browsers (production) and in unit tests unless stated; none failed.
+
+- Fully transparent images (1 × 1, small, 50 MP): Delete changes nothing; Trim says there is nothing visible.
+- Already trimmed and fully opaque images: Trim says why there is nothing to trim. Single-pixel images: all of the above, and Delete / Undo / Redo exact.
+- Thin lines and wiring, anti-aliased text and logos, semi-transparent pixels, HMI graphics: the edge fixtures, byte-exact against Node at every amount; lines and small text kept (unit).
+- Large photographic images: the 4K and 50 MP photographic fixtures.
+- Malformed or unsupported input, and failed decoding, while an edited image is open: an error, and everything kept. The Phase 1 import checks cover the rest.
+- A failed edit, Undo, Redo, adjustment or trim (display image creation forced to fail): an error message, nothing changed, the display image released, and a retry works.
+- Replacing an image after editing: the confirmation every time; Cancel keeps everything; Continue clears the history and releases the old image and its history (memory measured).
+- Editing during dialogs and imports: nothing happens behind the dialog; edits are unavailable while an import runs (held imports in `edit-workflow`, `edge-adjust` and `auto-trim`).
+- GPU process loss: the canvas and overlay are restored exactly with no user action, also after a trim (Chrome: software rendering at ratios 1 and 2, GPU rendering at ratio 1). Headless Firefox has no GPU process to stop; its restoration wiring is verified with a synthetic event (Step 4).
+- Undo / Redo near the history limits: 25 Deletes and a trim (oldest step dropped, message shown); random sequences at 1–5 entries and at a 0-byte budget.
+
+##### Accessibility and real-browser limitations
+
+What automated checks establish:
+
+- Every control has an accessible name, and the toggle buttons and tools expose `aria-pressed`. Unavailable actions use `aria-disabled`, so focus stays on them. The fields' names give their ranges, and the sliders' value text has its unit.
+- Edit errors are alerts. Outcomes are announced once each, in polite status regions: the hidden one, or the workspace's for shown notices.
+- The dialog is modal (`showModal`), with its title and text as its name and description. Focus starts on Cancel and returns afterwards (Chrome), and Escape cancels (Chrome).
+- Keyboard: Tab order, arrows, Page, Home and End, Enter, Escape, held keys, and Space and Enter on buttons (Chrome; in Firefox through T9).
+- Numeric fields round, clamp and restore, and their range is validated (unit and browsers).
+- Reduced motion stops the marching ants and shortens transitions to effectively none (Phase 2, Step 11).
+- At 640 px the options rows wrap as units, the header stays usable, the dialog fits, and nothing scrolls sideways. Below 640 px the app scrolls sideways, its minimum width since Phase 1.
+
+What they cannot establish, and how it is covered:
+
+- What a screen reader actually says, and in what order: Remaining Owner QA 2.
+- Whether focus rings are visible enough on a real display: T9 in part, and item 5.
+- Firefox's focus, blur and dialog Escape, which headless Firefox cannot show: items 3 and 4.
+- Real drag and drop from a file manager, and the real clipboard: passed manually in Step 6 check 18 and Phase 1–2. The scripts use synthetic events.
+- Colour contrast was not measured in Step 12 (no colours changed).
+
+##### Defects found and fixed in Step 12
+
+None. No confirmed defect was found in Phase 3 functionality, so no application code was changed, and no accepted Step 8, 9, 10 or 11 behaviour was altered. Things investigated and found not to be defects:
+
+- Chrome's one-time trim slowdown in long sessions: the JavaScript engine, not the application (above).
+- The heap's slow early growth: it saturates, and it includes the harness's own records.
+- The import colour quantisation of faint pixels: Phase 1 browser behaviour, recorded.
+- Chrome's 265 ms scan of a fully transparent 50 MP image, against Firefox's 52 ms: as in Step 11.
+
+##### Known limitations and accepted risks of Phase 3
+
+Moderate:
+
+- Synchronous pauses near 50 MP: 0.2–0.8 s for Delete, Undo, Redo and trims, and 1–2.7 s for Delete or adjustments with edge amounts on edge-dense images. There is no progress indication. The decision is below.
+- Screen-reader behaviour is unverified in Phase 3 (Remaining Owner QA 2).
+- A 50 MP trim of a deleted photographic background retains about 143 MB of history, and older steps are dropped when the history already holds more than about 100 MB. Peak renderer memory during 50 MP operations is up to about 0.5 GB above the open image.
+- Fractional display scaling (`devicePixelContentBoxSize`, open since Phase 2 Step 8), and the Chrome DPR 1.5 one-row checkerboard level: unchanged.
+
+Minor:
+
+- The faint edge left by exact Delete at 0 px, by design (P3-D4).
+- Cleanup trusts the selection, and flattened colour cannot be recovered.
+- The grey-next-to-outline case at higher cleanup amounts; feathering fades the outlines of thick shapes.
+- An amount changed right after a Delete updates that Delete.
+- After Redo, the amounts shown can differ from those the result was made with.
+- Threshold 0 lets a faint stray pixel block trimming.
+- Clipped padding can be uneven.
+- Trimming takes two clicks after a Delete, and there is no separate Trim Tight control.
+- A nothing-to-trim message stays until it is dismissed.
+- Delete and adjustments drop Undo steps silently.
+- The browsers' import changes the colour of faint partly transparent pixels.
+- No "edited" marker, and no warning when closing the tab.
+- Editor actions must never be dispatched in a React transition: a convention, not enforced.
+
+Test coverage only:
+
+- Headless Firefox: no window focus, blur, dialog Escape or button activation by keys.
+- Synthetic paste and drop events.
+- WebKitGTK is deferred to desktop testing (Phase 7).
+
+##### Decisions for the owner
+
+1. Step 6 decision 1, revisited as planned: should large-image edits stay synchronous?
+   - Recommendation: keep them synchronous for Phase 3, with no Web Worker and no architecture change now, and record the pauses as a known limitation.
+   - Measured evidence: 4K and smaller images, the main use case (screenshots, HMI graphics), never pause more than 0.46 s. Only images near the 50 MP limit with edge amounts exceed 1 s, and nothing fails or is lost.
+   - A "Processing…" indication would need the work to start after a frame is painted, which changes the synchronous `flushSync` dispatch the display-image ownership relies on. That would be its own reviewed change. A Worker would add copying, asynchronous commits and stale-result handling to every edit.
+   - If wanted, propose the indication in Phase 6 (workflow polish), after export exists.
+2. Earlier decisions still recorded as provisional or unanswered. The owner's T3, T6 and T8 results agree with them as implemented, but this document does not mark them decided:
+   - Step 8: 1, ship the thickness-limited feathering; 2, the amounts kept for the session; 3, synchronous (as 1 above); 4, the wording.
+   - Step 11: 1–7, including where Trim lives and Trim Tight, Fit on Undo and Redo, visible no-op and eviction messages, and the padding control.
+   - P3-D6: threshold 0, and padding clipped at the edges.
+3. Orca: run it before the merge (recommended), or defer it explicitly to a dedicated accessibility pass.
+4. Whether to commit the Step 12 scratch checks as maintained scripts. They are not needed for the merge: their findings are recorded here, and the maintained scripts cover the same paths, except Grow, Shrink and Invert in the browser and peak memory.
+
+##### Release-readiness checklist
+
+- [x] Lint, type checking, unit tests (1,195) and the production build pass.
+- [x] Every browser script passes in Chrome and Firefox, in production and Strict Mode, including GPU process loss.
+- [x] Pixel integrity: exact bytes through every mixed sequence tested, with no-ops byte-identical and no degradation from repeated adjustments.
+- [x] History: exact Undo / Redo, limits respected, no reuse across images, no-ops keep Redo.
+- [x] Memory: one live display image, no growth over long sessions, history released on replacement.
+- [x] Failures: errors shown, state preserved, resources released, retries work.
+- [x] Owner priority manual QA T1–T9 recorded (owner-reported, all passed).
+- [x] All 67 outstanding manual checks reconciled; none failed.
+- [ ] Large-image pauses judged and Step 6 decision 1 dispositioned (Remaining Owner QA 1). **Required before merge.**
+- [ ] Orca session, or an explicit deferral (Remaining Owner QA 2). **Required before merge.**
+- [ ] Firefox dialog Escape and focus return (Remaining Owner QA 3). **Required before merge.**
+- [ ] Recommended checks 4–5, and the provisional decisions confirmed (Decisions 2).
+- [ ] Owner and ChatGPT final review; Phase 3 checkpoint commit and merge (owner only).
+
+Recommendation: **READY FOR OWNER REVIEW.** No blocker was found in the implementation. The merge still needs the three required owner items above.
 
 ---
 
