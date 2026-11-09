@@ -12,6 +12,8 @@ Early development.
 
 The current project is being built incrementally using React, Vite, TypeScript, and Canvas 2D.
 
+The first background-removal workflow works in the web version: open an image, select the background with the Magic Wand, delete it to transparency, undo and redo, Auto Trim, and export a transparent PNG.
+
 ---
 
 ## Planned Core Workflow
@@ -81,9 +83,10 @@ Planned:
 
 ### Export
 
+- PNG with transparency (implemented: `<name>-cleaned.png`, exact pixels)
+
 Planned:
 
-- PNG
 - JPEG
 - WebP
 - Copy to clipboard

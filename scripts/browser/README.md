@@ -258,6 +258,35 @@ The keyboard section runs first: in headless Firefox, after the other sections i
 session, Tab alternated between the first two buttons of an options row (the Magic Wand's too),
 which a fresh session does not do.
 
+### PNG export and the first workflow (2026-11-08)
+
+```sh
+npm run build
+node scripts/browser/png-export.mjs [--browser chrome|firefox|all] [--no-perf] [--no-stress]
+APP_URL=http://127.0.0.1:5173/ node scripts/browser/png-export.mjs --no-perf   # npm run dev: Strict Mode
+```
+
+With real clicks and key presses it opens an image, selects the background with the Magic Wand,
+presses Delete, clicks Export, presses Ctrl + Z and Ctrl + Y, uses Auto Trim, opens a partially
+transparent PNG and makes a feathered Delete. It captures every file the app hands to the browser
+(by wrapping `URL.createObjectURL` and the link's `click`), and checks that:
+
+- Each file is a valid PNG (signature, every CRC with Node's zlib, IHDR 8-bit RGBA, IDAT chunks,
+  IEND) named `<name>-cleaned.png`, at the document's size, with every pixel exactly the
+  document's and fully transparent pixels as 0, 0, 0, 0 (hidden colour dropped). The browser
+  decodes it too (opaque and transparent pixels exact).
+- In Chrome, one export is really downloaded into a temporary folder and matches byte for byte.
+- The Export button's name, tooltip and availability; the "Unexported edits" note after Delete,
+  Auto Trim, Export, Undo and Redo; the announcement; the replace confirmation asked only for
+  unexported edits; a failed export's message, with nothing downloaded; no console errors.
+- For comparison it reports how many partially transparent pixels the browser's canvas encoder
+  would change (Firefox: most of them; Export: none).
+
+Then (unless `--no-perf`) it times exports at 4K and (unless `--no-stress`) near 50 megapixels,
+checks that a second click while one runs does nothing and that the button says "Exporting…",
+and reports the longest gap between animation frames meanwhile. Timings are reported, never
+checked.
+
 ## Maintenance notes
 
 - `lib/app.mjs` finds the editor state through React's internal fiber tree, because the app has

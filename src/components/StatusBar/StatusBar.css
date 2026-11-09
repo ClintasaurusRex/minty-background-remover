@@ -34,6 +34,11 @@
   color: var(--color-text);
 }
 
+/* Text, not colour alone; never hidden at narrow widths, since it says whether work could be lost. */
+.status-bar__info > span.status-bar__unexported {
+  color: var(--color-accent);
+}
+
 .status-bar__pointer-value {
   font-variant-numeric: tabular-nums;
 }

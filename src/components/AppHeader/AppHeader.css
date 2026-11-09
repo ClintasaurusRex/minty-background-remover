@@ -48,6 +48,20 @@
   border-color: var(--color-border);
 }
 
+/* Export keeps its accent look while it writes a file; it is only dimmed without an image. */
+.app-header__export {
+  min-width: 8.5em;
+  justify-content: center;
+}
+
+.app-header .app-header__export[aria-disabled='true'],
+.app-header .app-header__export[aria-disabled='true']:hover {
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  opacity: 0.6;
+}
+
 .app-header__divider {
   width: 1px;
   height: 20px;

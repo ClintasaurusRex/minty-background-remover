@@ -52,9 +52,9 @@ When imports overlap (file picker, drop and paste in any combination), the most 
 
 Opening a new image replaces the current one without confirmation while the open image has no pixel edits. Replacing it discards its edits and its Undo / Redo history; a failed import keeps both.
 
-Approved for Phase 3 (P3-D12): when the open image has unsaved pixel edits, the user is warned before another image replaces it. As implemented (Phase 3 Step 6; export does not exist yet, so the edits are called unexported):
+Approved for Phase 3 (P3-D12): when the open image has unsaved pixel edits, the user is warned before another image replaces it. As implemented (Phase 3 Step 6, measured from the last export since PNG export was added, §22):
 
-- The image has unexported edits when an edit is applied and not undone: each edit and Redo counts one, each Undo takes one away, without comparing images. Undoing every edit returns the image to the file as opened, so there is nothing to lose (even with edits left to redo). The first image of a session and an unedited image are never asked about.
+- The image has unexported edits when an edit is applied and not undone (each edit and Redo counts one, each Undo takes one away) and the image as it is now is not the one last exported, without comparing images. Undoing every edit returns the image to the file as opened, so there is nothing to lose (even with edits left to redo). Undoing after an export makes the edits unexported again; redoing back to the exported image makes them exported again. Only the latest export counts: after exporting an earlier state, returning to an image exported before that counts as unexported. The first image of a session and an unedited image are never asked about.
 - The question comes just before another image would replace the edited one, the same way for the file picker, drop and paste, and only when there is an image to open (not for a cancelled picker, an empty clipboard or a drop with nothing usable).
 - A dialog titled "Discard unexported edits?" explains that opening the image (named, or "the pasted image") will replace the current one and discard its edits and Undo history, with Cancel (the default, also Escape) and Continue.
 - Cancel keeps the image, its edits and its history. Continue opens the new image; if that import fails, the edited image and its history stay.
@@ -639,6 +639,18 @@ pump-station-cleaned.png
 ```
 
 The application should protect the original source file from accidental overwrite.
+
+### As implemented (PNG export, brought forward from Phase 6, 2026-11-08)
+
+PNG export was brought forward by the project owner so that the first background-removal workflow is complete (open → Magic Wand → Delete → Undo / Redo → Auto Trim → Export). JPEG and WebP export, Save As, Copy Image and a remembered export folder remain in Phase 6 and Phase 7.
+
+- **Export** in the header writes the open image as a PNG and hands it to the browser as a download. It is available whenever an image is open, also while another image is opening, and with a selection, which it ignores. One export runs at a time: while the file is written the button reads "Exporting…" and is unavailable (`aria-disabled`, so focus stays on it). Its tooltip names the file: "Export as PNG: pump-station-cleaned.png".
+- **The file**: exactly the image as it is now, at its current size (after Auto Trim, the trimmed size). Every visible pixel, partially transparent ones included, keeps its exact colour and alpha; fully transparent pixels are written as 0, 0, 0, 0 (P3-D2), so colour hidden by Delete never leaves the application. The checkerboard, the selection overlay and the view are never part of it. Exporting never changes the image, its selection, its history or the Edge cleanup adjustment of the last Delete.
+- **The name**: the opened file's name without its extension, followed by `-cleaned.png` (`pump-station.jpg` → `pump-station-cleaned.png`; a pasted image `pasted-image-2026-11-08-201500.png` → `pasted-image-2026-11-08-201500-cleaned.png`). Characters Windows or Linux reject become `_`; spaces and dots at either end are dropped; the stem is cut to 200 characters; with nothing left it is `image`. The suggestion always differs from the opened file's name, the browser never replaces an existing download without asking, and the opened file is never written.
+- **Unexported edits**: a successful export makes the image's current state the last export (§1, P3-D12): the status bar's "Unexported edits" note disappears and the replace confirmation is no longer asked for it. An edit made while the file is being written stays unexported. An export that finishes after another image has opened still downloads the image it started with, and does not count for the new image.
+- **Feedback**: a successful export is announced politely ("Exported as pump-station-cleaned.png."); the browser's own download indicator shows the file. A failed export (for example for lack of memory) shows a dismissible alert, "The image could not be exported. Nothing was downloaded, and the image has not changed.", with the memory hint when the cause looks like memory; nothing is downloaded and Export becomes available again.
+- **Limitation**: the browser does not tell the page whether the user kept the download (for example, cancelled a Save dialog Firefox may show), so handing the file to the browser counts as exported. The desktop application (Phase 7) is expected to use a native Save dialog instead.
+- No keyboard shortcut yet (Ctrl + S is listed as a candidate in `UI_UX_SPEC.md` and remains Phase 6 work).
 
 ---
 

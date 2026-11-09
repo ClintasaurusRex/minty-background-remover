@@ -1811,6 +1811,65 @@ Recommendation: **READY FOR OWNER REVIEW.** No blocker was found in the implemen
 
 ---
 
+## Milestone: First Working Background Removal (2026-11-08)
+
+Assigned by the project owner as one larger, explicitly authorised milestone: the complete workflow open → Magic Wand → tolerance → inspect → Delete → transparent result → Undo / Redo → transparent PNG export, then Auto Trim if it could be done safely. Worked on the `phase/03-background-deletion` branch, uncommitted (the owner commits).
+
+### Recovery check after the power outage
+
+Before any change: `git fsck --full` reported no corruption (only Git's standard empty tree as dangling); the working tree matched `HEAD` (cce524d, the Phase 3 Step 12 QA commit); no empty or truncated source files; type checking (also forced, `tsc -b --force`), lint, 1,195 unit tests and the production build all passed. No evidence of lost work.
+
+### What already existed (verified, not reimplemented)
+
+| Requirement | Where | Status |
+| --- | --- | --- |
+| Magic Wand tool, contiguous non-recursive scanline fill, tolerance slider and field, New replaces the selection, overlay with marching ants, Clear and Esc, source pixels never changed | Phase 2 (`image/selection/magicWand.ts`, `MagicWandOptions`, `selectionOverlay*`) | Done, merged in Phase 2 |
+| Screen-to-image mapping with zoom, pan, canvas position and device pixel ratio; Zoom & Pan | Phase 1 (`canvas/coordinates.ts`: `pixelUnderPointer`) | Done |
+| Delete key and Delete Selection button, alpha 0, unselected pixels unchanged, size kept, checkerboard, selection cleared, no-op and no-selection protection | Phase 3 Steps 2 and 6 | Done (Phase 3 owner review pending) |
+| Original preserved for recovery | Undo back to the opened pixels (exact), within the history limits; the opened file is never written | Done, with the limit noted below |
+| Undo / Redo: Ctrl + Z, Ctrl + Y, Ctrl + Shift + Z, header buttons; bounded patches, no full snapshots (25 entries, 256 MiB) | Phase 3 Steps 3, 5 and 6 | Done |
+| Auto Trim: alpha bounds, padding presets 0 / 5 / 10 / 20, default 5, Trim Tight, fully transparent image, Undo / Redo, exact bytes | Phase 3 Steps 10 and 11 | Done (owner's provisional decisions) |
+| Edge cleanup and feathering | Phase 3 Steps 8 and 9 | Exist, default 0 px; not extended (out of this milestone's scope) |
+
+### What this milestone added: PNG export
+
+PNG export was the one missing step (Phase 6 in this plan, brought forward by the owner's assignment). Behaviour: `FEATURE_SPEC.md` §22 and §1; encoding and measurements: `IMAGE_PROCESSING_SPEC.md` (PNG Export); UI: `UI_UX_SPEC.md` (Status Bar, Export Button, User Feedback, Error Handling); modules: `ARCHITECTURE.md` (PNG Export Modules).
+
+- The header's Export button (previously a disabled placeholder) writes the image as an exact 8-bit RGBA PNG at its current size, fully transparent pixels as 0, 0, 0, 0, named `<name>-cleaned.png`, and hands it to the browser as a download.
+- A small encoder of the application's own (`image/export/pngEncoder.ts`) instead of the canvas encoder, which changed the colour of 36,857 of 37,336 partially transparent pixels of a test image in Firefox. It uses the platform's `CompressionStream`; no dependency was added.
+- "Unexported edits" is now measured from the last export (it was measured from opening), shown in the status bar, and used by the existing replace confirmation (P3-D12).
+- Supporting changes: `EditNotice` gains `exported`, `EditError.operation` gains `export`; the app's development log of a failed export reads "Export failed: …", and `scripts/browser/lib/edit.mjs` accepts it as expected.
+
+### Verification
+
+- Unit tests: 1,240 pass (45 new): `pngEncoder.test.ts` (15; every output decoded by an independent reader, every byte compared), `exportCommands.test.ts` (20; names, availability, reducer outcomes, unexported edits through edits, Undo, Redo, adjustments, Auto Trim and imports, and that a discarded history entry is not kept reachable by the export marker), `exportImage.test.ts` (6; the whole workflow with the real commands and encoder, every exported pixel compared after Delete, Undo, Redo, Auto Trim at 5 px and 0 px, Select All), AppHeader (3) and StatusBar (1) markup.
+- Type checking, lint and the production build pass.
+- Mutation check: 28 deliberate faults in the new code (encoder filters, alpha handling, CRC, header, slicing, error paths, unexported-edits rule, reducer guards, file names, flow) were each caught by the tests.
+- Browser: `scripts/browser/png-export.mjs` passes in Chrome and Firefox, production build (103 checks with timings) and React Strict Mode dev server (95 checks, without timings): real clicks and keys, every file checked with Node's zlib and decoded by the browser, a real Chrome download compared byte for byte. Existing scripts still pass: `smoke.mjs` 340, `edit-workflow.mjs --no-perf` 507, `auto-trim.mjs --no-perf` 146.
+- Performance (table in `IMAGE_PROCESSING_SPEC.md`): 0.3–0.4 s for 4K graphics, about 1.7 s for a worst-case noisy 4K image, 1.3–1.9 s near 50 MP for graphics; the page keeps drawing throughout.
+- Not done: owner manual QA of export in a real (non-headless) browser, including the browser's download prompt and a Save dialog cancelled in Firefox; WebKitGTK and WebView2.
+
+### Known limitations
+
+- The browser does not report whether a download was kept, so handing the file over counts as exported.
+- Only the latest export is remembered: returning to an image exported before the latest export counts as unexported (conservative).
+- No cancel for a running export (it cannot freeze the page; a worst-case 50 MP export would take several seconds).
+- The original stays recoverable through Undo only while the history holds every edit (25 entries / 256 MiB, P3-D8); after older steps are dropped, the opened file on disk is the original. No extra full-resolution copy is kept (memory), and there is no "Revert to original" command.
+- No Ctrl + S shortcut (Phase 6 shortcut work).
+- No colour profile chunk; pixels are sRGB as decoded (Phase 1 limitation).
+
+### Decisions for the owner
+
+1. Accept the application's own PNG encoder (no dependency) over the canvas encoder.
+2. Export availability: allowed while another image opens and with a selection (it ignores the selection); one export at a time.
+3. Unexported edits measured from the latest export only; a handed-over download counts as exported.
+4. Wording: "Export", "Exporting…", "Unexported edits", "Exported as …", the failure message; the replace dialog text is unchanged.
+5. Whether to add Ctrl + S now or keep it for Phase 6.
+6. Whether a "Revert to original" command or keeping the opened pixels outside the history limits is wanted (not implemented: memory cost of one more full-resolution image).
+7. These changes sit uncommitted on the Phase 3 branch; the owner may prefer to commit them on a branch of their own after the Phase 3 merge.
+
+---
+
 ## Phase 4 — Crop and Colour Tools
 
 ### Goals
@@ -1890,11 +1949,11 @@ Make the web version feel complete.
 
 ### Work
 
-- PNG export.
+- PNG export. (Brought forward on 2026-11-08; see Milestone: First Working Background Removal.)
 - JPEG export.
 - WebP export.
-- Export naming.
-- Save/download flow.
+- Export naming. (PNG: `<name>-cleaned.png`, done with PNG export.)
+- Save/download flow. (Browser download done with PNG export; Save As and the desktop dialog remain.)
 - Clipboard copy.
 - Keyboard shortcuts.
 - Focus handling.

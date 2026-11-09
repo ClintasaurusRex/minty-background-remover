@@ -2,13 +2,22 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { EditKind } from '../../editor/history/historyEntry'
-import { AppHeader } from './AppHeader'
+import { AppHeader, type ExportStatus } from './AppHeader'
 
-/* Markup checks for the header's Undo and Redo (interaction is checked in real browsers). */
+/* Markup checks for the header's Undo, Redo and Export (interaction is checked in real browsers). */
 
 const noop = () => {}
-const render = (undo: EditKind | null, redo: EditKind | null) =>
-  renderToStaticMarkup(createElement(AppHeader, { onOpenImage: noop, undo, redo, onUndo: noop, onRedo: noop }))
+const render = (undo: EditKind | null, redo: EditKind | null, exportStatus: ExportStatus = { kind: 'unavailable' }) =>
+  renderToStaticMarkup(
+    createElement(AppHeader, { onOpenImage: noop, undo, redo, onUndo: noop, onRedo: noop, exportStatus, onExport: noop }),
+  )
+
+/** The Export button's opening tag and its text. */
+function exportButton(markup: string) {
+  const match = /(<button[^>]*app-header__export[^>]*>)<svg[^]*?<\/svg>([^<]*)<\/button>/.exec(markup)
+  if (!match) throw new Error('No Export button')
+  return { tag: match[1], text: match[2] }
+}
 
 /** The Undo and Redo buttons' opening tags and hidden names, in order. */
 function historyButtons(markup: string) {
@@ -44,9 +53,32 @@ describe('AppHeader: Undo and Redo', () => {
     expect(redo.tag).toContain('aria-keyshortcuts="Control+Y Control+Shift+Z"')
   })
 
-  it('keeps Open Image available and Export disabled until its phase', () => {
+  it('keeps Open Image available', () => {
     const markup = render('delete-selection', null)
     expect(markup).toMatch(/<button type="button" class="button" title="Open Image \(Ctrl\+O\)"/)
-    expect(markup).toMatch(/<button type="button" class="button button--primary" disabled="" title="Export">/)
+  })
+})
+
+describe('AppHeader: Export', () => {
+  it('is unavailable without an image (aria-disabled, never disabled)', () => {
+    const { tag, text } = exportButton(render(null, null))
+    expect(text).toBe('Export')
+    expect(tag).toContain('aria-disabled="true"')
+    expect(tag).toContain('title="Export — no image open"')
+    expect(tag).not.toMatch(/\sdisabled(=|\s|>)/)
+  })
+
+  it('names the file it would save', () => {
+    const { tag, text } = exportButton(render(null, null, { kind: 'ready', fileName: 'pump-station-cleaned.png' }))
+    expect(text).toBe('Export')
+    expect(tag).toContain('aria-disabled="false"')
+    expect(tag).toContain('title="Export as PNG: pump-station-cleaned.png"')
+  })
+
+  it('says it is exporting, and is unavailable, while a file is written', () => {
+    const { tag, text } = exportButton(render(null, null, { kind: 'running' }))
+    expect(text).toBe('Exporting…')
+    expect(tag).toContain('aria-disabled="true"')
+    expect(tag).toContain('title="Exporting the image as PNG…"')
   })
 })

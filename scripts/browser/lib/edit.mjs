@@ -51,13 +51,13 @@ export const EDIT_HELPERS = `(() => {
   }
 
   // Console errors and warnings (React reports misuse there, for example of flushSync). The app's
-  // own development logs of import and edit failures are expected.
+  // own development logs of import, edit and export failures are expected.
   const consoleMessages = []
   for (const level of ['error', 'warn']) {
     const original = console[level]
     console[level] = (...args) => {
       const text = args.map(String).join(' ')
-      if (!/^(Import|Edit) failed \\(/.test(text)) consoleMessages.push(level + ': ' + text.slice(0, 300))
+      if (!/^((Import|Edit) failed \\(|Export failed: )/.test(text)) consoleMessages.push(level + ': ' + text.slice(0, 300))
       return original.apply(console, args)
     }
   }

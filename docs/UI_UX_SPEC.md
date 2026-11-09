@@ -263,6 +263,19 @@ Selection state is therefore never communicated by colour or motion alone. Selec
 
 On narrower windows the selection and pointer readouts keep priority: the image format and file size are hidden below 1200 px wide, and the active tool (already shown in the toolbar) below 900 px.
 
+As implemented with PNG export (2026-11-08): while the open image has unexported edits (`FEATURE_SPEC.md` §1 and §22), "Unexported edits" follows the image's name, in the accent colour, with a tooltip saying that Export saves the edits as a new PNG file. It is text, not colour alone, is never hidden at narrow widths, and is not a live region (Delete, Undo, Redo and Export announce what happened).
+
+---
+
+## Export Button
+
+As implemented with PNG export (2026-11-08; `FEATURE_SPEC.md` §22): the header's primary **Export** button, after Undo and Redo.
+
+- Without an image it is unavailable (`aria-disabled`, dimmed, tooltip "Export — no image open").
+- With an image its tooltip names the file it would save: "Export as PNG: pump-station-cleaned.png".
+- While the file is written its label is "Exporting…" and it is unavailable but keeps its accent look, slightly dimmed, and keyboard focus. Its width does not change, so the header never shifts.
+- A successful export is announced; the browser shows the download. A failure shows the dismissible workspace alert described under Error Handling.
+
 ---
 
 ## Crop UX
@@ -457,6 +470,8 @@ Approved for Phase 3 (P3-D9): Delete (Delete Selection; ignored while held down,
 
 As implemented (Phase 3 Step 6): Delete with any modifier is ignored; the shortcuts work with focus on buttons and on the tolerance slider; the tolerance text field keeps its own Delete and Undo. While the replace confirmation is open, Delete, Undo, Redo, Ctrl + A and Escape (which cancels the dialog) belong to the dialog, and Ctrl + O and Ctrl + V do nothing.
 
+PNG export (2026-11-08) has no shortcut yet: Ctrl + S keeps its browser meaning until the Phase 6 shortcut work decides it.
+
 ---
 
 ## Accessibility
@@ -494,6 +509,8 @@ Avoid blocking the browser UI unnecessarily.
 
 Heavy operations may later be moved to Web Workers if profiling shows this is necessary.
 
+As implemented for PNG export: "Exporting…" on the Export button while the file is written. The file is written in small slices with the page free to respond between them, so the editor keeps drawing and responding (measured: no frame gap over 17 ms in Chrome and 84 ms in headless Firefox, also near 50 megapixels).
+
 ---
 
 ## Error Handling
@@ -515,6 +532,8 @@ The image is too large to process safely.
 ```
 
 Avoid exposing raw internal errors unless useful for development.
+
+As implemented for exports: a failed export shows the same kind of alert, "The image could not be exported. Nothing was downloaded, and the image has not changed.", with the memory hint when it applies; nothing is downloaded and Export becomes available again.
 
 As implemented for edits (Phase 3 Step 6): a failed Delete, Undo or Redo shows a dismissible message at the top of the workspace, like an import error, announced as an alert: "The selected pixels could not be deleted." (or "Undo could not be completed." / "Redo could not be completed."), "The image and selection have not changed.", and, when the cause looks like memory, "There may not be enough memory for an image this large." Successful edits, Undo and Redo, and a Delete that changed nothing, are announced politely to assistive technology ("Selection deleted: 31,428 pixels are now transparent.", "Undone: Delete Selection.", "Nothing was deleted: the selected pixels are already transparent."); the image itself is the visible feedback. Each outcome is announced once, and again if it is repeated.
 
@@ -543,9 +562,9 @@ The current image has edits that have not been exported. Opening
                                               [Cancel]  [Continue]
 ```
 
-- "the pasted image" replaces the name for a paste. Export does not exist yet, so nothing mentions saving.
+- "the pasted image" replaces the name for a paste. The dialog does not offer to export first (a possible later improvement).
 - Cancel has focus first; Escape also cancels. Continue is marked with the error colours (text and border). Focus returns to where it was when the dialog closes. The rest of the page is inert while it is open.
-- Asked only when the open image has unexported edits and another image is about to be opened; never for the first image, an unedited one, or one whose edits have all been undone.
+- Asked only when the open image has unexported edits and another image is about to be opened; never for the first image, an unedited one, one whose edits have all been undone, or one exported as it is now.
 
 ---
 

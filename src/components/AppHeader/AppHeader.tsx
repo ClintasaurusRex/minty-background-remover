@@ -12,10 +12,17 @@ interface AppHeaderProps {
   redo: EditKind | null
   onUndo: () => void
   onRedo: () => void
+  /** Export's state: no image open, ready (with the suggested file name), or writing a file. */
+  exportStatus: ExportStatus
+  onExport: () => void
 }
 
-// Export is a placeholder until its phase and stays disabled.
-export function AppHeader({ onOpenImage, undo, redo, onUndo, onRedo }: AppHeaderProps) {
+export type ExportStatus =
+  | { readonly kind: 'unavailable' }
+  | { readonly kind: 'ready'; readonly fileName: string }
+  | { readonly kind: 'running' }
+
+export function AppHeader({ onOpenImage, undo, redo, onUndo, onRedo, exportStatus, onExport }: AppHeaderProps) {
   return (
     <header className="app-header">
       <div className="app-header__brand">
@@ -60,12 +67,37 @@ export function AppHeader({ onOpenImage, undo, redo, onUndo, onRedo }: AppHeader
 
         <span className="app-header__divider" aria-hidden="true" />
 
-        <button type="button" className="button button--primary" disabled title="Export">
-          <ExportIcon />
-          Export
-        </button>
+        <ExportButton status={exportStatus} onClick={onExport} />
       </div>
     </header>
+  )
+}
+
+/**
+ * Export as PNG. Unavailable (no image, or an export being written), it is aria-disabled rather
+ * than disabled, so keyboard focus stays on it while it shows "Exporting…". Its width stays the
+ * same, so the header never shifts.
+ */
+function ExportButton({ status, onClick }: { status: ExportStatus; onClick: () => void }) {
+  const title =
+    status.kind === 'ready'
+      ? `Export as PNG: ${status.fileName}`
+      : status.kind === 'running'
+        ? 'Exporting the image as PNG…'
+        : 'Export — no image open'
+  return (
+    <button
+      type="button"
+      className="button button--primary app-header__export"
+      aria-disabled={status.kind !== 'ready'}
+      title={title}
+      onClick={() => {
+        if (status.kind === 'ready') onClick()
+      }}
+    >
+      <ExportIcon />
+      {status.kind === 'running' ? 'Exporting…' : 'Export'}
+    </button>
   )
 }
 

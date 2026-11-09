@@ -28,6 +28,8 @@ interface StatusBarProps {
    * Step 9) rather than only set the next one: shown as a short note after the selection readout.
    */
   adjustsLastDelete?: boolean
+  /** Whether the image has edits that have not been exported (hasUnexportedEdits): shown after its name. */
+  unexportedEdits?: boolean
   pointer: PointerPositionStore
   onZoomIn: () => void
   onZoomOut: () => void
@@ -42,6 +44,7 @@ export function StatusBar({
   activeTool,
   selection,
   adjustsLastDelete = false,
+  unexportedEdits = false,
   pointer,
   onZoomIn,
   onZoomOut,
@@ -60,6 +63,7 @@ export function StatusBar({
             <span className="status-bar__name" title={document.name}>
               {document.name}
             </span>
+            {unexportedEdits && <UnexportedEditsNote />}
             <span className="status-bar__divider" aria-hidden="true" />
             <span>{formatDimensions(document.width, document.height)}</span>
             <span className="status-bar__divider status-bar__secondary" aria-hidden="true" />
@@ -150,6 +154,22 @@ export function LastDeleteNote() {
         Edge settings update last Delete
       </span>
     </>
+  )
+}
+
+/**
+ * The note after the image's name that it has edits that have not been exported (hasUnexportedEdits).
+ * Text, not colour alone; never hidden at narrow widths. Not a live region: Delete, Undo, Redo and
+ * Export announce what happened.
+ */
+export function UnexportedEditsNote() {
+  return (
+    <span
+      className="status-bar__unexported"
+      title="This image has edits that have not been exported. Export saves them as a new PNG file."
+    >
+      Unexported edits
+    </span>
   )
 }
 

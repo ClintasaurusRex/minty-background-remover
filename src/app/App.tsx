@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
-import { AppHeader } from '../components/AppHeader/AppHeader'
+import { AppHeader, type ExportStatus } from '../components/AppHeader/AppHeader'
 import { DiscardEditsDialog } from '../components/DiscardEditsDialog/DiscardEditsDialog'
 import { StatusBar } from '../components/StatusBar/StatusBar'
 import { ToolOptions } from '../components/Toolbar/ToolOptions'
@@ -13,6 +13,7 @@ import {
   isImporting,
 } from '../editor/editorState'
 import { adjustableDelete, availableEditActions, hasUnexportedEdits } from '../editor/editCommands'
+import { canExport, exportFileName } from '../editor/exportCommands'
 import type { PanGestureEffect } from '../editor/panGesture'
 import {
   type PointerPress,
@@ -27,6 +28,7 @@ import type { FloodMode, Point, SelectionMode, ToolId } from '../editor/types'
 import type { EdgeSettings } from '../image/edit/deleteWithEdges'
 import { createPointerPositionStore } from './pointerPosition'
 import { useEditCommands } from './useEditCommands'
+import { useExportCommand } from './useExportCommand'
 import { IMAGE_FILE_ACCEPT, useImageImport } from './useImageImport'
 import { useSelectionShortcuts } from './useSelectionShortcuts'
 import './App.css'
@@ -53,11 +55,17 @@ function App() {
   const autoTrim = useCallback(() => runEditAction('auto-trim'), [runEditAction])
   const undo = useCallback(() => runEditAction('undo'), [runEditAction])
   const redo = useCallback(() => runEditAction('redo'), [runEditAction])
+  const exportImage = useExportCommand(stateRef, dispatch, isConfirming)
   const cancelReplace = useCallback(() => answerQuestion(false), [answerQuestion])
   const continueReplace = useCallback(() => answerQuestion(true), [answerQuestion])
   const editActions = availableEditActions(state)
   // Whether a finished change of the edge amounts updates the last Delete (Phase 3 Step 9).
   const adjustsLastDelete = adjustableDelete(state) !== null
+  const exportStatus: ExportStatus = state.exporting
+    ? { kind: 'running' }
+    : state.document && canExport(state)
+      ? { kind: 'ready', fileName: exportFileName(state.document.name) }
+      : { kind: 'unavailable' }
 
   const handleResize = useCallback(
     (workspace: WorkspaceMetrics) => dispatch({ type: 'workspace-resized', workspace }),
@@ -140,7 +148,11 @@ function App() {
   }, [importError])
   useEffect(() => {
     if (import.meta.env.DEV && editError?.detail) {
-      console.warn(`Edit failed (${editError.operation}): ${editError.detail}`)
+      console.warn(
+        editError.operation === 'export'
+          ? `Export failed: ${editError.detail}`
+          : `Edit failed (${editError.operation}): ${editError.detail}`,
+      )
     }
   }, [editError])
 
@@ -152,6 +164,8 @@ function App() {
         redo={editActions.redo}
         onUndo={undo}
         onRedo={redo}
+        exportStatus={exportStatus}
+        onExport={exportImage}
       />
       <div className="app__toolbars">
         <Toolbar activeTool={state.activeTool} imageOpen={state.document !== null} onSelectTool={selectTool} />
@@ -209,6 +223,7 @@ function App() {
         activeTool={state.activeTool}
         selection={state.selection}
         adjustsLastDelete={adjustsLastDelete}
+        unexportedEdits={hasUnexportedEdits(state)}
         pointer={pointer}
         onZoomIn={() => dispatch({ type: 'zoom-stepped', direction: 1 })}
         onZoomOut={() => dispatch({ type: 'zoom-stepped', direction: -1 })}

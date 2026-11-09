@@ -3,8 +3,8 @@ import type { AutoTrimNoChange, EditError, EditNotice } from './editorState'
 import type { EditKind } from './history/historyEntry'
 
 /*
- * Text for edit outcomes: what is announced after Delete Selection, Auto Trim, Undo and Redo, and
- * the message shown when one fails.
+ * Text for edit outcomes: what is announced after Delete Selection, Auto Trim, Undo, Redo and
+ * Export, and the message shown when one fails.
  */
 
 const EDIT_NAMES: Readonly<Record<EditKind, string>> = {
@@ -17,9 +17,14 @@ export function editName(kind: EditKind): string {
   return EDIT_NAMES[kind]
 }
 
-/** The announcement for a successful edit, Undo or Redo, an edit that changed nothing, or the last Delete made again. */
+/**
+ * The announcement for a successful edit, Undo or Redo, an edit that changed nothing, the last
+ * Delete made again, or an export.
+ */
 export function editNoticeText(notice: EditNotice): string {
   switch (notice.kind) {
+    case 'exported':
+      return `Exported as ${notice.fileName}.`
     case 'applied': {
       const count = notice.changedPixels
       if (notice.operation === 'delete-selection' && count !== null) {
@@ -78,7 +83,8 @@ function droppedUndoStepsText(count: number): string {
  * are only announced: the image itself shows them.
  */
 export function isShownEditNotice(notice: EditNotice): boolean {
-  if (notice.operation !== 'auto-trim') return false
+  // An export is shown by the browser's download and by the unexported-edits note going away.
+  if (notice.kind === 'exported' || notice.operation !== 'auto-trim') return false
   return notice.kind === 'unchanged' || (notice.kind === 'applied' && (notice.droppedUndoSteps ?? 0) > 0)
 }
 
@@ -89,8 +95,13 @@ export function isShownEditNotice(notice: EditNotice): boolean {
  */
 const MEMORY_FAILURE = /memory|allocation|invalid (typed )?array length|Created a .* (bitmap|canvas) for|No 2D canvas/i
 
-/** The message shown when an edit, Undo or Redo fails. Nothing has changed when it is shown. */
+/** The message shown when an edit, Undo, Redo or Export fails. Nothing has changed when it is shown. */
 export function editErrorMessage(error: EditError): string {
+  const memory = error.detail !== undefined && MEMORY_FAILURE.test(error.detail)
+  const memoryHint = memory ? ' There may not be enough memory for an image this large.' : ''
+  if (error.operation === 'export') {
+    return `The image could not be exported. Nothing was downloaded, and the image has not changed.${memoryHint}`
+  }
   const failed =
     error.operation === 'undo'
       ? 'Undo could not be completed.'
@@ -101,6 +112,5 @@ export function editErrorMessage(error: EditError): string {
           : error.operation === 'delete-selection'
             ? 'The selected pixels could not be deleted.'
             : `${editName(error.operation)} could not be completed.`
-  const memory = error.detail !== undefined && MEMORY_FAILURE.test(error.detail)
-  return `${failed} The image and selection have not changed.${memory ? ' There may not be enough memory for an image this large.' : ''}`
+  return `${failed} The image and selection have not changed.${memoryHint}`
 }

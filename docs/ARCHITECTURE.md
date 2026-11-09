@@ -430,6 +430,36 @@ scripts/browser/auto-trim.mjs             the tool in Chrome and Firefox; lib/gp
 
 Step 12 (final quality assurance) changed no module. It added `src/editor/phase3Workflow.test.ts`, which runs the application's own commands together against a model of every content state: Delete Selection, edge adjustments, Auto Trim, Undo, Redo, selection changes and imports, with no-ops, stale replays and failures (`IMPLEMENTATION_PLAN.md`, Phase 3 Step 12).
 
+### PNG Export Modules (brought forward from Phase 6, 2026-11-08)
+
+```text
+src/
+├── image/export/pngEncoder.ts    encodePng(pixels, { yieldControl, sliceBytes }) → Promise<Blob>:
+│                                 8-bit RGBA PNG, exact bytes, alpha 0 written as 0,0,0,0, adaptive
+│                                 row filters, CompressionStream('deflate'), 256 KiB slices with a
+│                                 MessageChannel task between them (pure apart from those platform
+│                                 APIs, which Node also has)
+├── image/export/crc32.ts         CRC-32 for PNG chunks
+├── image/export/testPng.ts       test-only independent PNG reader (bitwise CRC, inflate, unfilter)
+├── editor/exportCommands.ts      canExport, exportStartCommand (constant time), exportFileName
+├── editor/editorState.ts         exporting (ExportJob), lastExport (ExportedContent);
+│                                 export-started / export-finished / export-failed; currentContent,
+│                                 sameContent; the 'exported' notice and the 'export' error
+├── editor/editCommands.ts        hasUnexportedEdits measured from the last export
+├── app/exportImage.ts            runExport: start (flushSync), encode, download, record the outcome;
+│                                 browser steps injected, so the flow is tested in Node
+├── app/downloadFile.ts           the only browser download code: a blob: URL and a temporary link
+├── app/useExportCommand.ts       the Export button's handler (blocked behind the replace dialog)
+├── components/AppHeader/         Export button: ready (names the file), "Exporting…", unavailable
+└── components/StatusBar/         UnexportedEditsNote
+scripts/browser/png-export.mjs    the workflow and every exported file in Chrome and Firefox
+```
+
+- The export runs outside the reducer like edits: `exportStartCommand` reads the committed state and returns the `export-started` action with the document's pixel buffer (shared, never copied: buffers are immutable, P3-D1). `runExport` commits the start with `flushSync`, so a second click finds the export running; the reducer also refuses a second start or one computed for an earlier content state.
+- The content state an export saved is identified without comparing pixels (`ExportedContent`: document id, edit depth and the history's next Undo entry). The history is one line and entries are immutable (a remade Delete is a new entry), so Undo then Redo returns to the same three values and any other change does not. The marker is taken when the export starts; edits during the export keep the image unexported. `state.lastExport` (`LastExport`) holds the entry through a `WeakRef`, so an export never keeps a history entry's patch alive after the history has dropped it (outside the 256 MiB budget); an entry nothing else holds can never be the next Undo again, so the comparison does not depend on garbage collection.
+- No new dependency and no worker: the encoder uses `CompressionStream` and yields between slices; it could move to a Web Worker unchanged if profiling ever shows the need (it takes and returns transferable data).
+- Desktop (Phase 7): `downloadFile` is the one piece to replace with a native Save dialog; the encoder and commands do not depend on the browser's download behaviour.
+
 Key rules:
 
 - Copy-on-write: a document's pixel buffer is never written. An edit writes a copy, and `createEditedDocument` makes a new document from it; the previous document is unchanged. Pixel work (copying, editing, building history patches) runs in commands outside the reducer, as selection work does; the reducer only accepts or discards a finished result. Creating a document is constant time.
@@ -605,7 +635,7 @@ Tauri should later wrap the same application.
 
 Platform-specific desktop features may include:
 
-- Native file dialogs
+- Native file dialogs (export currently hands the PNG to the browser as a download through `app/downloadFile.ts`, the one module to replace)
 - Remembered file paths
 - Native Save As
 - Last export directory

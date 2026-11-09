@@ -101,6 +101,31 @@ PNG export should not intentionally degrade the image.
 
 ---
 
+## PNG Export
+
+Implemented 2026-11-08 (PNG export brought forward from Phase 6; `FEATURE_SPEC.md` §22) in `image/export/pngEncoder.ts` (`encodePng`) and `image/export/crc32.ts`.
+
+- **Output**: an 8-bit RGBA PNG (colour type 6), not interlaced, at the image's exact size, with only IHDR, IDAT and IEND chunks. The straight RGBA bytes are written as they are, so every visible pixel decodes exactly, partially transparent pixels included. Fully transparent pixels are written as 0, 0, 0, 0 (P3-D2). No colour profile chunk is written; the pixels are sRGB as decoded (Phase 1 limitation: the browser converts colour profiles to sRGB on import).
+- **Why not the canvas encoder**: `canvas.toBlob` / `OffscreenCanvas.convertToBlob` go through the canvas's premultiplied storage. Measured on `edge-alpha.png` (37,336 partially transparent pixels): Firefox's canvas encoder changed the colour of 36,857 of them; Chrome's changed none in that test, but the behaviour is browser-dependent (the desktop webviews, WebKitGTK and WebView2, are untested). The application's encoder changes none in either browser.
+- **Compression**: each row gets the filter (None, Sub, Up, Average, Paeth) whose output has the smallest sum of absolute signed bytes (the usual heuristic; ties go to the lower type); rows whose bytes are all 0 after hiding transparent colour are written unfiltered. The filtered rows go through the platform's zlib (`CompressionStream('deflate')`, the zlib format PNG requires; Chrome 80+, Firefox 113+, Safari 16.4+, Node 18+). No dependency was added.
+- **Responsiveness**: rows are filtered and compressed 256 KiB at a time, with one event-loop task (a `MessageChannel` message, not a clamped timer) between slices, so the page keeps drawing and responding. The pixels are only read; buffers are never written once they belong to a document (P3-D1), so edits made while a file is written do not affect it.
+- **Memory**: beyond the image, the compressed file, two rows and one slice. The finished file is held until the download starts and its URL is released 60 seconds later.
+- **Tests**: `pngEncoder.test.ts` decodes every output with an independent reader (`testPng.ts`: bit-by-bit CRC, the platform's inflate with its Adler-32 check, its own unfiltering) and compares every byte, for every alpha value, shapes from 1 × 1, each filter type, slicing, hidden colour, failures; `app/exportImage.test.ts` runs the whole workflow with the real commands and encoder. `scripts/browser/png-export.mjs` checks the files in Chrome and Firefox with Node's zlib and the browsers' own decoders.
+
+Measured (2026-11-08, i7-14700HX; time from the click to the download, production build, headless):
+
+| Image | Chrome | Firefox | File |
+| --- | --- | --- | --- |
+| 4K HMI graphic, background deleted | 0.38 s | 0.28 s | 0.3 MB |
+| 4K smooth photo fixture | 0.38 s | 0.27 s | 0.5–0.6 MB |
+| 4K with random noise in every pixel (worst case) | 1.69 s | 1.74 s | 11 MB |
+| 50 MP HMI graphic, background deleted | 1.92 s | 1.29 s | 1.2 MB |
+| 50 MP smooth photo fixture | 1.91 s | 1.39 s | 1.7–2.3 MB |
+
+Longest gap between animation frames meanwhile: 17 ms in Chrome, 33–84 ms in headless Firefox (whose frames are slower anyway). In Node, a 50 MP image with random noise takes about 6.3 s (64 MB file); a noisy photo that large cannot normally be opened, as its file would exceed the 50 MB import limit.
+
+---
+
 ## Magic Wand
 
 ### Goal
@@ -458,7 +483,7 @@ The operation must be undoable.
 Approved for Phase 3 (P3-D2): Delete keeps the RGB values of deleted pixels internally, hidden, so its Undo record stays small (about 45 KB when deleting a smooth-edged background from a 50 MP image in the planning measurements, against roughly 4 bytes per deleted pixel of a photograph when RGB is cleared as well). Consequences that later work must respect:
 
 - No operation may make a fully transparent pixel visible again without also setting its colour, so hidden colour never reappears in the editor.
-- Export (Phase 6) writes every fully transparent pixel as 0, 0, 0, 0, so deleted content never leaves the application.
+- Export writes every fully transparent pixel as 0, 0, 0, 0, so deleted content never leaves the application (implemented with PNG export, see PNG Export).
 - Operations that resample (resize, rotation by other angles) must work on premultiplied colour, so hidden colour cannot bleed into visible neighbours.
 - Delete clears the selection; Undo restores it (P3-D3).
 

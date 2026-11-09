@@ -2,7 +2,14 @@ import { createDisplayImage } from '../canvas/displayImage'
 import { type EdgeSettings, deleteSelectionWithEdges } from '../image/edit/deleteWithEdges'
 import { type AutoTrimPlan, planAutoTrim } from '../image/trim/autoTrim'
 import { isEditableTarget } from '../utils/domTargets'
-import { type EditorAction, type EditorState, documentVersion, isImporting } from './editorState'
+import {
+  type EditorAction,
+  type EditorState,
+  currentContent,
+  documentVersion,
+  isExportedContent,
+  isImporting,
+} from './editorState'
 import { nextRedo, nextUndo } from './history/editHistory'
 import { type EditKind, type HistoryEntry, remadeHistoryEntry } from './history/historyEntry'
 import { applyPixelPatch, createPixelPatch } from './history/pixelPatch'
@@ -261,12 +268,14 @@ export function adjustDeleteCommand(
 
 /**
  * Whether the open image has pixel edits that would be lost if another image replaced it: some
- * edit is applied and not undone (editDepth). Constant time; no images are compared. Undoing every
- * edit returns the image to the file as opened, so it then has none, even with edits left to redo.
- * Export (Phase 6) will measure from the last export instead of from opening.
+ * edit is applied and not undone (editDepth), and the image as it is now has not been exported
+ * (state.lastExport). Constant time; no images are compared. Undoing every edit returns the image
+ * to the file as opened, so it then has none, even with edits left to redo. Undoing after an export
+ * makes them unexported again, and redoing back to the exported image makes them exported again.
  */
 export function hasUnexportedEdits(state: EditorState): boolean {
-  return state.document !== null && state.editDepth !== 0
+  if (state.document === null || state.editDepth === 0) return false
+  return !isExportedContent(state.lastExport, currentContent(state))
 }
 
 /** The parts of a KeyboardEvent read by editShortcut. */

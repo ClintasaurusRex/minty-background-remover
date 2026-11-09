@@ -12,6 +12,7 @@ import {
   clearEditHistory,
   createEditHistory,
   isBoundTo,
+  nextUndo,
   recordEdit,
   recordRedo,
   recordUndo,
@@ -155,6 +156,52 @@ export interface EditorState {
    * is announced again when the same thing happens twice.
    */
   readonly editFeedbackId: number
+  /**
+   * The PNG export being written (editor/exportCommands.ts), or null. One at a time: Export is
+   * unavailable until it finishes or fails. It continues if another image is opened meanwhile, and
+   * still saves the image it started with.
+   */
+  readonly exporting: ExportJob | null
+  /**
+   * The content state the open image's last finished export saved, or null when it has not been
+   * exported. hasUnexportedEdits (editCommands.ts) compares it with the current one. Cleared when
+   * another image is opened.
+   */
+  readonly lastExport: LastExport | null
+}
+
+/**
+ * One content state of the open image, identified without comparing pixels: the document, its edit
+ * depth and the history's next Undo (null when there is none). The history is one line and entries
+ * are never changed (a remade Delete is a new entry), so while the image stays open these identify
+ * the pixels exactly: Undo then Redo returns to the same three, and any other change does not.
+ */
+export interface ExportedContent {
+  readonly documentId: number
+  readonly editDepth: number
+  readonly entry: HistoryEntry | null
+}
+
+/**
+ * What state.lastExport remembers of the content state an export saved: ExportedContent with its
+ * history entry held weakly. An export must not keep an entry's patch alive (up to hundreds of MB)
+ * once the history has dropped it; an entry nothing else holds can never be the history's next Undo
+ * again, so it then no longer matters which entry it was.
+ */
+export interface LastExport {
+  readonly documentId: number
+  readonly editDepth: number
+  readonly entry: WeakRef<HistoryEntry> | null
+}
+
+/** A PNG export in progress (PNG export, brought forward from Phase 6). */
+export interface ExportJob {
+  /** Identifies the export's outcome. Never reused in the session. */
+  readonly id: number
+  /** The suggested file name, for example "pump-station-cleaned.png". */
+  readonly fileName: string
+  /** The content state being written, as it was when the export started. */
+  readonly content: ExportedContent
 }
 
 /** What a successful edit, Undo or Redo did, or an edit that changed nothing. */
@@ -194,6 +241,8 @@ export type EditNotice =
       readonly edgeSettings: EdgeSettings
       readonly edgePixels: number
     }
+  /** The image was exported as a PNG file named `fileName` (handed to the browser to download). */
+  | { readonly kind: 'exported'; readonly fileName: string }
 
 /** Why Auto Trim changed nothing (Phase 3 Step 11). */
 export type AutoTrimNoChange =
@@ -205,10 +254,11 @@ export type AutoTrimNoChange =
 /**
  * An edit, Undo or Redo that could not be completed (for example, for lack of memory). The
  * document, its selection and the history are unchanged. `adjust`: making the last Delete again
- * with new edge amounts (Phase 3 Step 9).
+ * with new edge amounts (Phase 3 Step 9). `export`: a PNG export that could not be written; nothing
+ * was downloaded.
  */
 export interface EditError {
-  readonly operation: EditKind | 'undo' | 'redo' | 'adjust'
+  readonly operation: EditKind | 'undo' | 'redo' | 'adjust' | 'export'
   /** Developer-facing cause. Not intended for display. */
   readonly detail?: string
 }
@@ -420,6 +470,18 @@ export type EditorAction =
   | { readonly type: 'edit-error-dismissed' }
   /** Hides the latest edit outcome's message (the ones shown in the workspace, editFeedback.ts). */
   | { readonly type: 'edit-notice-dismissed' }
+  /**
+   * A PNG export of the open image has started (exportStartCommand). Ignored while another export
+   * is running, or unless `job.content` is the open image's current content state.
+   */
+  | { readonly type: 'export-started'; readonly job: ExportJob }
+  /**
+   * Export `id` has been written and handed to the browser to download: the image it saved
+   * becomes the last export, if it is still the one open. Ignored unless `id` is the running export.
+   */
+  | { readonly type: 'export-finished'; readonly id: number }
+  /** Export `id` could not be written; nothing was downloaded. Ignored unless `id` is the running export. */
+  | { readonly type: 'export-failed'; readonly id: number; readonly detail?: string }
 
 export const initialEditorState: EditorState = {
   document: null,
@@ -443,6 +505,8 @@ export const initialEditorState: EditorState = {
   editDepth: 0,
   editNotice: null,
   editFeedbackId: 0,
+  exporting: null,
+  lastExport: null,
 }
 
 const FLOOD_MODES: readonly FloodMode[] = ['contiguous', 'global']
@@ -496,6 +560,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         editError: null,
         editDepth: 0,
         editNotice: null,
+        // A running export continues and saves the previous image; it is not this one's export.
+        lastExport: null,
       }
     }
 
@@ -647,6 +713,62 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'edit-notice-dismissed':
       return state.editNotice === null ? state : { ...state, editNotice: null }
+
+    case 'export-started': {
+      const { job } = action
+      if (state.exporting !== null || !sameContent(job.content, currentContent(state))) return state
+      return { ...state, exporting: job }
+    }
+
+    case 'export-finished': {
+      const job = state.exporting
+      if (!job || job.id !== action.id) return state
+      // Saved even if the image has been edited since; hasUnexportedEdits then still says so.
+      const saved = state.document?.id === job.content.documentId ? rememberedExport(job.content) : state.lastExport
+      return {
+        ...withEditFeedback(state, null, { kind: 'exported', fileName: job.fileName }),
+        exporting: null,
+        lastExport: saved,
+      }
+    }
+
+    case 'export-failed': {
+      const job = state.exporting
+      if (!job || job.id !== action.id) return state
+      const error: EditError = { operation: 'export', ...(action.detail !== undefined ? { detail: action.detail } : {}) }
+      return { ...withEditFeedback(state, error, null), exporting: null }
+    }
+  }
+}
+
+/**
+ * The open image's current content state (ExportedContent), or null without an image. Constant
+ * time.
+ */
+export function currentContent(state: EditorState): ExportedContent | null {
+  const version = documentVersion(state)
+  if (!state.document || !version) return null
+  return { documentId: state.document.id, editDepth: state.editDepth, entry: nextUndo(state.history, version) }
+}
+
+/** Whether `a` and `b` are the same content state of the same image (both null: no image). */
+export function sameContent(a: ExportedContent | null, b: ExportedContent | null): boolean {
+  if (a === null || b === null) return a === b
+  return a.documentId === b.documentId && a.editDepth === b.editDepth && a.entry === b.entry
+}
+
+/** Whether `content` is the content state `saved` remembers (an export of it). */
+export function isExportedContent(saved: LastExport | null, content: ExportedContent | null): boolean {
+  if (saved === null || content === null) return false
+  if (saved.documentId !== content.documentId || saved.editDepth !== content.editDepth) return false
+  return saved.entry === null ? content.entry === null : saved.entry.deref() === content.entry
+}
+
+function rememberedExport(content: ExportedContent): LastExport {
+  return {
+    documentId: content.documentId,
+    editDepth: content.editDepth,
+    entry: content.entry ? new WeakRef(content.entry) : null,
   }
 }
 
