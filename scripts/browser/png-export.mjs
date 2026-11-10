@@ -305,6 +305,41 @@ async function run(name, url) {
     const canvas = compare(decodePng(Buffer.from(await xp(browser, 'canvasEncoded()'), 'base64')), alpha.document)
     report.note(`  (for comparison, this browser's canvas encoder (putImageData + convertToBlob) changes ${canvas.wrong} of ${canvas.partial} partially transparent pixels of this image; Export changes ${alpha.result.wrong})`)
 
+    // Export with a selection: the file is the image (not the selection), and the selection stays.
+    await select(browser, [{ x: 2, y: 2, tolerance: 20 }])
+    const selection = await edges(browser, 'selection()')
+    const withSelection = await exportAndCheck(browser, 'Export with a selection', 'edge-alpha-cleaned.png')
+    report.check(
+      'Export with a selection: the whole image is written, and the selection stays',
+      selection?.count > 0 && withSelection.result.wrong === 0 && (await edges(browser, 'selection()'))?.count === selection.count,
+      `${selection?.count} px selected`,
+    )
+
+    // Export is unavailable while another image opens (held while decoding), and says why; a click
+    // then starts nothing. Once the image has opened, Export names the new file.
+    await edit(browser, 'holdImports()')
+    await browser.setFile('input[type=file]', fixture('edge-hmi.png'))
+    await waitFor(() => ev(browser, 'window.__minty.state().pendingImportId !== null'), { what: 'the import to start' })
+    button = await xp(browser, 'button()')
+    report.check(
+      'While another image opens: Export unavailable (aria-disabled), saying why',
+      button.disabled === 'true' && button.text === 'Export' && button.title === 'Export — not available while another image is opening',
+      json(button),
+    )
+    const countWhileImporting = await xp(browser, 'count()')
+    await browser.click(button.x, button.y)
+    await settle(browser)
+    report.check(
+      'While another image opens: clicking Export starts and downloads nothing',
+      (await ev(browser, 'window.__minty.state().exporting === null')) && (await xp(browser, 'count()')) === countWhileImporting,
+    )
+    await edit(browser, 'releaseImports()')
+    await waitFor(() => ev(browser, '(() => { const s = window.__minty.state(); return s.pendingImportId === null && s.document.name === "edge-hmi.png" })()'), { what: 'the image to open' })
+    await settle(browser)
+    button = await xp(browser, 'button()')
+    report.check('The image then opens, and Export is available for it', button.disabled === 'false' && button.title === 'Export as PNG: edge-hmi-cleaned.png', json(button))
+    await exportAndCheck(browser, 'Export after the image opened', 'edge-hmi-cleaned.png')
+
     // A feathered Delete: partial alpha made by the app, written exactly.
     await dispatch(browser, { type: 'tool-selected', tool: 'magic-wand' })
     await dispatch(browser, { type: 'edge-settings-changed', settings: { cleanup: 1, feather: 2 } })

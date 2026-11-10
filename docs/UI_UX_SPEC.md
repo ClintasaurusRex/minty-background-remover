@@ -272,9 +272,11 @@ As implemented with PNG export (2026-11-08): while the open image has unexported
 As implemented with PNG export (2026-11-08; `FEATURE_SPEC.md` §22): the header's primary **Export** button, after Undo and Redo.
 
 - Without an image it is unavailable (`aria-disabled`, dimmed, tooltip "Export — no image open").
-- With an image its tooltip names the file it would save: "Export as PNG: pump-station-cleaned.png".
+- With an image its tooltip names the file it would save: "Export as PNG: pump-station-cleaned.png". A selection does not affect it.
+- While another image is opening it is unavailable (`aria-disabled`, dimmed, keeps focus), with the tooltip "Export — not available while another image is opening", as Trim says the same (owner decision, 2026-11-09). The tooltip is also the button's accessible description; its name stays "Export".
 - While the file is written its label is "Exporting…" and it is unavailable but keeps its accent look, slightly dimmed, and keyboard focus. Its width does not change, so the header never shifts.
 - A successful export is announced; the browser shows the download. A failure shows the dismissible workspace alert described under Error Handling.
+- The wording "Export", "Exporting…" and "Unexported edits" is owner-approved (2026-11-09).
 
 ---
 
@@ -470,7 +472,7 @@ Approved for Phase 3 (P3-D9): Delete (Delete Selection; ignored while held down,
 
 As implemented (Phase 3 Step 6): Delete with any modifier is ignored; the shortcuts work with focus on buttons and on the tolerance slider; the tolerance text field keeps its own Delete and Undo. While the replace confirmation is open, Delete, Undo, Redo, Ctrl + A and Escape (which cancels the dialog) belong to the dialog, and Ctrl + O and Ctrl + V do nothing.
 
-PNG export (2026-11-08) has no shortcut yet: Ctrl + S keeps its browser meaning until the Phase 6 shortcut work decides it.
+PNG export (2026-11-08) has no shortcut yet: Ctrl + S is deferred to Phase 6 (owner decision, 2026-11-09) and keeps its browser meaning until then.
 
 ---
 

@@ -472,7 +472,8 @@ export type EditorAction =
   | { readonly type: 'edit-notice-dismissed' }
   /**
    * A PNG export of the open image has started (exportStartCommand). Ignored while another export
-   * is running, or unless `job.content` is the open image's current content state.
+   * is running or another image is being opened, or unless `job.content` is the open image's
+   * current content state.
    */
   | { readonly type: 'export-started'; readonly job: ExportJob }
   /**
@@ -716,7 +717,9 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'export-started': {
       const { job } = action
-      if (state.exporting !== null || !sameContent(job.content, currentContent(state))) return state
+      if (state.exporting !== null || isImporting(state) || !sameContent(job.content, currentContent(state))) {
+        return state
+      }
       return { ...state, exporting: job }
     }
 

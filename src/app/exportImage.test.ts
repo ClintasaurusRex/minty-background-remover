@@ -155,7 +155,9 @@ describe('runExport: the first background-removal workflow', () => {
     // The selection comes back (decoded from the history: equal, not the same object).
     expect(app.state.selection!.count).toBe(selection.count)
     expect(app.state.selection!.data).toEqual(selection.data)
+    // Exported with the selection active: the selection is not part of the file, and stays.
     await runExport(app.target, 2)
+    expect(app.state.selection!.data).toEqual(selection.data)
     exported = await lastExport(app.downloads)
     expectExportOf(original, exported.png)
     expect(pixelAt(exported.png.data, 24, 0, 0)).toEqual([240, 240, 240, 255])
@@ -205,6 +207,19 @@ describe('runExport', () => {
     await runExport(app.target, 1)
     expect(app.dispatched).toEqual([])
     expect(app.downloads).toEqual([])
+  })
+
+  it('starts nothing while another image opens, and exports as before once it has opened', async () => {
+    const app = editor(opened(screenshot(), measured))
+    app.click(0, 0)
+    app.state = reduce(app.state, { type: 'import-started', importId: 900 })
+    await runExport(app.target, 1)
+    expect(app.dispatched).toEqual([])
+    expect(app.downloads).toEqual([])
+    const next = screenshot()
+    app.state = opened(next, app.state)
+    await runExport(app.target, 2)
+    expectExportOf(next, (await lastExport(app.downloads)).png)
   })
 
   it('runs one export at a time: a second request while one is written does nothing', async () => {

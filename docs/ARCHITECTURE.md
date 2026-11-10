@@ -451,11 +451,13 @@ src/
 ├── app/downloadFile.ts           the only browser download code: a blob: URL and a temporary link
 ├── app/useExportCommand.ts       the Export button's handler (blocked behind the replace dialog)
 ├── components/AppHeader/         Export button: ready (names the file), "Exporting…", unavailable
+│                                 (no image, or another image opening)
 └── components/StatusBar/         UnexportedEditsNote
 scripts/browser/png-export.mjs    the workflow and every exported file in Chrome and Firefox
 ```
 
-- The export runs outside the reducer like edits: `exportStartCommand` reads the committed state and returns the `export-started` action with the document's pixel buffer (shared, never copied: buffers are immutable, P3-D1). `runExport` commits the start with `flushSync`, so a second click finds the export running; the reducer also refuses a second start or one computed for an earlier content state.
+- The export runs outside the reducer like edits: `exportStartCommand` reads the committed state and returns the `export-started` action with the document's pixel buffer (shared, never copied: buffers are immutable, P3-D1). `runExport` commits the start with `flushSync`, so a second click finds the export running; the reducer also refuses a second start, a start while another image is opening, or one computed for an earlier content state.
+- Export and imports (corrected 2026-11-09 after the independent audit of `586495a`): `canExport` is false while an import is pending (`isImporting`), as `availableEditActions` already is for edits, so no export starts for an image about to be replaced. The reverse order is allowed: an import may start while an export is being written. That export keeps its own pixel buffer and finishes; `export-finished` records it as the last export only if its document is still open.
 - The content state an export saved is identified without comparing pixels (`ExportedContent`: document id, edit depth and the history's next Undo entry). The history is one line and entries are immutable (a remade Delete is a new entry), so Undo then Redo returns to the same three values and any other change does not. The marker is taken when the export starts; edits during the export keep the image unexported. `state.lastExport` (`LastExport`) holds the entry through a `WeakRef`, so an export never keeps a history entry's patch alive after the history has dropped it (outside the 256 MiB budget); an entry nothing else holds can never be the next Undo again, so the comparison does not depend on garbage collection.
 - No new dependency and no worker: the encoder uses `CompressionStream` and yields between slices; it could move to a Web Worker unchanged if profiling ever shows the need (it takes and returns transferable data).
 - Desktop (Phase 7): `downloadFile` is the one piece to replace with a native Save dialog; the encoder and commands do not depend on the browser's download behaviour.

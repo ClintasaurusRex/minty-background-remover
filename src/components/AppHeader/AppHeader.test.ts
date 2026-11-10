@@ -75,6 +75,14 @@ describe('AppHeader: Export', () => {
     expect(tag).toContain('title="Export as PNG: pump-station-cleaned.png"')
   })
 
+  it('is unavailable while another image is opening, and says so', () => {
+    const { tag, text } = exportButton(render(null, null, { kind: 'importing' }))
+    expect(text).toBe('Export')
+    expect(tag).toContain('aria-disabled="true"')
+    expect(tag).toContain('title="Export — not available while another image is opening"')
+    expect(tag).not.toMatch(/\sdisabled(=|\s|>)/)
+  })
+
   it('says it is exporting, and is unavailable, while a file is written', () => {
     const { tag, text } = exportButton(render(null, null, { kind: 'running' }))
     expect(text).toBe('Exporting…')

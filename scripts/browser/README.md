@@ -268,7 +268,8 @@ APP_URL=http://127.0.0.1:5173/ node scripts/browser/png-export.mjs --no-perf   #
 
 With real clicks and key presses it opens an image, selects the background with the Magic Wand,
 presses Delete, clicks Export, presses Ctrl + Z and Ctrl + Y, uses Auto Trim, opens a partially
-transparent PNG and makes a feathered Delete. It captures every file the app hands to the browser
+transparent PNG, exports it with a selection active, opens another image while holding its import,
+and makes a feathered Delete. It captures every file the app hands to the browser
 (by wrapping `URL.createObjectURL` and the link's `click`), and checks that:
 
 - Each file is a valid PNG (signature, every CRC with Node's zlib, IHDR 8-bit RGBA, IDAT chunks,
@@ -276,6 +277,9 @@ transparent PNG and makes a feathered Delete. It captures every file the app han
   document's and fully transparent pixels as 0, 0, 0, 0 (hidden colour dropped). The browser
   decodes it too (opaque and transparent pixels exact).
 - In Chrome, one export is really downloaded into a temporary folder and matches byte for byte.
+- Export with a selection writes the whole image and keeps the selection. While another image is
+  opening, Export is unavailable with the tooltip "Export — not available while another image is
+  opening", and a click starts and downloads nothing; once the image has opened, Export names it.
 - The Export button's name, tooltip and availability; the "Unexported edits" note after Delete,
   Auto Trim, Export, Undo and Redo; the announcement; the replace confirmation asked only for
   unexported edits; a failed export's message, with nothing downloaded; no console errors.

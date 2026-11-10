@@ -18,9 +18,18 @@ interface AppHeaderProps {
 }
 
 export type ExportStatus =
+  /** No image is open. */
   | { readonly kind: 'unavailable' }
+  /** An image is open, but another one is being opened to replace it. */
+  | { readonly kind: 'importing' }
   | { readonly kind: 'ready'; readonly fileName: string }
   | { readonly kind: 'running' }
+
+const EXPORT_TITLES: Readonly<Record<Exclude<ExportStatus['kind'], 'ready'>, string>> = {
+  unavailable: 'Export — no image open',
+  importing: 'Export — not available while another image is opening',
+  running: 'Exporting the image as PNG…',
+}
 
 export function AppHeader({ onOpenImage, undo, redo, onUndo, onRedo, exportStatus, onExport }: AppHeaderProps) {
   return (
@@ -74,17 +83,13 @@ export function AppHeader({ onOpenImage, undo, redo, onUndo, onRedo, exportStatu
 }
 
 /**
- * Export as PNG. Unavailable (no image, or an export being written), it is aria-disabled rather
- * than disabled, so keyboard focus stays on it while it shows "Exporting…". Its width stays the
- * same, so the header never shifts.
+ * Export as PNG. Unavailable (no image, another image opening, or an export being written), it is
+ * aria-disabled rather than disabled, so keyboard focus stays on it while it shows "Exporting…" or
+ * while an image opens. Its title, which says why, is also its accessible description. Its width
+ * stays the same, so the header never shifts.
  */
 function ExportButton({ status, onClick }: { status: ExportStatus; onClick: () => void }) {
-  const title =
-    status.kind === 'ready'
-      ? `Export as PNG: ${status.fileName}`
-      : status.kind === 'running'
-        ? 'Exporting the image as PNG…'
-        : 'Export — no image open'
+  const title = status.kind === 'ready' ? `Export as PNG: ${status.fileName}` : EXPORT_TITLES[status.kind]
   return (
     <button
       type="button"

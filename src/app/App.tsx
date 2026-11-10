@@ -63,9 +63,11 @@ function App() {
   const adjustsLastDelete = adjustableDelete(state) !== null
   const exportStatus: ExportStatus = state.exporting
     ? { kind: 'running' }
-    : state.document && canExport(state)
-      ? { kind: 'ready', fileName: exportFileName(state.document.name) }
-      : { kind: 'unavailable' }
+    : !state.document
+      ? { kind: 'unavailable' }
+      : canExport(state)
+        ? { kind: 'ready', fileName: exportFileName(state.document.name) }
+        : { kind: 'importing' }
 
   const handleResize = useCallback(
     (workspace: WorkspaceMetrics) => dispatch({ type: 'workspace-resized', workspace }),

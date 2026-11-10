@@ -1813,7 +1813,7 @@ Recommendation: **READY FOR OWNER REVIEW.** No blocker was found in the implemen
 
 ## Milestone: First Working Background Removal (2026-11-08)
 
-Assigned by the project owner as one larger, explicitly authorised milestone: the complete workflow open → Magic Wand → tolerance → inspect → Delete → transparent result → Undo / Redo → transparent PNG export, then Auto Trim if it could be done safely. Worked on the `phase/03-background-deletion` branch, uncommitted (the owner commits).
+Assigned by the project owner as one larger, explicitly authorised milestone: the complete workflow open → Magic Wand → tolerance → inspect → Delete → transparent result → Undo / Redo → transparent PNG export, then Auto Trim if it could be done safely. Worked on the `phase/03-background-deletion` branch. The owner committed the initial PNG export implementation as `586495a`; the audit corrections below are uncommitted on the same branch (the owner commits).
 
 ### Recovery check after the power outage
 
@@ -1858,7 +1858,7 @@ PNG export was the one missing step (Phase 6 in this plan, brought forward by th
 - No Ctrl + S shortcut (Phase 6 shortcut work).
 - No colour profile chunk; pixels are sRGB as decoded (Phase 1 limitation).
 
-### Decisions for the owner
+### Decisions for the owner (as raised on 2026-11-08)
 
 1. Accept the application's own PNG encoder (no dependency) over the canvas encoder.
 2. Export availability: allowed while another image opens and with a selection (it ignores the selection); one export at a time.
@@ -1867,6 +1867,49 @@ PNG export was the one missing step (Phase 6 in this plan, brought forward by th
 5. Whether to add Ctrl + S now or keep it for Phase 6.
 6. Whether a "Revert to original" command or keeping the opened pixels outside the history limits is wanted (not implemented: memory cost of one more full-resolution image).
 7. These changes sit uncommitted on the Phase 3 branch; the owner may prefer to commit them on a branch of their own after the Phase 3 merge.
+
+The owner's answers are recorded below.
+
+### Owner review and audit corrections (2026-11-09)
+
+An independent read-only review by Codex of commit `586495a` (the initial PNG export implementation, committed by the owner on `phase/03-background-deletion`) found no critical or high-severity defects. The custom PNG encoder passed its technical review, all 1,240 unit tests and every browser suite it ran passed, and the project owner completed seven manual background-removal workflow checks, all passed (owner-reported; performed by the owner, not by Claude). The review found two code issues and outdated documentation, which the owner authorised Claude to correct, and only those.
+
+Owner decisions (2026-11-09):
+
+| # | Decision |
+| --- | --- |
+| 1 | The application's own PNG encoder is approved, following the independent code review and the successful manual QA. |
+| 2 | Seven owner-performed background-removal workflow checks passed. |
+| 3 | Export is permitted while a selection is active (it ignores the selection). |
+| 4 | Export must be disabled while another image is loading (reverses this milestone's original choice, decision 2 above). |
+| 5 | Latest-export-only tracking of unexported edits is approved. |
+| 6 | The wording "Export", "Exporting…" and "Unexported edits" is approved. |
+| 7 | Ctrl + S is deferred to Phase 6. |
+| 8 | "Revert to original" is deferred until a memory-conscious design exists. |
+| 9 | Starting the browser download counts as an export; actually saving the file cannot be confirmed (accepted limitation). |
+| 10 | What Firefox does when its Save dialog is cancelled remains unverified. |
+| 11 | Commit `586495a` contains the initial PNG export implementation. |
+
+These do not complete or approve Phase 3: its required owner items (Step 12, Remaining owner QA 1–3) are unchanged and still open, and Phase 3 is not approved for merge.
+
+Corrections made:
+
+1. **Export unavailable while another image is opening.** `canExport` (`editor/exportCommands.ts`) now also requires that no import is pending (`isImporting`), as the edit actions already did, and the reducer refuses an `export-started` that arrives while an import is pending (a start computed just before the import began). The header's Export button is then `aria-disabled` with the tooltip and accessible description "Export — not available while another image is opening" (new `ExportStatus` kind `importing`). With a selection and no import, Export is available as before. Race analysis: no export can start for an image that is about to be replaced. An export already running when an import starts (Open Image stays available) keeps its own immutable pixel buffer, finishes, downloads the image it started with, and is recorded as the last export only if its document is still open, unchanged from `586495a`. A failed import keeps the image, and Export is available again.
+2. **Suggested name never equal to the opened name.** Reproduced: `exportFileName('a' × 200 + '-cleaned.png')` returned the same name, because the 200-character stem limit cut exactly the `-cleaned`. Now, when the suggestion equals the opened name (ignoring case, as Windows and macOS file systems do), the stem is cut by one more character (whole code points; trailing spaces and dots dropped again), giving `'a' × 199 + '-cleaned.png'`. Every other name is unchanged, `-cleaned.png` is kept, and the result is never empty or invalid.
+3. **Documentation**: this section; `FEATURE_SPEC.md` §22; `UI_UX_SPEC.md` (Export Button, shortcuts); `IMAGE_PROCESSING_SPEC.md` (PNG Export); `ARCHITECTURE.md` (PNG Export Modules); `scripts/browser/README.md`.
+
+The PNG encoder (`src/image/export/`) is unchanged, so every exported file is byte for byte as before. No dependency was added or removed.
+
+Verification of the corrections:
+
+- Unit tests: 1,245 pass (5 new). `exportCommands.test.ts`: Export unavailable during an import and available again after it succeeds or fails, a start computed before the import refused, Export with a selection; the audit's exact collision and its variants (case, a folder, characters of two UTF-16 units, a cut ending in spaces and dots); a sweep of 12,474 names (lengths 0–230 with several fillers and endings), each giving a valid name, different from the opened one ignoring case, with a stem of at most 200 characters. `exportImage.test.ts`: nothing starts during an import, and the export afterwards is exact; the workflow test now also checks that the selection stays through an export. `AppHeader.test.ts`: the importing state's markup. Run against the previous `exportCommands.ts`, exactly the three new availability and name tests fail.
+- Type checking (forced), lint and the production build pass.
+- Browser: `scripts/browser/png-export.mjs` passes in Chrome and Firefox: 127 checks in the production build with timings (was 103) and 119 under React Strict Mode (was 95). The 12 new checks per browser: Export with an active selection (exact file, selection kept), Export `aria-disabled` with the new tooltip while a held import runs, a click then starting and downloading nothing, and Export available and exact once the image has opened. Export timings unchanged (Chrome 0.37 s at 4K, 1.9 s near 50 MP; Firefox 0.27 s and 1.3–1.4 s).
+- Existing browser regression suites, production build, Chrome and Firefox, all passing: `smoke.mjs` 340, `edit-workflow.mjs` 515, `auto-trim.mjs` 174, `edge-adjust.mjs` 199, `edit-ownership.mjs` 52 (`edit-workflow` and `auto-trim` with their timing checks this time, hence more than the earlier `--no-perf` counts). Image loading, edits during imports, Undo / Redo and replacement behave as before.
+
+### Remaining manual QA
+
+Phase 3's required items are unchanged: Step 12, Remaining owner QA 1 (large-image pauses), 2 (Orca, or an explicit deferral) and 3 (Firefox dialog Escape and focus return). Not verified by anyone yet, and recommended rather than required unless the owner decides otherwise: what Firefox does when its Save dialog is cancelled (decision 10; the application counts the export either way, decision 9), Export's announcements and its unavailable-while-opening description with Orca, and a look at Export being unavailable while a large image opens in a real browser. None of these is marked passed here.
 
 ---
 

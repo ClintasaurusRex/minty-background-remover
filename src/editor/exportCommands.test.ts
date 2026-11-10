@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { createImportError } from '../image/import/errors'
 import { type Rgba, imageFromRows } from '../image/selection/testFixtures'
 import { adjustDeleteCommand, autoTrimCommand, editActionCommand, hasUnexportedEdits } from './editCommands'
 import { editErrorMessage, editNoticeText, isShownEditNotice } from './editFeedback'
@@ -87,6 +88,44 @@ describe('exportFileName', () => {
     expect(exportFileName('')).toBe('image-cleaned.png')
   })
 
+  it('never suggests the opened name when cutting a long stem gives it back (Phase 3 audit)', () => {
+    // The audit's collision: a 200-character stem followed by "-cleaned" is cut back to the
+    // 200 characters, which with "-cleaned.png" spelled the opened name again.
+    const opened = `${'a'.repeat(200)}-cleaned.png`
+    expect(exportFileName(opened)).toBe(`${'a'.repeat(199)}-cleaned.png`)
+    // The same on file systems that ignore case, with a folder, and with characters made of two
+    // UTF-16 units (cut whole).
+    expect(exportFileName(`${'A'.repeat(200)}-Cleaned.PNG`)).toBe(`${'A'.repeat(199)}-cleaned.png`)
+    expect(exportFileName(`C:\\pictures\\${'a'.repeat(200)}-cleaned.png`)).toBe(`${'a'.repeat(199)}-cleaned.png`)
+    expect(exportFileName(`${'😀'.repeat(200)}-cleaned.png`)).toBe(`${'😀'.repeat(199)}-cleaned.png`)
+    // A cut that ends in spaces or dots drops them too.
+    expect(exportFileName(`${'a'.repeat(198)}. -cleaned.png`)).toBe(`${'a'.repeat(198)}-cleaned.png`)
+    // Long names that do not collide keep the whole 200-character stem.
+    expect(exportFileName(`${'a'.repeat(200)}-cleaned-2.png`)).toBe(`${'a'.repeat(200)}-cleaned.png`)
+    expect(exportFileName(`${'a'.repeat(201)}-cleaned.png`)).toBe(`${'a'.repeat(200)}-cleaned.png`)
+  })
+
+  it('always gives a valid name that differs from the opened one, for names of any length', () => {
+    const endings = ['', '.png', '-cleaned.png', '-CLEANED.png', '-cleaned', '-cleaned.png.png', ' .png', '..png', '.']
+    const fillers = ['a', '😀', ' ', '.', 'a.', 'é']
+    let checked = 0
+    for (const filler of fillers) {
+      for (let length = 0; length <= 230; length++) {
+        for (const ending of endings) {
+          const opened = `${filler.repeat(length)}${ending}`
+          const name = exportFileName(opened)
+          expect(name.toLowerCase()).not.toBe(opened.toLowerCase())
+          expect(name).toMatch(/^[^\s.][^]*-cleaned\.png$/)
+          expect(Array.from(name.slice(0, -'-cleaned.png'.length)).length).toBeLessThanOrEqual(200)
+          // eslint-disable-next-line no-control-regex -- control characters must never appear
+          expect(name).not.toMatch(/[\u0000-\u001f\u007f<>:"/\\|?*]|[\s.]-cleaned\.png$/)
+          checked++
+        }
+      }
+    }
+    expect(checked).toBe(fillers.length * 231 * endings.length)
+  })
+
   it('keeps long names to a 200-character stem without splitting characters', () => {
     const long = `${'😀'.repeat(150)}${'x'.repeat(100)}.png`
     const name = exportFileName(long)
@@ -113,10 +152,39 @@ describe('Export availability and state', () => {
     expect(editorReducer(running, exportStartCommand(state, 9)!.action)).toBe(running)
   })
 
-  it('is available while another image opens, and with a selection (which it ignores)', () => {
-    const importing = reduce(click(start(), 0, 0), { type: 'import-started', importId: 5 })
-    expect(canExport(importing)).toBe(true)
-    expect(exportStartCommand(importing, 1)?.pixels).toBe(importing.document!.pixels)
+  it('is unavailable while another image opens, and available again once it has opened or failed', () => {
+    const state = run(click(start(), 0, 0), 'delete-selection')
+    const importing = reduce(state, { type: 'import-started', importId: 5 })
+    expect(canExport(importing)).toBe(false)
+    expect(exportStartCommand(importing, 1)).toBeNull()
+    // A start computed before the import started is refused once it has started.
+    const before = exportStartCommand(state, 2)!
+    expect(editorReducer(importing, before.action)).toBe(importing)
+    // A failed import keeps the image, which can be exported again.
+    const failed = reduce(importing, {
+      type: 'import-finished',
+      importId: 5,
+      result: { ok: false, error: createImportError('decode-failed') },
+    })
+    expect(failed.document).toBe(state.document)
+    expect(canExport(failed)).toBe(true)
+    expect(exportStartCommand(failed, 3)?.pixels).toBe(state.document!.pixels)
+    // A successful one replaces it; the new image can be exported.
+    const other = opened(picture(), state)
+    expect(canExport(other)).toBe(true)
+    expect(exportStartCommand(other, 4)?.pixels).toBe(other.document!.pixels)
+    // Selection changes stay available while an image opens; Export still is not.
+    expect(canExport(click(importing, 4, 1))).toBe(false)
+  })
+
+  it('is available with a selection, which it ignores', () => {
+    const selected = click(start(), 0, 0)
+    expect(selected.selection).not.toBeNull()
+    expect(canExport(selected)).toBe(true)
+    const startAction = exportStartCommand(selected, 1)!
+    expect(startAction.pixels).toBe(selected.document!.pixels)
+    const done = accepted(accepted(selected, startAction.action), { type: 'export-finished', id: 1 })
+    expect(done.selection).toBe(selected.selection)
   })
 
   it('refuses a start computed for an earlier content state', () => {

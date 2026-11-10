@@ -103,7 +103,7 @@ PNG export should not intentionally degrade the image.
 
 ## PNG Export
 
-Implemented 2026-11-08 (PNG export brought forward from Phase 6; `FEATURE_SPEC.md` §22) in `image/export/pngEncoder.ts` (`encodePng`) and `image/export/crc32.ts`.
+Implemented 2026-11-08 (PNG export brought forward from Phase 6; `FEATURE_SPEC.md` §22) in `image/export/pngEncoder.ts` (`encodePng`) and `image/export/crc32.ts`, committed by the owner as `586495a`. The encoder is owner-approved (2026-11-09) after an independent code review of that commit, which found no defect in it, and seven owner-performed workflow checks. The audit corrections of 2026-11-09 (Export availability during imports, the suggested name) did not change the encoder: its files are unchanged, and every file it writes is byte for byte what it wrote before.
 
 - **Output**: an 8-bit RGBA PNG (colour type 6), not interlaced, at the image's exact size, with only IHDR, IDAT and IEND chunks. The straight RGBA bytes are written as they are, so every visible pixel decodes exactly, partially transparent pixels included. Fully transparent pixels are written as 0, 0, 0, 0 (P3-D2). No colour profile chunk is written; the pixels are sRGB as decoded (Phase 1 limitation: the browser converts colour profiles to sRGB on import).
 - **Why not the canvas encoder**: `canvas.toBlob` / `OffscreenCanvas.convertToBlob` go through the canvas's premultiplied storage. Measured on `edge-alpha.png` (37,336 partially transparent pixels): Firefox's canvas encoder changed the colour of 36,857 of them; Chrome's changed none in that test, but the behaviour is browser-dependent (the desktop webviews, WebKitGTK and WebView2, are untested). The application's encoder changes none in either browser.
