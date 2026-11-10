@@ -452,6 +452,16 @@ Applying crop must be undoable.
 
 Aspect ratio presets are not required initially.
 
+### As implemented (Phase 4, 2026-11-09; awaiting owner review)
+
+- Crop is a toolbar tool. Dragging on the image draws the rectangle to keep, between the nearest pixel edges; the image outside it is darkened, its size is shown beside it, and its four corners and four edges (handles on the corners and, when there is room, the edge middles) resize it; dragging inside moves it. A press outside it starts a new one, so a click without a drag removes it. Dragging past the image stops at its edges.
+- A crop rectangle is always whole image pixels, at least 1 × 1 and inside the image: an empty or inside-out rectangle cannot be made.
+- The options row shows and edits X, Y, W and H in image pixels from the keyboard, with Apply Crop and Cancel. Enter applies and Escape cancels (not in text fields; Escape with no crop pending still clears the selection).
+- Apply Crop keeps every byte inside the rectangle exactly (alpha and colour hidden under alpha 0 included), clears the selection, fits the image to the workspace and is one Undo step (Undo restores every byte, the size, the selection and the Magic Wand click). A rectangle covering the whole image cannot be applied (it would change nothing). The rectangle itself never becomes part of the image or of an export.
+- Choosing another tool or opening another image drops the rectangle.
+
+Details: `IMPLEMENTATION_PLAN.md`, Phase 4 Status.
+
 ---
 
 ## 12. Eyedropper
@@ -466,6 +476,12 @@ RGBA
 ```
 
 The selected colour may be used by Replace Colour.
+
+### As implemented (Phase 4, 2026-11-09; awaiting owner review)
+
+- The Eyedropper is a toolbar tool. A click reads the exact stored values of the image pixel shown under the pointer, at any zoom and device pixel ratio, and never changes the image.
+- Its options row shows a swatch (over a checkerboard), hex (`#RRGGBB`, or `#RRGGBBAA` when not opaque), RGBA, alpha as a percentage and the pixel it was read from; each reading is announced.
+- The swatch opens the compact colour picker (`UI_UX_SPEC.md`, Colour Picker UX) to adjust the colour or type another. The colour is kept for the session; it will be the source colour for Replace Colour.
 
 ---
 
@@ -498,6 +514,10 @@ A grey shaded object replaced with blue should retain:
 rather than becoming a single flat blue shape.
 
 The exact algorithm should be designed and tested separately.
+
+### Status (Phase 4, 2026-11-09)
+
+The basic replacement algorithm exists and is tested (`image/colour/replaceColour.ts`: matching within tolerance with the Magic Wand's colour distance, red, green and blue replaced, alpha preserved, fully transparent pixels untouched, optionally limited to a selection). The Replace Colour tool is not available yet: its scope, shading preservation, edge handling, explicit alpha change and preview are open owner decisions RC1–RC6 (`IMPLEMENTATION_PLAN.md`, Phase 4 Status).
 
 ---
 
@@ -603,7 +623,7 @@ The implementation should account for memory usage when handling large images.
 
 Approved for Phase 3:
 
-- History holds image edits only (P3-D7): Delete (with any cleanup or feathering) and Auto Trim, and later pixel tools. Selection changes are not entries; undoing an edit restores the selection from just before it, and the Magic Wand click that made it can again be re-applied with a new tolerance.
+- History holds image edits only (P3-D7): Delete (with any cleanup or feathering) and Auto Trim, Crop since Phase 4, and later pixel tools. Selection changes are not entries; undoing an edit restores the selection from just before it, and the Magic Wand click that made it can again be re-applied with a new tolerance.
 - A new edit clears Redo. Opening another image clears the history; a failed import keeps it.
 - Limits (P3-D8): at most 25 entries and 256 MB of history data. The oldest entries are dropped first. The newest entry is always kept, even when it alone exceeds 256 MB, so the last edit can always be undone.
 - Undo and Redo shortcuts keep their text-editing meaning in text fields.

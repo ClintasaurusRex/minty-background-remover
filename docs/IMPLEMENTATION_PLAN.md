@@ -1913,6 +1913,47 @@ Phase 3's required items are unchanged: Step 12, Remaining owner QA 1 (large-ima
 
 ---
 
+## Phase 3 Manual QA Backlog (deferred by the owner, recorded 2026-11-09)
+
+**Status: Phase 3 is not approved and not merged.** Its implementation and automated testing are complete (including the corrections after the independent Codex audit of `586495a`, committed as `74608b1`), and the owner has personally passed seven core workflow checks (2026-11-09) and the nine-test priority session T1–T9 (Step 12). The manual QA below is still outstanding.
+
+The owner has **intentionally deferred** this manual QA to a later session, and has authorised Phase 4 development to begin on `phase/04-crop-colour` before Phase 3 receives formal approval. That authorisation is not an approval or a merge of Phase 3, and nothing here changes Phase 3's code or branch.
+
+Every item is **pending**: not passed and not failed. Original check IDs are kept: `6.n`, `8.n`, `9.n` and `11.n` are the Step 6, 8, 9 and 11 manual checks reconciled in Step 12; "QA n" is Step 12's "Remaining owner QA, ranked by risk"; "Export decision n" is the table in "Owner review and audit corrections (2026-11-09)". The full instructions for each item are in those sections.
+
+Required before the Phase 3 merge (Step 12 release-readiness checklist):
+
+| Item | Original IDs | What remains | Status |
+| --- | --- | --- | --- |
+| Large-image responsiveness, 50 MP fixtures, Chrome and Firefox | QA 1; 6.15, 8.22, 9.12, 11.16; Step 6 decision 1 | On a real desktop in both browsers: `edge-hmi-50mp.png` Delete, Edge cleanup 1 then Feather 5, Ctrl + Z, Ctrl + Y; `trim-photo-50mp.png` Delete, Auto Trim, Undo, Redo (`node scripts/browser/fixtures.mjs` writes the fixtures). Judge the pauses (measured up to about 2.2–2.7 s) and disposition Step 6 decision 1 (stay synchronous, recommended) | Pending |
+| Orca screen reader, or an explicit owner-approved deferral | QA 2; 6.21, 8.20, 9.11, 11.15 | About 15 minutes with Orca on Linux, the checklist under QA 2; or a recorded decision to defer it to a dedicated accessibility pass | Pending |
+| Real Firefox dialog focus, Escape, Cancel and keyboard interaction | QA 3; 6.19 (focus return), 6.23 (check 17 in Firefox) | In real Firefox: Delete, Open another image, Escape: the dialog closes, nothing changes, focus returns to Open. Repeat with Cancel | Pending |
+
+Recommended, not blocking unless the owner decides otherwise:
+
+| Item | Original IDs | What remains | Status |
+| --- | --- | --- | --- |
+| Firefox: leaving edited fields | QA 4; 8.16, 9.9, 9.13, 9.15 | In real Firefox after a Delete: type 2 in Edge cleanup and Tab; clear the field and Tab; the 9.15 sequence by keyboard | Pending |
+| Additional real-image visual checks | QA 5; 8.9, 8.23, 9.14, 11.4, 9.2 | `edge-photo.jpg` at Edge cleanup 2 and Feather 2; the owner's VTScada screenshots at cleanup 1; the owner's valve trimmed at 0, 20 and 50 px; the visible focus ring on the edge slider | Pending |
+| Firefox export Save-dialog cancellation | Export decision 10 | In real Firefox, with "Always ask where to save files" on: Export, then cancel the Save dialog. Record what happens (the application counts the export either way, Export decision 9, accepted) | Pending |
+| Export with Orca, and Export unavailable while a large image opens | "Remaining manual QA" above | Export's announcement and its "not available while another image is opening" description read once; Export unavailable while a 50 MP image opens, in a real browser | Pending |
+
+Outstanding Phase 3 approval decisions (none decided by this backlog):
+
+| Decision | Recommendation recorded | Status |
+| --- | --- | --- |
+| Step 6 decision 1 / Step 12 decision 1: large-image edits stay synchronous | Keep synchronous for Phase 3; propose a "Processing…" indication in Phase 6 if wanted | Awaiting owner |
+| Step 8 decisions 1–4: thickness-limited feathering; amounts kept for the session; synchronous; wording | As implemented | Provisional |
+| Step 11 decisions 1–7: where Trim lives and Trim Tight, Fit on Undo / Redo, visible no-op and eviction messages, eviction for both limits, the padding control, wording, synchronous pauses | As implemented | Provisional |
+| P3-D6: Auto Trim threshold 0 and padding clipped at the edges | As implemented | Provisional |
+| Step 12 decision 3: run Orca before the merge, or defer it explicitly | Run it before the merge | Awaiting owner |
+| Step 12 decision 4: commit the Step 12 scratch checks as maintained scripts | Not needed for the merge | Awaiting owner |
+| Phase 3 final review, checkpoint commit and merge | Owner and ChatGPT only | Not started |
+
+Phase 4 work does not depend on any of these items, and does not change Phase 3's behaviour except where Phase 4's own sections say so.
+
+---
+
 ## Phase 4 — Crop and Colour Tools
 
 ### Goals
@@ -1954,6 +1995,110 @@ Prototype shading-preserving recolour.
 - Exact colour replacement.
 - Tolerance replacement.
 - Alpha preservation.
+
+### Phase 4 Status (overnight session, 2026-11-09)
+
+Started on `phase/04-crop-colour` (branched by the owner from `74608b1`) with the owner's explicit authorisation to begin Phase 4 before Phase 3 is approved. This is not an approval or merge of Phase 3; its outstanding manual QA is in "Phase 3 Manual QA Backlog" above. Nothing was committed (the owner commits). **Phase 4 is not approved**; everything below awaits owner and ChatGPT review and the owner's manual QA.
+
+| Feature | Status |
+| --- | --- |
+| Manual Crop | Implemented and verified automatically (unit, Chrome, Firefox, Strict Mode). Owner manual QA pending |
+| Eyedropper (HEX, RGBA, alpha) | Implemented and verified automatically. Owner manual QA pending |
+| Colour picker | Implemented (used by the Eyedropper's colour swatch) and verified automatically. Owner manual QA pending |
+| Replace Colour | **Algorithm only** (basic flat replacement, tested); the tool stays unavailable ("coming soon") until the owner decides the open questions below |
+| Shading-preserving recolour | Not started ("Later in Phase if Stable"; needs its own design and visual review) |
+
+#### Manual Crop (as implemented)
+
+Behaviour: `FEATURE_SPEC.md` §11; UI: `UI_UX_SPEC.md` (Crop UX); processing: `IMAGE_PROCESSING_SPEC.md` (Crop); modules: `ARCHITECTURE.md` (Phase 4 Modules).
+
+- Crop is a toolbar tool (available once an image is open). Dragging on the image draws a rectangle between the nearest pixel edges; the image outside it is darkened; eight handles (four corners, four edge middles when there is room) and the edges resize it; dragging inside moves it; a press outside it starts a new one, so a click without a drag removes it. Dragging outside the image (even outside the window, with pointer capture) stops at the image's edges. A rectangle is always whole pixels, at least 1 × 1, inside the image: zero-area and inside-out rectangles cannot exist.
+- Its size is shown next to it ("640 × 410 px") and in the options row, whose X, Y, W and H fields edit it from the keyboard (the existing field conventions: typing, Enter, Escape, arrows, Page keys; clamped). Apply Crop and Cancel are visible buttons (`aria-disabled`, with reasons in their tooltips, when unavailable). Enter applies and Escape cancels, except in text fields (and Enter on a focused button presses that button); Escape with nothing pending still clears the selection.
+- Apply is an ordinary edit through `completedEditCommand`'s crop path, the one Auto Trim uses: one history entry of kind `crop` holding only the removed pixels (no snapshot), a new revision of the rectangle's size, every kept byte exact (alpha and colour hidden under alpha 0 included), the selection and Magic Wand click cleared (Undo restores them), the image fitted, "Crop applied: A × B px cropped to C × D px." announced. Undo / Redo / export / history limits / display-image ownership are unchanged and apply as for Auto Trim. Applying a rectangle covering the whole image is unavailable (it would change nothing).
+- The rectangle is view state only. Choosing a tool, opening another image and any size change (Crop, Auto Trim, their Undo / Redo) drop it; edits that keep the size (Delete Selection, its Undo / Redo) keep it. It is never drawn into pixels, so it cannot reach an export.
+- The overlay's edges are placed on exactly the device pixels where the canvas draws the corresponding pixel boundaries (`cropRectOnScreen`), checked by unit tests at 16 zoom levels × 6 ratios and in both browsers by reading the canvas at Fit, 100%, 150%, 200%, 300% and 800%, at device pixel ratios 1 and 2.
+
+Implementation decisions (implementation-level, reversible; listed for review):
+
+1. The rectangle and its drag live in the editor state (`crop`), with constant-time geometry in the reducer, like the pan drag; the drag is anchored in image coordinates, so a zoom during a drag keeps working.
+2. Pointer positions snap to the *nearest* pixel edge; moves and resizes apply the rounded pointer movement to the rectangle as it was at the press (no jump when grabbing near an edge, no accumulation).
+3. Grab distance 8 CSS px outside an edge; inside, at most a third of the rectangle's on-screen size, so the middle of a tiny rectangle still moves it. Corners take priority over edges.
+4. X / Y move the rectangle and keep its size; W / H resize it from its top-left corner. Without a rectangle the fields show the whole image.
+5. Apply keeps the Crop tool active, with no rectangle. A click outside an existing rectangle removes it.
+6. Enter is handled in the window's capture phase so an Escape that cancels a crop is marked handled and does not also clear the selection.
+7. `exactToleranceInput` now allows as many digits as a field's maximum has (still at least three), so W = 16384 can be typed; identical behaviour for every existing field (all maxima ≤ 999).
+
+#### Eyedropper and colour picker (as implemented)
+
+- Eyedropper is a toolbar tool (crosshair pointer). A primary click reads the pixel the canvas shows under the pointer, found exactly as the Magic Wand finds it (`pixelUnderPointer`: zoom, pan, device pixel ratio), and shows it in its options row: a swatch over a checkerboard, hex (`#RRGGBB`, or `#RRGGBBAA` when not opaque), "RGBA r, g, b, a", "Alpha n%", and "from pixel x, y" while the image is still the content it was read from. Each reading is announced once. Reading never changes the image, the selection or the history; the values are the stored bytes, colour hidden under alpha 0 included.
+- The colour is kept for the session (across tools and images), like tool options; it is a value, not part of the image.
+- The swatch opens the colour picker (`components/ColourPicker`): a compact modal popover below the swatch with a saturation / brightness area, hue and alpha sliders, a hex field (#RGB, #RGBA, #RRGGBB, #RRGGBBAA; Enter or leaving it applies, Escape restores an unfinished entry), an RGBA readout, Current and New swatches, Cancel and Apply. Focus starts on the area (arrow keys, Shift for 10%, Page keys, Home / End); Escape and Cancel change nothing; focus returns to the swatch; editor shortcuts never act behind it. Applying without changes keeps the colour exactly (the 8-bit colour is the source of truth, HSV is only for the controls).
+- No dependency was added: the picker is about 200 lines of plain React and CSS, and the colour maths (`image/colour/colour.ts`) is pure and tested.
+
+#### Replace Colour: algorithm only, decisions needed
+
+`image/colour/replaceColour.ts` implements what the specifications state for basic replacement, as a pure, tested function that nothing calls yet (as Auto Trim's algorithm preceded its tool in Phase 3 Steps 10 and 11): pixels matching the source within the tolerance (the Magic Wand's alpha-aware distance, 0–100) get the replacement's red, green and blue; every pixel keeps its alpha; fully transparent pixels are never changed; an optional selection limits it; one copy, only when something changes.
+
+The Replace Colour tool is not enabled, because these materially affect what a destructive edit does and are not settled by the specifications (AGENTS.md, Unspecified Requirements):
+
+| # | Open question | Recommendation |
+| --- | --- | --- |
+| RC1 | Scope: the whole image, the selection when there is one, or contiguous from a clicked pixel? | The selection when there is one, otherwise the whole image (never more than the user marked) |
+| RC2 | Flat or shading-preserving? The assignment asks to "preserve shading and highlights where appropriate"; `FEATURE_SPEC.md` §13 and `IMAGE_PROCESSING_SPEC.md` make shading preservation a later mode, designed and visually tested separately after basic replacement works | Ship flat replacement first as the specifications order; prototype shading preservation as a second mode with a visual review |
+| RC3 | Anti-aliased edges: flat replacement at low tolerance leaves a fringe of partly blended pixels; a soft fall-off would be a new rule | Leave edges to the tolerance for now; consider a fall-off together with RC2 |
+| RC4 | How the user explicitly asks to change alpha ("preserve alpha unless explicitly changed") | Never change alpha in the first version; the replacement's alpha is ignored |
+| RC5 | Preview form: the recoloured image shown before Apply (a second display image, its own memory and ownership rules) or a highlight of the matching pixels (the selection overlay) | Highlight matches first (no new image ownership); a full preview with RC2 |
+| RC6 | Source from the Eyedropper's colour, and where From / To / Tolerance live (a Replace Colour options row) | As `UI_UX_SPEC.md`'s Replace Colour sketch: From (Eyedropper colour or picker), To (picker), Tolerance slider, Preview, Apply |
+
+#### Verification (this session)
+
+- Baseline before any change: typecheck and lint clean, 70 files / 1,245 tests passing, production build passing.
+- Now: typecheck and lint clean; **77 files / 1,341 tests** passing (96 new: crop geometry 21 incl. 20,000 random operations, crop screen mapping 9, crop editor and commands 25, crop options markup 4, colour values 14, Replace Colour 7, Eyedropper and picker 14, plus one new test each in `ToolOptions.test.ts` and `toleranceInput.test.ts`; existing tests updated only for the new state fields, tools and availability field); production build passing (380.4 kB JS, 120.3 kB gzip; was 358.7 / 114.0).
+- Deliberate-defect checks: 13 crop defects and 10 colour defects, each caught by the tests (run against the working tree with backups restored; no dev server was running).
+- New browser scripts (headless Chrome and Firefox, production build and the Vite dev server under React Strict Mode): `scripts/browser/crop.mjs` 172 checks (ratios 1 and 2; 176 with the timing runs; Strict Mode 172) and `scripts/browser/colour.mjs` 80 checks (ratios 1 and 2; Strict Mode all passing). Existing suites on this build: see the table below.
+- Performance (production, headless, this machine), crop to the middle quarter of a photographic image, the whole synchronous handler: 4K Apply 91 / 105 ms, Undo 28 / 39 ms, Redo 8 / 14 ms (Chrome / Firefox), history entry 24.9 MB; near 50 MP Apply 518 / 584 ms, Undo 149 / 217 ms, Redo 46 / 61 ms, history entry 150 MB (4 bytes per removed pixel of a noisy background, within the 256 MiB budget; the same cost Auto Trim already has).
+
+| Existing browser script (production, Chrome and Firefox) | Result on the Phase 4 build |
+| --- | --- |
+| `smoke.mjs` | 340 passed |
+| `edit-workflow.mjs --no-perf` | 507 passed |
+| `auto-trim.mjs --no-perf` | 146 passed |
+| `png-export.mjs --no-perf` | 119 passed |
+| `edge-adjust.mjs --no-perf` | 175 passed |
+| `edit-ownership.mjs --mode both` | 52 passed |
+| `edge-cleanup.mjs --no-perf` | 885 passed |
+| `gpu-crash.mjs --kill-test-gpu-process` (Chrome) | 23 passed |
+
+#### Known limitations
+
+- Apply Crop is synchronous like every edit (P3-D11): about 0.5–0.6 s for a 50 MP crop, with no progress indication.
+- A crop of a varied (noisy) border keeps up to 4 bytes per removed pixel in history (150 MB for three quarters of a 50 MP photo), as Auto Trim does; older Undo steps are dropped to stay within 256 MiB, and the message says so.
+- No aspect-ratio presets (not required initially), no keyboard nudging of the rectangle on the canvas (the fields cover keyboard use), no rotation.
+- The Eyedropper samples a single pixel (no averaging); it reads the stored bytes, so partly transparent pixels show the colour as the browser decoded it (Phase 1: browsers alter some partly transparent colours on import).
+- At 640 px the toolbar now wraps to two lines (one more tool); nothing scrolls sideways.
+- Headless Firefox cannot show focus rings or activate buttons with keys; those parts are checked in Chrome only.
+
+#### Manual QA still required (owner; none performed by Claude)
+
+| ID | Check |
+| --- | --- |
+| P4-C1 | Real desktop Chrome and Firefox: draw, move and resize a crop on `pump.png` and a screenshot; handles and cursors feel right; the darkened area and size label are clear on light and dark images |
+| P4-C2 | Crop at Fit, 100%, 400% and on a high-DPI or fractional-scaling display: the rectangle sits exactly on the pixel edges |
+| P4-C3 | Enter / Escape / Apply Crop / Cancel; keyboard only (Tab to the fields and Apply Crop) in real Firefox; focus rings visible |
+| P4-C4 | Crop after Delete and after Auto Trim, then Undo / Redo and Export; open the exported PNG elsewhere |
+| P4-C5 | A 50 MP crop: judge the pause (about 0.5–0.6 s measured) |
+| P4-E1 | Eyedropper on real images at several zooms: the readout matches the pixel under the pointer; transparent and partly transparent pixels |
+| P4-E2 | Colour picker: open, drag the area, hue and alpha, type hex, Apply, Cancel, Escape, keyboard only in real Firefox, focus return |
+| P4-A1 | Orca: crop fields and buttons, the crop announcement, the Eyedropper announcement, the picker's controls (or include in the deferred accessibility pass) |
+| P4-L1 | Layout at 640 px and on an ultrawide display |
+
+#### Decisions for the owner
+
+1. Replace Colour RC1–RC6 above (blocking the Replace Colour tool).
+2. Crop implementation decisions 1–7 above (provisional).
+3. The Eyedropper's colour kept for the session across images; picker opens with white when there is no colour.
+4. The toolbar order Magic Wand, Crop, Eyedropper, Replace Colour, Auto Trim (from `UI_UX_SPEC.md`'s example), and the two-line toolbar at 640 px.
+5. Whether the Eyedropper should also be offered inside Replace Colour only (the specification's "may be used by Replace Colour") or stay a tool of its own as now.
 
 ---
 

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_MAGIC_WAND_SETTINGS, type MagicWandSettings } from '../../editor/editorState'
 import type { SelectionAction } from '../../editor/selectionCommands'
-import type { ToolId } from '../../editor/types'
+import type { Rectangle, Size, ToolId } from '../../editor/types'
 import { type EdgeSettings, NO_EDGE_TREATMENT } from '../../image/edit/deleteWithEdges'
 import { ToolOptions } from './ToolOptions'
 
@@ -24,6 +24,11 @@ function render(
   edgeSettings: EdgeSettings = NO_EDGE_TREATMENT,
   adjustsLastDelete = false,
   autoTrim: { padding: number; canAutoTrim: boolean } = { padding: 5, canAutoTrim: true },
+  crop: { cropRect: Rectangle | null; imageSize: Size | null; canApplyCrop: boolean } = {
+    cropRect: null,
+    imageSize: null,
+    canApplyCrop: false,
+  },
 ) {
   return renderToStaticMarkup(
     createElement(ToolOptions, {
@@ -45,6 +50,13 @@ function render(
       onPaddingChange: noop,
       canAutoTrim: autoTrim.canAutoTrim,
       onAutoTrim: noop,
+      ...crop,
+      onCropFieldChange: noop,
+      onApplyCrop: noop,
+      onCancelCrop: noop,
+      colour: null,
+      sampledPixel: null,
+      onChooseColour: noop,
     }),
   )
 }
@@ -67,8 +79,19 @@ describe('ToolOptions', () => {
     expect(render(null)).toBe('')
   })
 
-  it('shows nothing for tools without options', () => {
+  it('shows nothing for tools without options, and for Crop without an image size', () => {
     for (const tool of ['crop', 'replace-color'] as const) expect(render(tool)).toBe('')
+  })
+
+  it('shows the Crop options while Crop is active (Phase 4)', () => {
+    const markup = render('crop', undefined, undefined, undefined, undefined, undefined, undefined, {
+      cropRect: { x: 2, y: 3, width: 40, height: 30 },
+      imageSize: { width: 100, height: 80 },
+      canApplyCrop: true,
+    })
+    expect(markup).toMatch(/^<div class="tool-options" role="group" aria-label="Crop options">/)
+    expect(markup).toContain('Apply Crop')
+    expect(markup).not.toContain('Magic Wand options')
   })
 
   it('shows the Magic Wand options while the Magic Wand is active', () => {

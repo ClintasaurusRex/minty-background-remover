@@ -71,6 +71,8 @@ describe('editorReducer: imports', () => {
       magicWand: { tolerance: 20, floodMode: 'contiguous', selectionMode: 'new' },
       edgeSettings: { cleanup: 0, feather: 0 },
       autoTrimPadding: 5,
+      crop: { rect: null, drag: null },
+      colour: null,
       selection: null,
       lastMagicWandOperation: null,
       history: {
@@ -881,9 +883,7 @@ describe('editorReducer: tools and Magic Wand options', () => {
 
   it('ignores tools that are not available yet', () => {
     const state = opened()
-    for (const tool of ['crop', 'replace-color'] as const) {
-      expect(reduce(state, { type: 'tool-selected', tool })).toBe(state)
-    }
+    expect(reduce(state, { type: 'tool-selected', tool: 'replace-color' })).toBe(state)
   })
 
   it('ignores unknown and malformed tool ids', () => {

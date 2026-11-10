@@ -11,8 +11,14 @@ export const TOOLS: readonly ToolDefinition[] = [
   {
     id: 'crop',
     label: 'Crop',
-    description: 'Crop the image to a rectangle',
-    available: false,
+    description: 'Crop the image to a rectangle you drag on it',
+    available: true,
+  },
+  {
+    id: 'eyedropper',
+    label: 'Eyedropper',
+    description: 'Read the exact colour of a pixel',
+    available: true,
   },
   {
     id: 'replace-color',

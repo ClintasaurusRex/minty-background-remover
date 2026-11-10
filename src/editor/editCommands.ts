@@ -1,5 +1,6 @@
 import { createDisplayImage } from '../canvas/displayImage'
 import { type EdgeSettings, deleteSelectionWithEdges } from '../image/edit/deleteWithEdges'
+import { isWholeImage } from '../image/crop/cropRectangle'
 import { type AutoTrimPlan, planAutoTrim } from '../image/trim/autoTrim'
 import { isEditableTarget } from '../utils/domTargets'
 import {
@@ -9,6 +10,7 @@ import {
   documentVersion,
   isExportedContent,
   isImporting,
+  pendingCrop,
 } from './editorState'
 import { nextRedo, nextUndo } from './history/editHistory'
 import { type EditKind, type HistoryEntry, remadeHistoryEntry } from './history/historyEntry'
@@ -20,8 +22,8 @@ import type { ShortcutKey } from './selectionCommands'
 
 /*
  * Edit commands as the application offers them: Delete Selection, Undo and Redo, from the Magic
- * Wand options row, the header and the keyboard (Phase 3 Step 6), and Auto Trim from its options
- * row (Phase 3 Step 11).
+ * Wand options row, the header and the keyboard (Phase 3 Step 6), Auto Trim from its options
+ * row (Phase 3 Step 11), and Apply Crop from the Crop options row and Enter (Phase 4).
  *
  * As with selection commands, the pixel work happens here, outside the reducer, from the latest
  * committed state; the reducer only accepts or rejects the result. The actions carry a new
@@ -35,7 +37,7 @@ import type { ShortcutKey } from './selectionCommands'
  */
 
 /** The edit actions offered as controls and shortcuts. */
-export type EditAction = 'delete-selection' | 'auto-trim' | 'undo' | 'redo'
+export type EditAction = 'delete-selection' | 'auto-trim' | 'crop' | 'undo' | 'redo'
 
 export interface AvailableEditActions {
   /**
@@ -49,13 +51,18 @@ export interface AvailableEditActions {
    * why. Deciding that beforehand would mean reading the image's pixels on every render.
    */
   readonly autoTrim: boolean
+  /**
+   * Apply Crop: the Crop tool has a rectangle (pendingCrop) that leaves out at least one pixel. A
+   * rectangle covering the whole image would change nothing, so it cannot be applied.
+   */
+  readonly crop: boolean
   /** The edit Undo would undo, or null when there is nothing to undo. */
   readonly undo: EditKind | null
   /** The edit Redo would redo, or null when there is nothing to redo. */
   readonly redo: EditKind | null
 }
 
-const NOTHING_AVAILABLE: AvailableEditActions = { deleteSelection: false, autoTrim: false, undo: null, redo: null }
+const NOTHING_AVAILABLE: AvailableEditActions = { deleteSelection: false, autoTrim: false, crop: false, undo: null, redo: null }
 
 /**
  * Which edit actions can run now. Constant time, so the controls can check it on every render.
@@ -67,9 +74,11 @@ const NOTHING_AVAILABLE: AvailableEditActions = { deleteSelection: false, autoTr
 export function availableEditActions(state: EditorState): AvailableEditActions {
   const version = documentVersion(state)
   if (!version || isImporting(state)) return NOTHING_AVAILABLE
+  const crop = pendingCrop(state)
   return {
     deleteSelection: state.selection !== null,
     autoTrim: true,
+    crop: crop !== null && state.document !== null && !isWholeImage(crop, state.document),
     undo: nextUndo(state.history, version)?.kind ?? null,
     redo: nextRedo(state.history, version)?.kind ?? null,
   }
@@ -91,6 +100,8 @@ export function editActionCommand(
       return available.deleteSelection ? deleteSelectionCommand(state, createImage) : null
     case 'auto-trim':
       return available.autoTrim ? autoTrimCommand(state, createImage) : null
+    case 'crop':
+      return available.crop ? cropCommand(state, createImage) : null
     case 'undo':
       return available.undo ? undoCommand(state, createImage) : null
     case 'redo':
@@ -187,6 +198,30 @@ export function autoTrimCommand(state: EditorState, createImage: CreateDisplayIm
         createImage,
       )
   }
+}
+
+/**
+ * Apply Crop (FEATURE_SPEC.md §11; Phase 4, Manual Crop): the image cut to the Crop tool's
+ * rectangle (pendingCrop), keeping every byte inside it exactly, colour hidden under alpha 0
+ * included. One edit, recorded like Auto Trim through completedEditCommand as a crop patch (the
+ * removed pixels, so Undo restores every byte), a new revision of the rectangle's size and, last,
+ * its display image. The selection and the Magic Wand click are cleared (IMAGE_PROCESSING_SPEC.md,
+ * Crop); Undo brings them back with the pixels. The reducer then fits the cropped image to the
+ * workspace and drops the rectangle (a size change).
+ *
+ * Returns null without a rectangle, or when it covers the whole image (nothing to remove). Returns
+ * `edit-failed`, changing nothing, when the crop cannot be made or displayed (for example for lack
+ * of memory).
+ *
+ * Does not check availability (an import in progress); editActionCommand does.
+ */
+export function cropCommand(state: EditorState, createImage: CreateDisplayImage = createDisplayImage): EditorAction | null {
+  const { document } = state
+  const version = documentVersion(state)
+  const rect = pendingCrop(state)
+  if (!document || !version || !rect || isWholeImage(rect, document)) return null
+  const kept = { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+  return completedEditCommand(state, { kind: 'crop', change: 'crop', version, kept, selection: null }, createImage)
 }
 
 /*

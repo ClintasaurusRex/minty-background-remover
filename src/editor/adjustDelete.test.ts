@@ -214,7 +214,7 @@ describe('Adjusting the last Delete (Phase 3 Step 9)', () => {
     expect(undone.lastMagicWandOperation).toMatchObject({ seed: { x: 0, y: 0 }, tolerance: 10, selectionMode: 'new' })
     expect(undone.editDepth).toBe(0)
     expect(hasUnexportedEdits(undone)).toBe(false)
-    expect(availableEditActions(undone)).toEqual({ deleteSelection: true, autoTrim: true, undo: null, redo: 'delete-selection' })
+    expect(availableEditActions(undone)).toEqual({ deleteSelection: true, autoTrim: true, crop: false, undo: null, redo: 'delete-selection' })
     // The click re-applies exactly as before the Delete.
     const reapplied = reduce(undone, ...commitToleranceCommand(undone, 30))
     expect(sameSelection(reduce(reapplied, ...commitToleranceCommand(reapplied, 10)).selection, before.selection)).toBe(true)

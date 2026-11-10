@@ -1,13 +1,15 @@
 import { useCallback, useRef } from 'react'
 import { clientToViewport } from '../../canvas/coordinates'
+import { cropRectOnScreen } from '../../canvas/cropOverlay'
 import type { DisplayImage } from '../../canvas/displayImage'
 import type { EditError, EditNotice, ImportNotice, WorkspaceMetrics } from '../../editor/editorState'
 import { editNoticeText, isShownEditNotice } from '../../editor/editFeedback'
 import type { PanGestureEffect } from '../../editor/panGesture'
 import type { PointerPress } from '../../editor/selectionCommands'
-import type { ImageDocument, Point, SelectionMask, ViewportState } from '../../editor/types'
+import type { ImageDocument, Point, Rectangle, SelectionMask, ViewportState } from '../../editor/types'
 import type { ImportError } from '../../image/import/errors'
 import { OpenIcon } from '../icons/icons'
+import { CropOverlay } from './CropOverlay'
 import { EditErrorMessage } from './EditErrorMessage'
 import { EditNoticeMessage } from './EditNoticeMessage'
 import { EmptyState } from './EmptyState'
@@ -15,7 +17,14 @@ import { ImageCanvas } from './ImageCanvas'
 import { ImportErrorMessage } from './ImportErrorMessage'
 import { ImportNoticeMessage } from './ImportNoticeMessage'
 import { SelectionOverlayCanvas } from './SelectionOverlayCanvas'
-import { useFileDrop, usePointerPosition, useSpacePan, useWheelInput } from './workspaceInput'
+import {
+  type CropPointerEvent,
+  useCropPointer,
+  useFileDrop,
+  usePointerPosition,
+  useSpacePan,
+  useWheelInput,
+} from './workspaceInput'
 import './Workspace.css'
 
 interface WorkspaceProps {
@@ -53,8 +62,17 @@ interface WorkspaceProps {
   onWheelPan: (delta: Point) => void
   /** Space + drag panning. */
   onPanGesture: (effect: PanGestureEffect) => void
-  /** Show the Magic Wand pointer over the image. */
-  magicWandActive: boolean
+  /** Show the precise (crosshair) pointer over the image: the Magic Wand and the Eyedropper. */
+  crosshairPointer: boolean
+  /**
+   * The Crop tool is active (Phase 4): primary-button presses on the image drag the crop rectangle
+   * (onCropPointer) instead of reaching onImagePress.
+   */
+  cropActive: boolean
+  /** The crop rectangle in image pixels (pendingCrop), drawn over the image, or null. */
+  cropRect: Rectangle | null
+  /** A crop drag's press, moves and end (canvas CSS px). */
+  onCropPointer: (event: CropPointerEvent) => void
   /**
    * A pointer press on the image canvas (any button) that panning did not take.
    * `point` is in canvas CSS px.
@@ -86,7 +104,10 @@ export function Workspace({
   onWheelZoom,
   onWheelPan,
   onPanGesture,
-  magicWandActive,
+  crosshairPointer,
+  cropActive,
+  cropRect,
+  onCropPointer,
   onImagePress,
   onPointerPosition,
 }: WorkspaceProps) {
@@ -94,14 +115,18 @@ export function Workspace({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const imageShown = viewport !== null
   useWheelInput(workspaceRef, canvasRef, imageShown, { onWheelZoom, onWheelPan })
+  const cropShown = imageShown && cropActive && document !== null && workspace !== null
+  const cropScreen = cropShown && cropRect && viewport ? cropRectOnScreen(cropRect, viewport, workspace.devicePixelRatio) : null
+  const startCropPress = useCropPointer(canvasRef, cropShown, cropScreen, onCropPointer)
   // Only presses on the canvas itself count: not on messages or other content above it.
   const handleToolPress = useCallback(
     (event: PointerEvent) => {
       const canvas = canvasRef.current
       if (!canvas || event.target !== canvas) return
+      if (cropShown) return startCropPress(event)
       onImagePress(clientToViewport({ x: event.clientX, y: event.clientY }, canvas.getBoundingClientRect()), event)
     },
-    [onImagePress],
+    [onImagePress, cropShown, startCropPress],
   )
   const pan = useSpacePan(workspaceRef, imageShown, onPanGesture, handleToolPress)
   usePointerPosition(workspaceRef, canvasRef, imageShown, onPointerPosition)
@@ -113,7 +138,8 @@ export function Workspace({
     'workspace',
     pan.ready && !pan.dragging && 'workspace--pan-ready',
     pan.dragging && 'workspace--panning',
-    imageShown && magicWandActive && !pan.ready && !pan.dragging && 'workspace--magic-wand',
+    imageShown && crosshairPointer && !pan.ready && !pan.dragging && 'workspace--crosshair',
+    cropShown && !pan.ready && !pan.dragging && 'workspace--crop',
     dropActive && 'workspace--drop-target',
   ]
     .filter(Boolean)
@@ -138,6 +164,9 @@ export function Workspace({
         onResize={onResize}
       />
       <SelectionOverlayCanvas selection={selection} viewport={viewport} workspace={workspace} />
+      {cropShown && viewport && (
+        <CropOverlay rect={cropRect} imageSize={document} viewport={viewport} workspace={workspace} />
+      )}
 
       {!document && <EmptyState onOpenImage={onOpenImage} />}
 

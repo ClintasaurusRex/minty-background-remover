@@ -19,8 +19,8 @@ import { type EncodedSelection, decodeSelection, encodeSelection } from './selec
  * in commands (historyCommands.ts), never in the reducer. Entries are never modified.
  */
 
-/** The image edits that make history entries (FEATURE_SPEC.md §21). */
-export type EditKind = 'delete-selection' | 'auto-trim'
+/** The image edits that make history entries (FEATURE_SPEC.md §21). Crop: Phase 4, Manual Crop. */
+export type EditKind = 'delete-selection' | 'auto-trim' | 'crop'
 
 /**
  * A Magic Wand click without the document version it was made on (MagicWandOperation in

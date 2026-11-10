@@ -462,6 +462,38 @@ scripts/browser/png-export.mjs    the workflow and every exported file in Chrome
 - No new dependency and no worker: the encoder uses `CompressionStream` and yields between slices; it could move to a Web Worker unchanged if profiling ever shows the need (it takes and returns transferable data).
 - Desktop (Phase 7): `downloadFile` is the one piece to replace with a native Save dialog; the encoder and commands do not depend on the browser's download behaviour.
 
+### Phase 4 Modules (Crop and colour tools; awaiting owner review)
+
+```text
+src/
+├── image/crop/cropRectangle.ts       crop rectangle geometry in image pixels: validity (whole pixels, ≥ 1 × 1,
+│                                     within the image), nearest pixel edge, move, resize by handle, fields
+├── canvas/cropOverlay.ts             the rectangle in workspace CSS px on the device pixels where the canvas
+│                                     draws the boundaries (cropRectOnScreen), hit-testing (handles, edges,
+│                                     inside), cursors, handle and label positions
+├── editor/editorState.ts             crop (CropState: rect, drag) and crop-drag-started / -dragged / -ended,
+│                                     crop-field-changed, crop-cancelled; pendingCrop(); colour (ChosenColour),
+│                                     colour-sampled, colour-chosen; sampledPixel()
+├── editor/editCommands.ts            'crop' edit action (availableEditActions.crop), cropCommand
+├── editor/cropCommands.ts            cropShortcut (Enter / Escape), applyCropTitle
+├── editor/colourCommands.ts          eyedropperClick (pixelUnderPointer + sampleColour)
+├── editor/colourPicker.ts            the picker's rules: PickerColour, withHsv / withAlpha / withHex, svAtPoint,
+│                                     svKey, value texts
+├── image/colour/colour.ts            Rgba, sampleColour, hex parse / format, HSV conversions
+├── image/colour/replaceColour.ts     basic Replace Colour (algorithm only; no tool uses it yet)
+├── app/useCropCommands.ts            Enter / Escape for the crop (window, capture phase)
+└── components/                       Toolbar/CropOptions, Toolbar/EyedropperOptions, Workspace/CropOverlay (SVG,
+                                      pointer-events none), ColourPicker/ (modal popover);
+                                      workspaceInput.useCropPointer (pointer capture, hover cursor)
+scripts/browser/                      crop.mjs, colour.mjs; fixtures.mjs ensureCropFixtures (crop-columns.png)
+```
+
+- No new history type, command path or ownership rule: Apply Crop passes the rectangle to `completedEditCommand` as a `CompletedCrop`, like Auto Trim, so the crop patch, Undo / Redo, history limits, version checks, `dispatchEditAction` and display-image ownership are unchanged. `EditKind` gains `crop`.
+- The crop rectangle and its drag are view state in the reducer, constant time (like the pan drag); no pixels are touched until Apply. The drag stores image coordinates, so view changes during a drag are harmless. The rectangle is dropped by tool changes, imports and size changes (`viewAfterEdit`), and kept by same-size edits.
+- The overlay is SVG in workspace CSS pixels over the canvases; it cannot reach the image or an export. Hit-testing happens in the reducer from the workspace point and the display viewport, so drawing and hit-testing use the same mapping.
+- The Eyedropper reads pixels in a command outside the reducer (tagged with the document version, like a Magic Wand click); the reducer only stores the colour. The chosen colour is session state, not image state.
+- The colour picker is a self-contained component with its rules in a pure module; no dependency was added (decision recorded in `IMPLEMENTATION_PLAN.md`, Phase 4 Status).
+
 Key rules:
 
 - Copy-on-write: a document's pixel buffer is never written. An edit writes a copy, and `createEditedDocument` makes a new document from it; the previous document is unchanged. Pixel work (copying, editing, building history patches) runs in commands outside the reducer, as selection work does; the reducer only accepts or discards a finished result. Creating a document is constant time.

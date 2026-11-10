@@ -673,6 +673,13 @@ Applying crop updates:
 
 Selection state should normally be cleared after applying crop.
 
+As implemented (Phase 4):
+
+- The rectangle is whole image pixels, at least 1 × 1, within the image (`image/crop/cropRectangle.ts`: pointer positions snap to the nearest pixel edge and are clamped; moves and resizes stop at the image's edges and 1 pixel from the opposite edge).
+- Applying it uses the existing exact cut, `cropPixels` (`editor/history/cropPatch.ts`), through `completedEditCommand`, exactly as Auto Trim does: a new buffer of the rectangle's size (copy-on-write), every kept byte unchanged including colour hidden under alpha 0, and a crop patch holding only the removed pixels (run-length encoded raw RGBA; up to 4 bytes per removed pixel for a varied border, a few bytes for a flat or transparent one). Undo restores every byte (`restoreCroppedPixels`); Redo cuts again.
+- The selection is cleared; Undo restores it. Same-size edits keep a pending rectangle; size changes drop it.
+- Measured (production, headless, cropping a photographic image to its middle quarter): 4K 91–105 ms, Undo 28–39 ms; near 50 MP 518–584 ms, Undo 149–217 ms, Redo 46–61 ms, history entry 150 MB (`IMPLEMENTATION_PLAN.md`, Phase 4 Status).
+
 ---
 
 ## Replace Colour
@@ -682,6 +689,8 @@ Basic Replace Colour should:
 1. Identify pixels matching a source colour within tolerance.
 2. Replace the relevant colour values.
 3. Preserve alpha unless explicitly changed.
+
+Implemented as a pure algorithm in Phase 4 (`image/colour/replaceColour.ts`; not yet used by any tool, pending owner decisions RC1–RC6 in `IMPLEMENTATION_PLAN.md`): matching uses the Magic Wand's colour distance (Colour Distance above) with tolerance 0–100; matching pixels get the replacement's red, green and blue (flat replacement); every pixel keeps its alpha and the replacement's alpha is not used; fully transparent pixels are never changed; an optional selection limits the change. The input is never written; one copy is made only when a pixel changes, and the bounds of the change are returned for a pixel patch.
 
 ---
 
@@ -720,6 +729,8 @@ Coordinate conversion must correctly account for:
 - Zoom
 - Pan
 - Canvas position
+
+As implemented (Phase 4): the pixel is found by `pixelUnderPointer` with the display viewport and the device pixel ratio, exactly as for the Magic Wand, so it is the pixel the canvas shows under the pointer (checked against the canvas's own drawing rule at five ratios and five zooms in unit tests, and with real clicks in Chrome and Firefox). `sampleColour` (`image/colour/colour.ts`) returns the stored bytes (r, g, b, a; hex `#RRGGBB` or `#RRGGBBAA`); reading never changes the image.
 
 ---
 

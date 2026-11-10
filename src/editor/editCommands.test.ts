@@ -143,7 +143,7 @@ describe('Delete Selection', () => {
     expect(after.editNotice).toEqual({ kind: 'applied', operation: 'delete-selection', changedPixels: before.selection!.count })
     expect(after.editFeedbackId).toBe(before.editFeedbackId + 1)
     expect(after.editError).toBeNull()
-    expect(availableEditActions(after)).toEqual({ deleteSelection: false, autoTrim: true, undo: 'delete-selection', redo: null })
+    expect(availableEditActions(after)).toEqual({ deleteSelection: false, autoTrim: true, crop: false, undo: 'delete-selection', redo: null })
   })
 
   it('creates one display image of the new pixels, held by the state, and releases nothing', () => {
@@ -210,7 +210,7 @@ describe('Delete Selection', () => {
     expect(command(state, 'delete-selection')).toBeNull()
     const selected = click(state, 0, 0)
     const importing = reduce(selected, { type: 'import-started', importId: 99 })
-    expect(availableEditActions(importing)).toEqual({ deleteSelection: false, autoTrim: false, undo: null, redo: null })
+    expect(availableEditActions(importing)).toEqual({ deleteSelection: false, autoTrim: false, crop: false, undo: null, redo: null })
     expect(command(importing, 'delete-selection')).toBeNull()
     // A failed import makes it available again, with the selection kept.
     const failed = reduce(importing, { type: 'import-finished', importId: 99, result: { ok: false, error: createImportError('decode-failed') } })
@@ -415,7 +415,7 @@ describe('Delete Selection with Undo and Redo', () => {
     expect(command(importing, 'undo')).toBeNull()
     const undone = run(deleted, 'undo')
     expect(command(reduce(undone, { type: 'import-started', importId: 8 }), 'redo')).toBeNull()
-    expect(availableEditActions(importing)).toEqual({ deleteSelection: false, autoTrim: false, undo: null, redo: null })
+    expect(availableEditActions(importing)).toEqual({ deleteSelection: false, autoTrim: false, crop: false, undo: null, redo: null })
   })
 
   it('announces Undo and Redo, and a later failure replaces the announcement', () => {
@@ -458,7 +458,7 @@ describe('Delete Selection with Undo and Redo', () => {
 })
 
 describe('availableEditActions', () => {
-  const none: AvailableEditActions = { deleteSelection: false, autoTrim: false, undo: null, redo: null }
+  const none: AvailableEditActions = { deleteSelection: false, autoTrim: false, crop: false, undo: null, redo: null }
   // With an image open, Auto Trim is always offered (it says when there is nothing to trim).
   const opened: AvailableEditActions = { ...none, autoTrim: true }
 

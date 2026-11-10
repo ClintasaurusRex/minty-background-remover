@@ -24,10 +24,15 @@ export const TOLERANCE_RANGE: WholeNumberRange = { max: MAX_TOLERANCE, pageStep:
 /** Edge cleanup and feather, in pixels. */
 export const EDGE_PIXEL_RANGE: WholeNumberRange = { max: MAX_EDGE_PIXELS, pageStep: 1 }
 
-/** A whole number from 0 to 100 (the range's maximum) typed exactly: applied as the user types, so the slider follows. */
+/**
+ * A whole number from 0 to 100 (the range's maximum) typed exactly: applied as the user types, so the
+ * slider follows. At most three digits, or as many as the maximum has when it has more (the Crop
+ * fields, up to 16,384; Phase 4).
+ */
 export function exactToleranceInput(text: string, range: WholeNumberRange = TOLERANCE_RANGE): number | null {
   const trimmed = text.trim()
-  if (!/^\d{1,3}$/.test(trimmed)) return null
+  const digits = Math.max(3, String(range.max).length)
+  if (!/^\d+$/.test(trimmed) || trimmed.length > digits) return null
   const value = Number(trimmed)
   return value <= range.max ? value : null
 }

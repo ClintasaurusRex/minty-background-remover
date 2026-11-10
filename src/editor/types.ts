@@ -1,5 +1,5 @@
 /** Identifiers for the editing tools planned for the main toolbar. */
-export type ToolId = 'magic-wand' | 'crop' | 'replace-color' | 'auto-trim'
+export type ToolId = 'magic-wand' | 'crop' | 'eyedropper' | 'replace-color' | 'auto-trim'
 
 export interface ToolDefinition {
   id: ToolId

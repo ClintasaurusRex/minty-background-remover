@@ -102,6 +102,16 @@ export function CropIcon(props: IconProps) {
   )
 }
 
+export function EyedropperIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="m14.5 4.5 5 5" />
+      <path d="M17 2.5a2.1 2.1 0 0 1 3 3l-2.5 2.5-3-3Z" />
+      <path d="m14.5 7.5-9 9-1 3.5 3.5-1 9-9" />
+    </Icon>
+  )
+}
+
 export function ReplaceColorIcon(props: IconProps) {
   return (
     <Icon {...props}>
@@ -179,6 +189,8 @@ export function ToolIcon({ toolId, ...props }: IconProps & { toolId: ToolId }) {
       return <MagicWandIcon {...props} />
     case 'crop':
       return <CropIcon {...props} />
+    case 'eyedropper':
+      return <EyedropperIcon {...props} />
     case 'replace-color':
       return <ReplaceColorIcon {...props} />
     case 'auto-trim':

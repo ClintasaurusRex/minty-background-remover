@@ -1,7 +1,22 @@
+import { viewportToImage } from '../canvas/coordinates'
+import { cropRectOnScreen, hitTestCrop } from '../canvas/cropOverlay'
 import { snapToDevicePixels } from '../canvas/devicePixels'
 import type { DisplayImage } from '../canvas/displayImage'
 import { keepImageReachable, limitPan } from '../canvas/pan'
 import { clampZoom, fitViewport, nextZoomStep, panBy, resizeViewport, zoomAt } from '../canvas/viewport'
+import {
+  type CropField,
+  type CropHandle,
+  isValidCropRect,
+  moveCropRect,
+  nearestCorner,
+  rectBetween,
+  resizeCropRect,
+  sameRect,
+  setCropField,
+  wholeImageRect,
+} from '../image/crop/cropRectangle'
+import { type Rgba, isRgba } from '../image/colour/colour'
 import { type EdgeSettings, MAX_EDGE_PIXELS, NO_EDGE_TREATMENT } from '../image/edit/deleteWithEdges'
 import type { ImportError } from '../image/import/errors'
 import { sharesPixelMemory } from '../image/pixelBuffer'
@@ -27,6 +42,7 @@ import type {
   ImageDocument,
   PixelCoordinate,
   Point,
+  Rectangle,
   SelectionMask,
   SelectionMode,
   Size,
@@ -104,6 +120,20 @@ export interface EditorState {
    * another image is opened. Changing it never changes the image; Trim uses it.
    */
   readonly autoTrimPadding: number
+  /**
+   * The Crop tool's rectangle being chosen and the drag adjusting it (Phase 4, Manual Crop). Only
+   * meaningful while Crop is the active tool; read the rectangle through pendingCrop(). Choosing a
+   * tool, opening another image and any change of the image's size (Crop, Auto Trim, their Undo
+   * and Redo) clear it; edits that keep the size (Delete Selection, its Undo and Redo) keep it, as
+   * its pixel coordinates still mean the same area. Never touches pixels.
+   */
+  readonly crop: CropState
+  /**
+   * The colour the Eyedropper read or the colour picker set (Phase 4), or null before either. Kept
+   * for the session, across tools and images, like the tool options; it is a value, not part of
+   * the image, and choosing it never changes a pixel.
+   */
+  readonly colour: ChosenColour | null
   /**
    * The selected pixels of the open document, or null for no selection. Always the
    * document's size. Cleared when another image is opened; kept on tool changes.
@@ -320,6 +350,48 @@ export interface PanDrag {
   readonly delta: Point
 }
 
+/**
+ * The Crop tool's state (Phase 4): the rectangle to keep, in image pixels, and the pointer drag
+ * changing it. Both null when nothing has been chosen.
+ */
+export interface CropState {
+  /**
+   * The rectangle Apply Crop would keep: whole pixels, at least 1 × 1, within the image
+   * (image/crop/cropRectangle.ts), or null. While a new rectangle is being dragged out it is null
+   * until the drag covers at least one pixel each way.
+   */
+  readonly rect: Rectangle | null
+  readonly drag: CropDrag | null
+}
+
+/**
+ * A pointer drag on the image with the Crop tool. Positions are image coordinates, so the drag
+ * follows the image if the view changes meanwhile (a wheel zoom). Each move is applied to the
+ * rectangle as it was when the drag started, never added to the previous move, so nothing
+ * accumulates.
+ */
+export type CropDrag =
+  /** Drawing a new rectangle from `anchor`, the pixel corner nearest the press. */
+  | { readonly kind: 'new'; readonly anchor: Point }
+  /** Moving `start` with the pointer, from the press at `origin`. */
+  | { readonly kind: 'move'; readonly origin: Point; readonly start: Rectangle }
+  /** Resizing `start` by dragging `handle`, from the press at `origin`. */
+  | { readonly kind: 'resize'; readonly handle: CropHandle; readonly origin: Point; readonly start: Rectangle }
+
+export const NO_CROP: CropState = { rect: null, drag: null }
+
+/** A colour chosen with the Eyedropper or the colour picker (Phase 4). */
+export interface ChosenColour {
+  /** Exact 8-bit straight RGBA. */
+  readonly value: Rgba
+  /**
+   * Where the Eyedropper read it: the pixel and the content state it was read from. Null when the
+   * colour picker set it. Read through sampledPixel(), which shows it only while it is still the
+   * open image's current content.
+   */
+  readonly sample: { readonly version: DocumentVersion; readonly pixel: PixelCoordinate } | null
+}
+
 export type EditorAction =
   | { readonly type: 'import-started'; readonly importId: number; readonly ignoredFileCount?: number }
   /**
@@ -362,6 +434,32 @@ export type EditorAction =
    * finite are ignored. Never changes the image.
    */
   | { readonly type: 'auto-trim-padding-changed'; readonly padding: number }
+  /**
+   * A primary-button press on the image canvas with the Crop tool, at `point` (workspace CSS px).
+   * On a handle or edge of the rectangle it starts resizing it, inside it moving it, anywhere else
+   * drawing a new one (the previous one is dropped; a press without a drag leaves none). Ignored
+   * unless Crop is active and an image is shown.
+   */
+  | { readonly type: 'crop-drag-started'; readonly point: Point }
+  /** The pointer of a crop drag moved to `point` (workspace CSS px). Ignored without a drag. */
+  | { readonly type: 'crop-dragged'; readonly point: Point }
+  /** The crop drag ended (button released, cancelled, capture lost). */
+  | { readonly type: 'crop-drag-ended' }
+  /**
+   * One field of the crop rectangle typed or stepped in the options row: X and Y move it, Width and
+   * Height resize it from its top-left corner, rounded and clamped to the image
+   * (setCropField). Without a rectangle, the whole image is the starting point.
+   */
+  | { readonly type: 'crop-field-changed'; readonly field: CropField; readonly value: number }
+  /** Escape or Cancel: the rectangle and any drag are dropped. The image is unchanged. */
+  | { readonly type: 'crop-cancelled' }
+  /**
+   * An Eyedropper click (Phase 4): `colour` read from `pixel` of `version`. Ignored unless the
+   * Eyedropper is active, `version` is the open document's current version and the pixel lies in it.
+   */
+  | { readonly type: 'colour-sampled'; readonly version: DocumentVersion; readonly pixel: PixelCoordinate; readonly colour: Rgba }
+  /** The colour picker's Apply (Phase 4): `colour` becomes the chosen colour. Ignored unless it is valid 8-bit RGBA. */
+  | { readonly type: 'colour-chosen'; readonly colour: Rgba }
   /**
    * Replaces the selection with one computed for `version` of the open document (null
    * selects nothing). Ignored unless `version` is the open document's current version
@@ -498,6 +596,8 @@ export const initialEditorState: EditorState = {
   magicWand: DEFAULT_MAGIC_WAND_SETTINGS,
   edgeSettings: NO_EDGE_TREATMENT,
   autoTrimPadding: DEFAULT_AUTO_TRIM_PADDING,
+  crop: NO_CROP,
+  colour: null,
   selection: null,
   lastMagicWandOperation: null,
   history: createEditHistory(),
@@ -553,6 +653,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         activeTool: 'magic-wand',
         // Auto Trim's padding starts at its default for every image (owner decision, Step 11).
         autoTrimPadding: DEFAULT_AUTO_TRIM_PADDING,
+        crop: NO_CROP,
         selection: null,
         lastMagicWandOperation: null,
         // Edits of the previous image cannot apply to this one.
@@ -631,7 +732,38 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
     case 'tool-selected':
       if (!state.document || action.tool === state.activeTool) return state
-      return isAvailableTool(action.tool) ? { ...state, activeTool: action.tool } : state
+      // A crop rectangle belongs to the Crop tool: choosing any tool drops it.
+      return isAvailableTool(action.tool) ? { ...state, activeTool: action.tool, crop: NO_CROP } : state
+
+    case 'crop-drag-started':
+      return startCropDrag(state, action.point)
+
+    case 'crop-dragged':
+      return continueCropDrag(state, action.point)
+
+    case 'crop-drag-ended':
+      return state.crop.drag ? { ...state, crop: { rect: state.crop.rect, drag: null } } : state
+
+    case 'crop-field-changed': {
+      const { document } = state
+      if (state.activeTool !== 'crop' || !document || !Number.isFinite(action.value)) return state
+      const rect = setCropField(pendingCrop(state) ?? wholeImageRect(document), action.field, action.value, document)
+      return withCropRect(state, rect, null)
+    }
+
+    case 'crop-cancelled':
+      return state.crop.rect || state.crop.drag ? { ...state, crop: NO_CROP } : state
+
+    case 'colour-sampled': {
+      const { version, pixel, colour } = action
+      const { document } = state
+      if (state.activeTool !== 'eyedropper' || !document || !isVersionOf(version, document) || !isRgba(colour)) return state
+      if (!(pixel.x >= 0 && pixel.y >= 0 && pixel.x < document.width && pixel.y < document.height)) return state
+      return { ...state, colour: { value: { ...colour }, sample: { version, pixel: { x: pixel.x, y: pixel.y } } } }
+    }
+
+    case 'colour-chosen':
+      return isRgba(action.colour) ? { ...state, colour: { value: { ...action.colour }, sample: null } } : state
 
     case 'magic-wand-tolerance-changed': {
       if (!Number.isFinite(action.tolerance)) return state
@@ -972,13 +1104,103 @@ function sizeOf(size: Size): Size {
  * larger images fitted, smaller ones at 100%, centred (owner decision for Phase 3 Step 11; it
  * replaces the provisional crop view of Step 5, which kept the zoom and moved the image).
  */
-function viewAfterEdit(state: EditorState, next: ImageDocument): Pick<EditorState, 'viewport' | 'pan' | 'placeOnNextResize'> {
+function viewAfterEdit(
+  state: EditorState,
+  next: ImageDocument,
+): Pick<EditorState, 'viewport' | 'pan' | 'placeOnNextResize' | 'crop'> {
   const { viewport, workspace, document: current } = state
+  // A crop rectangle is in the image's pixel coordinates: still the same area after an edit that
+  // keeps the size, meaningless after one that changes it (Phase 4).
+  const crop = current && sameSize(current, next) ? state.crop : NO_CROP
   if (!viewport || !workspace || !current || sameSize(current, next)) {
-    return { viewport, pan: state.pan, placeOnNextResize: state.placeOnNextResize }
+    return { viewport, pan: state.pan, placeOnNextResize: state.placeOnNextResize, crop }
   }
   const fitted = settled(fitViewport(next, workspace.size), null, workspace)
-  return { viewport: fitted, pan: rebasePan(state.pan, fitted), placeOnNextResize: false }
+  return { viewport: fitted, pan: rebasePan(state.pan, fitted), placeOnNextResize: false, crop }
+}
+
+/*
+ * Manual Crop (Phase 4). The rectangle and its drag are view state: constant-time geometry here
+ * (image/crop/cropRectangle.ts, canvas/cropOverlay.ts), no pixels. Applying the crop is an edit
+ * like Auto Trim (editCommands.ts, cropCommand).
+ */
+
+/**
+ * The crop rectangle the Crop tool shows and Apply Crop would keep, or null: none chosen, Crop is
+ * not the active tool, or no image. Always a valid crop rectangle for the open image.
+ */
+export function pendingCrop(state: EditorState): Rectangle | null {
+  const { rect } = state.crop
+  const { document } = state
+  if (!rect || !document || state.activeTool !== 'crop') return null
+  return isValidCropRect(rect, document) ? rect : null
+}
+
+/**
+ * The pixel the chosen colour was read from by the Eyedropper, while the open image is still the
+ * content state it was read from; otherwise null (picked with the colour picker, or the image has
+ * changed or been replaced since).
+ */
+export function sampledPixel(state: EditorState): PixelCoordinate | null {
+  const sample = state.colour?.sample
+  return sample && state.document && isVersionOf(sample.version, state.document) ? sample.pixel : null
+}
+
+/** The workspace point (CSS px) as fractional image coordinates in the display viewport, or null. */
+function imagePointAt(state: EditorState, point: Point): Point | null {
+  const viewport = displayViewport(state)
+  if (!viewport || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null
+  return viewportToImage(viewport, point)
+}
+
+function startCropDrag(state: EditorState, point: Point): EditorState {
+  const { document, workspace } = state
+  const viewport = displayViewport(state)
+  const image = imagePointAt(state, point)
+  if (state.activeTool !== 'crop' || !document || !viewport || !workspace || !image) return state
+  const rect = pendingCrop(state)
+  if (rect) {
+    const hit = hitTestCrop(cropRectOnScreen(rect, viewport, workspace.devicePixelRatio), point)
+    if (hit.kind === 'handle') {
+      return { ...state, crop: { rect, drag: { kind: 'resize', handle: hit.handle, origin: image, start: rect } } }
+    }
+    if (hit.kind === 'inside') return { ...state, crop: { rect, drag: { kind: 'move', origin: image, start: rect } } }
+  }
+  // Outside the rectangle (or without one): a new rectangle from the nearest pixel corner. The
+  // previous one is dropped, so a press without a drag leaves none.
+  const anchor = nearestCorner(image, document)
+  return anchor ? { ...state, crop: { rect: null, drag: { kind: 'new', anchor } } } : state
+}
+
+function continueCropDrag(state: EditorState, point: Point): EditorState {
+  const { drag } = state.crop
+  const { document } = state
+  const image = imagePointAt(state, point)
+  if (!drag || !document || state.activeTool !== 'crop' || !image) return state
+  let rect: Rectangle | null
+  switch (drag.kind) {
+    case 'new': {
+      const corner = nearestCorner(image, document)
+      if (!corner) return state
+      rect = rectBetween(drag.anchor, corner)
+      break
+    }
+    case 'move':
+    case 'resize': {
+      // The image cannot have changed size during the drag: that clears the crop and its drag.
+      if (!isValidCropRect(drag.start, document)) return state
+      const delta = { x: image.x - drag.origin.x, y: image.y - drag.origin.y }
+      rect = drag.kind === 'move' ? moveCropRect(drag.start, delta, document) : resizeCropRect(drag.start, drag.handle, delta, document)
+      break
+    }
+  }
+  return withCropRect(state, rect, drag)
+}
+
+/** `state` with the crop rectangle `rect` and `drag`; the state itself when nothing changes. */
+function withCropRect(state: EditorState, rect: Rectangle | null, drag: CropDrag | null): EditorState {
+  if (sameRect(rect, state.crop.rect) && drag === state.crop.drag) return state
+  return { ...state, crop: { rect, drag } }
 }
 
 /**

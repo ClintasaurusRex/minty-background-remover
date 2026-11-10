@@ -30,8 +30,8 @@
   cursor: grabbing;
 }
 
-/* Magic Wand: a precise pointer over the image area. */
-.workspace--magic-wand .workspace__canvas {
+/* Magic Wand and Eyedropper: a precise pointer over the image area. */
+.workspace--crosshair .workspace__canvas {
   cursor: crosshair;
 }
 
@@ -214,4 +214,64 @@
   from {
     opacity: 0;
   }
+}
+
+/* Crop (Phase 4): the pointer shows what a press would grab (set by useCropPointer), except while
+   Space panning is ready, when the workspace's grab cursor applies. */
+.workspace--crop {
+  user-select: none;
+}
+
+.workspace--crop .workspace__canvas {
+  cursor: var(--crop-cursor, crosshair);
+}
+
+/* The crop rectangle over the image; pointer events pass through to the canvas. */
+.crop-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.crop-overlay__svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+.crop-overlay__shade {
+  fill: rgba(0, 0, 0, 0.6);
+}
+
+.crop-overlay__outline,
+.crop-overlay__outline-dark,
+.crop-overlay__handle {
+  fill: none;
+}
+
+.crop-overlay__outline {
+  stroke: #ffffff;
+}
+
+.crop-overlay__outline-dark {
+  stroke: rgba(0, 0, 0, 0.85);
+}
+
+.crop-overlay__handle {
+  fill: #ffffff;
+  stroke: rgba(0, 0, 0, 0.85);
+  stroke-width: 1;
+}
+
+.crop-overlay__label {
+  position: absolute;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: rgba(11, 15, 14, 0.85);
+  color: var(--color-text);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  white-space: nowrap;
 }

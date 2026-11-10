@@ -306,3 +306,33 @@ checked.
   `auto-trim.mjs`).
 - Canvases are read by drawing them onto a separate canvas, never with their own `getImageData`.
   In Chrome, reading a canvas back can move it off the GPU, and then a crash would not affect it.
+
+### Manual Crop (Phase 4)
+
+```sh
+npm run build
+node scripts/browser/crop.mjs [--browser chrome|firefox|all] [--dpr 1,2] [--no-perf] [--no-stress]
+```
+
+Real drags draw, move and resize the crop rectangle at 400% (nearest pixel edges, stopping at the
+image's edges, a click removing it); the overlay's edges are compared with what the canvas draws at
+Fit, 100%, 150%, 200%, 300% and 800% (on `crop-columns.png`, whose red and green channels give the
+column and row); Escape, the fields, Enter, Apply Crop, Cancel and keyboard-only use (Chrome); the
+cropped document byte for byte, the canvas, Undo and Redo; export after a crop (decoded in Node) and
+that a rectangle not applied never reaches an export; tool changes, imports and Apply being
+unavailable while an image opens. Unless `--no-perf`, Apply, Undo and Redo times at 4K and (unless
+`--no-stress`) near 50 MP.
+
+### Eyedropper and colour picker (Phase 4)
+
+```sh
+npm run build
+node scripts/browser/colour.mjs [--browser chrome|firefox|all] [--dpr 1,2]
+```
+
+Real clicks at Fit, 100%, 150% and 400% read exactly the pixel the canvas shows under the pointer,
+on an opaque image and a partly transparent one, without changing the image; the colour picker's
+focus, keyboard, pointer, sliders, hex field, Cancel, Escape and Apply, and that editor shortcuts do
+nothing while it is open.
+
+`fixtures.mjs` also writes `crop-columns.png` (120 × 80, opaque; red = 2 × column, green = 3 × row).

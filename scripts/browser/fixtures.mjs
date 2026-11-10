@@ -519,6 +519,28 @@ const PHOTO = `
   x.fillStyle = '#2d3a46'; x.fillRect(60, 200, 90, 50)
   x.filter = 'none'`
 
+/**
+ * Phase 4 (crop.mjs, colour.mjs):
+ *
+ *   crop-columns.png   120 × 80, opaque; red = 2 × column, green = 3 × row, blue varies, so the
+ *                      canvas shows which column and row each device pixel draws
+ */
+export const CROP_FIXTURE_FILES = ['crop-columns.png']
+
+export function ensureCropFixtures({ force = false } = {}) {
+  const file = path.join(FIXTURES, 'crop-columns.png')
+  if (fs.existsSync(file) && !force) return FIXTURES
+  const width = 120
+  const height = 80
+  const rgba = new Uint8Array(width * height * 4)
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) rgba.set([x * 2, y * 3, (x * 7 + y * 11) % 256, 255], (y * width + x) * 4)
+  }
+  fs.mkdirSync(FIXTURES, { recursive: true })
+  fs.writeFileSync(file, encodePng(width, height, rgba))
+  return FIXTURES
+}
+
 if (import.meta.main) {
   const dir = await ensureFixtures({ force: true })
   for (const file of FIXTURE_FILES) console.log(`${file}  ${fs.statSync(path.join(dir, file)).size} bytes`)
@@ -528,4 +550,6 @@ if (import.meta.main) {
   fs.rmSync(path.join(dir, 'TRIM_VERSION'), { force: true })
   await ensureTrimFixtures()
   for (const file of TRIM_FIXTURE_FILES) console.log(`${file}  ${fs.statSync(path.join(dir, file)).size} bytes`)
+  ensureCropFixtures({ force: true })
+  for (const file of CROP_FIXTURE_FILES) console.log(`${file}  ${fs.statSync(path.join(dir, file)).size} bytes`)
 }

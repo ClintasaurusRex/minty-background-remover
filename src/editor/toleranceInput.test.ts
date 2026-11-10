@@ -30,6 +30,17 @@ describe('exactToleranceInput', () => {
       expect(exactToleranceInput(text)).toBeNull()
     }
   })
+
+  it('allows up to three digits for small ranges (as before Phase 4) and as many as the maximum has for larger ones (Crop)', () => {
+    expect(exactToleranceInput('050', { max: 50, pageStep: 10 })).toBe(50)
+    expect(exactToleranceInput('0050', { max: 50, pageStep: 10 })).toBeNull()
+    expect(exactToleranceInput('005', { max: 5, pageStep: 1 })).toBe(5)
+    const crop = { max: 16384, pageStep: 10 }
+    expect(exactToleranceInput('16384', crop)).toBe(16384)
+    expect(exactToleranceInput('1234', crop)).toBe(1234)
+    expect(exactToleranceInput('16385', crop)).toBeNull()
+    expect(exactToleranceInput('016384', crop)).toBeNull()
+  })
 })
 
 describe('committedToleranceInput', () => {

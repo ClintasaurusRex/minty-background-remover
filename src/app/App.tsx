@@ -11,6 +11,8 @@ import {
   editorReducer,
   initialEditorState,
   isImporting,
+  pendingCrop,
+  sampledPixel,
 } from '../editor/editorState'
 import { adjustableDelete, availableEditActions, hasUnexportedEdits } from '../editor/editCommands'
 import { canExport, exportFileName } from '../editor/exportCommands'
@@ -25,8 +27,13 @@ import {
   selectionActionCommand,
 } from '../editor/selectionCommands'
 import type { FloodMode, Point, SelectionMode, ToolId } from '../editor/types'
+import type { CropPointerEvent } from '../components/Workspace/workspaceInput'
+import { eyedropperClick } from '../editor/colourCommands'
+import type { Rgba } from '../image/colour/colour'
+import type { CropField } from '../image/crop/cropRectangle'
 import type { EdgeSettings } from '../image/edit/deleteWithEdges'
 import { createPointerPositionStore } from './pointerPosition'
+import { useCropCommands } from './useCropCommands'
 import { useEditCommands } from './useEditCommands'
 import { useExportCommand } from './useExportCommand'
 import { IMAGE_FILE_ACCEPT, useImageImport } from './useImageImport'
@@ -53,12 +60,16 @@ function App() {
   const { run: runEditAction, commitEdgeSettings } = useEditCommands(stateRef, dispatch, isConfirming)
   const deleteSelection = useCallback(() => runEditAction('delete-selection'), [runEditAction])
   const autoTrim = useCallback(() => runEditAction('auto-trim'), [runEditAction])
+  const applyCrop = useCallback(() => runEditAction('crop'), [runEditAction])
+  // Enter applies and Escape cancels the crop rectangle (Phase 4).
+  useCropCommands(stateRef, dispatch, isConfirming, runEditAction)
   const undo = useCallback(() => runEditAction('undo'), [runEditAction])
   const redo = useCallback(() => runEditAction('redo'), [runEditAction])
   const exportImage = useExportCommand(stateRef, dispatch, isConfirming)
   const cancelReplace = useCallback(() => answerQuestion(false), [answerQuestion])
   const continueReplace = useCallback(() => answerQuestion(true), [answerQuestion])
   const editActions = availableEditActions(state)
+  const cropRect = pendingCrop(state)
   // Whether a finished change of the edge amounts updates the last Delete (Phase 3 Step 9).
   const adjustsLastDelete = adjustableDelete(state) !== null
   const exportStatus: ExportStatus = state.exporting
@@ -126,14 +137,38 @@ function App() {
     (padding: number) => dispatch({ type: 'auto-trim-padding-changed', padding }),
     [],
   )
+  // The crop rectangle is view state: dragging and typing it never touch pixels; only Apply Crop does.
+  const changeCropField = useCallback(
+    (field: CropField, value: number) => dispatch({ type: 'crop-field-changed', field, value }),
+    [],
+  )
+  const cancelCrop = useCallback(() => dispatch({ type: 'crop-cancelled' }), [])
+  const cropWithPointer = useCallback((event: CropPointerEvent) => {
+    switch (event.type) {
+      case 'start':
+        return dispatch({ type: 'crop-drag-started', point: event.point })
+      case 'move':
+        return dispatch({ type: 'crop-dragged', point: event.point })
+      case 'end':
+        return dispatch({ type: 'crop-drag-ended' })
+    }
+  }, [])
   const runSelectionAction = useCallback((selectionAction: SelectionAction) => {
     // Computed here, outside the reducer, from the latest committed state and tagged with
     // the document version it used.
     const action = selectionActionCommand(stateRef.current, selectionAction)
     if (action) dispatch(action)
   }, [])
+  // The colour picker's Apply. Choosing a colour never changes the image.
+  const chooseColour = useCallback((colour: Rgba) => dispatch({ type: 'colour-chosen', colour }), [])
   const pressImage = useCallback((point: Point, press: PointerPress) => {
     const current = stateRef.current
+    if (current.activeTool === 'eyedropper') {
+      // Only the primary button reads a colour; computed here, outside the reducer, tagged with its version.
+      const action = press.button === 0 ? eyedropperClick(current, point) : null
+      if (action) dispatch(action)
+      return
+    }
     const mode = clickSelectionMode(press, current.magicWand.selectionMode)
     if (!mode) return
     // Computed here, outside the reducer, and tagged with the document version it used.
@@ -190,6 +225,15 @@ function App() {
           onPaddingChange={changePadding}
           canAutoTrim={editActions.autoTrim}
           onAutoTrim={autoTrim}
+          cropRect={cropRect}
+          imageSize={state.document}
+          canApplyCrop={editActions.crop}
+          onCropFieldChange={changeCropField}
+          onApplyCrop={applyCrop}
+          onCancelCrop={cancelCrop}
+          colour={state.colour}
+          sampledPixel={sampledPixel(state)}
+          onChooseColour={chooseColour}
         />
       </div>
       <Workspace
@@ -214,7 +258,10 @@ function App() {
         onWheelZoom={zoomWithWheel}
         onWheelPan={panWithWheel}
         onPanGesture={panWithDrag}
-        magicWandActive={state.activeTool === 'magic-wand'}
+        crosshairPointer={state.activeTool === 'magic-wand' || state.activeTool === 'eyedropper'}
+        cropActive={state.activeTool === 'crop'}
+        cropRect={cropRect}
+        onCropPointer={cropWithPointer}
         onImagePress={pressImage}
         onPointerPosition={pointer.set}
       />

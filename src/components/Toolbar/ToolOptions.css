@@ -138,3 +138,72 @@
   width: 16px;
   height: 16px;
 }
+
+/* Crop (Phase 4): the rectangle's position and size, then Apply Crop and Cancel. */
+.tool-options__crop-fields {
+  gap: var(--space-3);
+}
+
+.tool-options__crop-field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.tool-options__number--crop {
+  width: 4.25em;
+}
+
+.tool-options__hint {
+  color: var(--color-text-muted);
+}
+
+.tool-options__apply-crop svg,
+.tool-options__cancel-crop svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Eyedropper (Phase 4): the colour read, as a swatch over a checkerboard and as text. */
+.tool-options__colour {
+  gap: var(--space-2);
+}
+
+.tool-options__swatch {
+  display: inline-block;
+  width: 36px;
+  height: 24px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.tool-options__swatch:hover {
+  border-color: var(--color-text-muted);
+}
+
+.tool-options__swatch > span {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* No colour yet: a diagonal line, not colour alone. */
+.tool-options__swatch-empty {
+  background: linear-gradient(to top right, transparent 46%, var(--color-text-muted) 48%, var(--color-text-muted) 52%, transparent 54%),
+    var(--color-bg);
+}
+
+.tool-options__hex {
+  font-family: var(--font-mono);
+  user-select: all;
+}
+
+.tool-options__rgba,
+.tool-options__alpha {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+  user-select: text;
+}

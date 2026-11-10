@@ -1,5 +1,6 @@
-import { type RefObject, useEffect, useState } from 'react'
+import { type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { clientToViewport } from '../../canvas/coordinates'
+import { cropCursor, hitTestCrop } from '../../canvas/cropOverlay'
 import { wheelPanDelta } from '../../canvas/pan'
 import { wheelDeltaPixels, wheelZoomFactor } from '../../canvas/wheelZoom'
 import {
@@ -16,7 +17,7 @@ import {
   panOwnsPointerDown,
   updatePanGesture,
 } from '../../editor/panGesture'
-import type { Point } from '../../editor/types'
+import type { Point, Rectangle } from '../../editor/types'
 import { isFileDrag } from '../../image/import/droppedFiles'
 import { isEditableTarget, isInteractiveTarget } from '../../utils/domTargets'
 
@@ -236,6 +237,75 @@ export function usePointerPosition(
       onPointerPosition(null)
     }
   }, [workspaceRef, canvasRef, enabled, onPointerPosition])
+}
+
+/** A crop drag as the workspace reports it: a press, a move with the button held, the end. */
+export type CropPointerEvent =
+  | { readonly type: 'start'; readonly point: Point }
+  | { readonly type: 'move'; readonly point: Point }
+  | { readonly type: 'end' }
+
+/**
+ * Crop dragging on the image canvas while the Crop tool is active (Phase 4). A primary-button press
+ * that panning did not take reaches `startPress` (from the workspace's tool press); it captures the
+ * pointer, so the drag continues outside the canvas and the window, and reports the press. Moves of
+ * a captured pointer and its release, cancellation or loss of capture are reported too. Points are
+ * canvas CSS px.
+ *
+ * Without a captured pointer, moving over the canvas sets the `--crop-cursor` custom property to
+ * what a press there would grab (cropCursor, against `cropScreen`, the rectangle as drawn); the
+ * workspace's stylesheet uses it only while panning is not ready.
+ */
+export function useCropPointer(
+  canvasRef: RefObject<HTMLCanvasElement | null>,
+  enabled: boolean,
+  cropScreen: Rectangle | null,
+  onCropPointer: (event: CropPointerEvent) => void,
+): (event: PointerEvent) => void {
+  const screenRef = useRef(cropScreen)
+  useLayoutEffect(() => {
+    screenRef.current = cropScreen
+  })
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || !enabled) return
+    const pointAt = (event: PointerEvent) => clientToViewport({ x: event.clientX, y: event.clientY }, canvas.getBoundingClientRect())
+    const showCursor = (point: Point) => {
+      const screen = screenRef.current
+      canvas.style.setProperty('--crop-cursor', cropCursor(screen ? hitTestCrop(screen, point) : { kind: 'outside' }))
+    }
+    const onPointerMove = (event: PointerEvent) => {
+      if (canvas.hasPointerCapture(event.pointerId)) onCropPointer({ type: 'move', point: pointAt(event) })
+      else showCursor(pointAt(event))
+    }
+    const onPointerEnd = (event: PointerEvent) => {
+      if (event.type === 'lostpointercapture' || canvas.hasPointerCapture(event.pointerId)) onCropPointer({ type: 'end' })
+    }
+    canvas.addEventListener('pointermove', onPointerMove)
+    canvas.addEventListener('pointerup', onPointerEnd)
+    canvas.addEventListener('pointercancel', onPointerEnd)
+    canvas.addEventListener('lostpointercapture', onPointerEnd)
+    return () => {
+      canvas.removeEventListener('pointermove', onPointerMove)
+      canvas.removeEventListener('pointerup', onPointerEnd)
+      canvas.removeEventListener('pointercancel', onPointerEnd)
+      canvas.removeEventListener('lostpointercapture', onPointerEnd)
+      canvas.style.removeProperty('--crop-cursor')
+      onCropPointer({ type: 'end' })
+    }
+  }, [canvasRef, enabled, onCropPointer])
+
+  return useCallback(
+    (event: PointerEvent) => {
+      const canvas = canvasRef.current
+      if (!canvas || !enabled || event.button !== 0) return
+      canvas.setPointerCapture(event.pointerId)
+      const point = clientToViewport({ x: event.clientX, y: event.clientY }, canvas.getBoundingClientRect())
+      onCropPointer({ type: 'start', point })
+    },
+    [canvasRef, enabled, onCropPointer],
+  )
 }
 
 /**

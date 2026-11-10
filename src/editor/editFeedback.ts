@@ -10,6 +10,7 @@ import type { EditKind } from './history/historyEntry'
 const EDIT_NAMES: Readonly<Record<EditKind, string>> = {
   'delete-selection': 'Delete Selection',
   'auto-trim': 'Auto Trim',
+  crop: 'Crop',
 }
 
 /** The edit's name as the controls show it, for example "Delete Selection". */
@@ -38,6 +39,12 @@ export function editNoticeText(notice: EditNotice): string {
         const trimmed = `Auto Trim applied: ${formatDimensions(from.width, from.height)} trimmed to ${formatDimensions(to.width, to.height)}.`
         const dropped = notice.droppedUndoSteps ?? 0
         return dropped > 0 ? `${trimmed} ${droppedUndoStepsText(dropped)}` : trimmed
+      }
+      if (notice.operation === 'crop' && notice.resized) {
+        const { from, to } = notice.resized
+        const cropped = `Crop applied: ${formatDimensions(from.width, from.height)} cropped to ${formatDimensions(to.width, to.height)}.`
+        const dropped = notice.droppedUndoSteps ?? 0
+        return dropped > 0 ? `${cropped} ${droppedUndoStepsText(dropped)}` : cropped
       }
       return `${editName(notice.operation)} applied.`
     }
@@ -79,12 +86,13 @@ function droppedUndoStepsText(count: number): string {
 /**
  * Whether an outcome is also shown as a message in the workspace, not only announced (Phase 3
  * Step 11): Auto Trim finding nothing to trim (otherwise clicking Trim would seem to do nothing),
- * and an Auto Trim whose history entry pushed older Undo steps out of the history. Other outcomes
- * are only announced: the image itself shows them.
+ * and an Auto Trim or Crop (Phase 4) whose history entry pushed older Undo steps out of the
+ * history. Other outcomes are only announced: the image itself shows them.
  */
 export function isShownEditNotice(notice: EditNotice): boolean {
   // An export is shown by the browser's download and by the unexported-edits note going away.
-  if (notice.kind === 'exported' || notice.operation !== 'auto-trim') return false
+  if (notice.kind === 'exported') return false
+  if (notice.operation !== 'auto-trim' && notice.operation !== 'crop') return false
   return notice.kind === 'unchanged' || (notice.kind === 'applied' && (notice.droppedUndoSteps ?? 0) > 0)
 }
 

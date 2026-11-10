@@ -75,7 +75,7 @@ Flip
 
 Tool names should remain visible rather than relying exclusively on icons.
 
-Tools work on the open image, so available tools are disabled until an image is open. Tools that are not available yet stay disabled with a "coming soon" tooltip. The active tool is shown pressed (`aria-pressed`), with a tinted background and border so the state is not colour-only. In Phase 2 the Magic Wand is the only available tool; while it is active over an image, the pointer is a crosshair. Auto Trim is available too since Phase 3 Step 11 (below); while it is active, clicks on the image do nothing and the pointer is the ordinary one.
+Tools work on the open image, so available tools are disabled until an image is open. Tools that are not available yet stay disabled with a "coming soon" tooltip. The active tool is shown pressed (`aria-pressed`), with a tinted background and border so the state is not colour-only. In Phase 2 the Magic Wand is the only available tool; while it is active over an image, the pointer is a crosshair. Auto Trim is available too since Phase 3 Step 11 (below); while it is active, clicks on the image do nothing and the pointer is the ordinary one. Phase 4 adds Crop and the Eyedropper (below); the order is Magic Wand, Crop, Eyedropper, Replace Colour ("coming soon"), Auto Trim. At 640 px the tool buttons wrap to a second line.
 
 ---
 
@@ -293,6 +293,19 @@ When crop is active:
 
 Crop should feel direct and predictable.
 
+As implemented (Phase 4; awaiting owner review):
+
+```text
+X [ 40] Y [  0] W [200] H [200] px      [⌗ Apply Crop] [✕ Cancel]
+```
+
+- Over the image: the area outside the rectangle darkened (60% black), a dark line just outside and a white line just inside its edge, square white handles on the corners and (when there is room) the edge middles, and its size ("200 × 200 px") just above its top-left corner (inside it near the top of the workspace). The edges sit exactly on the device pixels where the image's pixel boundaries are drawn. The overlay is hidden from assistive technology; the fields carry the same information.
+- Pointer: a crosshair outside the rectangle (a press there starts a new one), a move cursor inside it, resize arrows on its edges and corners (grabbed from up to 8 CSS px outside; inside, the middle third always moves it). Space + drag pans as everywhere.
+- The fields (accessible names such as "Crop width in pixels, 1 to 320") follow the tolerance field's conventions; Enter in a field never crops. Without a rectangle they show the whole image and a hint reads "Drag on the image to choose the area to keep".
+- Apply Crop (tooltip "Crop the image to 200 × 200 px (Enter)") and Cancel ("… (Esc)") are `aria-disabled` with the reason in the tooltip when unavailable, so focus stays on them. Tab order: X, Y, W, H, Apply Crop, Cancel.
+- Enter applies and Escape cancels the rectangle wherever focus is except text fields (Enter on a focused button presses it). With no rectangle, Escape clears the selection as before.
+- After Apply: the cropped image fitted to the workspace, the Crop tool still active with no rectangle, "Crop applied: 320 × 200 px cropped to 200 × 200 px." announced; Undo / Redo read "Undo Crop" / "Redo Crop". A crop that drops older Undo steps also shows the Auto Trim-style message.
+
 ---
 
 ## Colour Picker UX
@@ -310,6 +323,20 @@ Desired features:
 - Cancel
 
 Avoid a complicated professional colour-management interface.
+
+As implemented (Phase 4; opened from the Eyedropper's colour swatch; awaiting owner review):
+
+- A compact modal popover (248 px wide) placed below the control that opened it and kept inside the window: "Choose a colour", a saturation / brightness area with a ring thumb, Hue and Alpha sliders (the alpha track over a checkerboard), a Hex field, "RGBA r, g, b, a · Alpha n%", Current and New swatches, Cancel and Apply.
+- Keyboard: focus starts on the area (`role="slider"`, value text "Saturation 40%, brightness 80%"; arrows by 1%, Shift + arrows by 10%, Page Up / Down brightness by 10%, Home / End saturation 0% / 100%); Tab reaches the sliders, the hex field and the buttons. The hex field takes #RGB, #RGBA, #RRGGBB or #RRGGBBAA on Enter or leaving it; other text is restored; Escape there cancels only the unfinished entry. Escape elsewhere and Cancel close it changing nothing; focus returns to the swatch. Keys never reach the editor's shortcuts while it is open.
+- Applying without changes keeps the colour exactly.
+
+### Eyedropper (as implemented, Phase 4)
+
+```text
+Colour [▦]  #1A2B3C80  RGBA 26, 43, 60, 128  Alpha 50%  from pixel 12, 40
+```
+
+A crosshair over the image; a click reads the pixel shown under it. The swatch (a button, "Edit colour #1A2B3C80, alpha 50% in the colour picker") opens the colour picker. Before any colour: an empty swatch with a diagonal line and "Click the image to read a pixel's colour". Each reading is announced once ("Colour read from pixel 12, 40: #1A2B3C80, alpha 50%.").
 
 ---
 
@@ -335,6 +362,8 @@ Tolerance
 ```
 
 Where practical, the user should see changes before permanently applying them.
+
+Status (Phase 4): not available yet ("coming soon"). The basic algorithm exists; the tool awaits owner decisions RC1–RC6 (`IMPLEMENTATION_PLAN.md`, Phase 4 Status).
 
 ---
 
@@ -471,6 +500,8 @@ Selection shortcuts in Phase 2 are limited to Ctrl + A and Escape, plus Shift + 
 Approved for Phase 3 (P3-D9): Delete (Delete Selection; ignored while held down, so it never repeats), Ctrl + Z (Undo), Ctrl + Y and Ctrl + Shift + Z (Redo). Backspace is not a Delete shortcut. None of them act while a text field has focus.
 
 As implemented (Phase 3 Step 6): Delete with any modifier is ignored; the shortcuts work with focus on buttons and on the tolerance slider; the tolerance text field keeps its own Delete and Undo. While the replace confirmation is open, Delete, Undo, Redo, Ctrl + A and Escape (which cancels the dialog) belong to the dialog, and Ctrl + O and Ctrl + V do nothing.
+
+Crop (Phase 4): Enter applies the crop rectangle and Escape cancels it while one is pending (not in text fields; Enter on a focused button presses that button). With no crop pending, Escape clears the selection as before.
 
 PNG export (2026-11-08) has no shortcut yet: Ctrl + S is deferred to Phase 6 (owner decision, 2026-11-09) and keeps its browser meaning until then.
 
