@@ -176,11 +176,11 @@ Phase 2 is implemented in twelve reviewed steps, each stopping for review:
 
 Phase 2 was approved by the project owner and merged into `main` (d329646).
 
-Known limitation (Step 7): where an image pixel edge passes exactly through the centre of a device pixel (for example at 150% zoom, or 100% zoom with 150% display scaling), that device pixel is split equally between two image pixels and the browser decides which one it shows. Hit-testing picks the left / upper pixel, as both browsers usually draw it. Chrome sometimes shows the other pixel, and the Step 8 checks of whole neighbourhoods found Firefox doing so occasionally too, so a click there can select the neighbouring pixel. Everywhere else the clicked pixel is exactly the one drawn under the pointer.
+Known limitation (Step 7): where an image pixel edge passes exactly through the centre of a device pixel (for example at 150% zoom, or 100% zoom with 150% display scaling), that device pixel is split equally between two image pixels and the browser decides which one it shows. Hit-testing picks the left / upper pixel, as both browsers usually draw it. Chrome sometimes shows the other pixel, and the Step 8 checks of whole neighbourhoods found Firefox doing so occasionally too, so a click there can select the neighbouring pixel. Everywhere else the clicked pixel is exactly the one drawn under the pointer. (Resolved by the Phase 4 audit corrections, 2026-11-10: the renderer drew the image 3/128 device pixel past its corner, so no tie could occur at the zoom steps; Codex then found an exact tie at an arbitrary wheel-zoom level, 147.65625%, resolved on 2026-11-11 by the display scale grid; see "Phase 4 audit corrections" and "Phase 4 arbitrary-zoom regression" below.)
 
 Known limitations (Step 8):
 
-- The overlay follows the hit-testing rule exactly, so at those exact ties its boundary can sit one device pixel away from the edge the browser drew.
+- The overlay follows the hit-testing rule exactly, so at those exact ties its boundary can sit one device pixel away from the edge the browser drew. (Resolved with the ties themselves by the Phase 4 audit corrections.)
 - When the workspace's CSS size times the device pixel ratio is not a whole number of device pixels (seen after changing Chrome's display scaling at runtime), the browser stretches both canvases by a fraction of a pixel and resamples them. The overlay stays aligned with the image, but neither is pixel-exact. Sizing backing stores from `ResizeObserver`'s `devicePixelContentBoxSize` would avoid this; it changes image rendering, so it awaits an owner decision.
 - Zoomed out, a screen pixel shows the selection when any image pixel it covers is selected: the selection can look up to one screen pixel larger, and holes smaller than a screen pixel are not shown.
 - The boundary is about one CSS pixel on each side of an edge, so near 100% it covers one- or two-pixel features; a selection with many tiny holes looks speckled with black and white until zoomed in.
@@ -221,7 +221,7 @@ Known limitations of Phase 2, by severity (details in the step lists above):
 - Moderate:
   - Near the 50-megapixel limit, clicks, re-applies, Grow, Shrink and Invert that cover much of the image block the main thread for 0.15–0.4 s, with no progress indication (a click on a small region takes about 50 ms). Synthetic worst cases (noise or one-pixel mazes filling the image) reach about 0.9 s. (Owner decision 1.)
   - After a runtime change of display scaling or browser zoom, when the workspace's size in device pixels is fractional, the browser resamples both canvases, so neither is pixel-exact. In Step 12's window this happened at 125% and 150% (Step 8; owner decision 2).
-  - At exact ties (an image pixel edge through a device pixel centre) a click can select the neighbouring pixel the browser drew (Step 7).
+  - At exact ties (an image pixel edge through a device pixel centre) a click can select the neighbouring pixel the browser drew (Step 7). (Resolved by the Phase 4 audit corrections, 2026-11-10.)
 - Minor:
   - Zoomed out, the overlay can look one screen pixel larger and hides holes smaller than a screen pixel. Selections with many tiny holes look speckled near 100% (Step 8).
   - The ants are diagonal stripes, not dashes tracing each outline. They slow down on very complex boundaries, pause above 10 million boundary pixels in view, and keep moving in an unfocused but visible window (Step 11).
@@ -2016,7 +2016,7 @@ Behaviour: `FEATURE_SPEC.md` §11; UI: `UI_UX_SPEC.md` (Crop UX); processing: `I
 - Its size is shown next to it ("640 × 410 px") and in the options row, whose X, Y, W and H fields edit it from the keyboard (the existing field conventions: typing, Enter, Escape, arrows, Page keys; clamped). Apply Crop and Cancel are visible buttons (`aria-disabled`, with reasons in their tooltips, when unavailable). Enter applies and Escape cancels, except in text fields (and Enter on a focused button presses that button); Escape with nothing pending still clears the selection.
 - Apply is an ordinary edit through `completedEditCommand`'s crop path, the one Auto Trim uses: one history entry of kind `crop` holding only the removed pixels (no snapshot), a new revision of the rectangle's size, every kept byte exact (alpha and colour hidden under alpha 0 included), the selection and Magic Wand click cleared (Undo restores them), the image fitted, "Crop applied: A × B px cropped to C × D px." announced. Undo / Redo / export / history limits / display-image ownership are unchanged and apply as for Auto Trim. Applying a rectangle covering the whole image is unavailable (it would change nothing).
 - The rectangle is view state only. Choosing a tool, opening another image and any size change (Crop, Auto Trim, their Undo / Redo) drop it; edits that keep the size (Delete Selection, its Undo / Redo) keep it. It is never drawn into pixels, so it cannot reach an export.
-- The overlay's edges are placed on exactly the device pixels where the canvas draws the corresponding pixel boundaries (`cropRectOnScreen`), checked by unit tests at 16 zoom levels × 6 ratios and in both browsers by reading the canvas at Fit, 100%, 150%, 200%, 300% and 800%, at device pixel ratios 1 and 2.
+- The overlay's edges are placed on exactly the device pixels where the canvas draws the corresponding pixel boundaries (`cropRectOnScreen`), checked by unit tests at 16 zoom levels × 6 ratios and in both browsers by reading the canvas at Fit, 100%, 150%, 200%, 300% and 800%, at device pixel ratios 1 and 2. (At fractional ratios this did not hold in the browsers; fixed and checked on screen at 1, 1.25, 1.5, 2 and 3 by the Phase 4 audit corrections below.)
 
 Implementation decisions (implementation-level, reversible; listed for review):
 
@@ -2099,6 +2099,365 @@ The Replace Colour tool is not enabled, because these materially affect what a d
 3. The Eyedropper's colour kept for the session across images; picker opens with white when there is no colour.
 4. The toolbar order Magic Wand, Crop, Eyedropper, Replace Colour, Auto Trim (from `UI_UX_SPEC.md`'s example), and the two-line toolbar at 640 px.
 5. Whether the Eyedropper should also be offered inside Replace Colour only (the specification's "may be used by Replace Colour") or stay a tool of its own as now.
+
+### Phase 4 audit corrections (Codex review of `71b5bea`, 2026-11-10)
+
+Codex reviewed commit `71b5bea` against `74608b1` (read-only): no critical or high-severity defects; three medium and four low findings. The owner authorised fixing those seven findings only. Replace Colour stays unavailable (RC1–RC6 unchanged), Phase 5 is not started, nothing was committed, and **neither Phase 3 nor Phase 4 is approved**. All changes are uncommitted on `phase/04-crop-colour`, awaiting independent verification.
+
+| # | Finding | Root cause | Fix |
+| --- | --- | --- | --- |
+| M1 | Crop overlay misaligned at fractional display scaling (DPR 1.25: column 78 shown inside the overlay although the crop keeps 37–77; DPR 1.5: shade over the first kept column) | At zoom × ratio values such as 1.25 or 1.5, some device pixel centres fall exactly on image pixel edges. Which pixel the browser then draws is unspecified: measured in both browsers, the right-hand **column** but the upper **row**, varying with canvas position and the floating-point error of the scale's inverse. The overlay (and hit-testing) assumed left / upper | The renderer draws the image `IMAGE_DRAW_BIAS` = 3/128 device pixel right of and below its device pixel corner, so no centre is ever on an edge and the browser has nothing to break; the shared rule `imageIndexAtDevicePixel` subtracts the same amount. Overlay edges come from that rule (`devicePixelBoundary`). The checkerboard now covers exactly the device pixels the image is drawn on (`shownDeviceRect`, whole device pixels; it was a fractional, anti-aliased fill at the far edges) |
+| M2 | Eyedropper sometimes reads the neighbouring pixel at fractional ratios | The same tie assumption (`pixelUnderPointer`), shared by the Magic Wand and the status bar readout. The browser test could not see it: its oracle recomputed the pixel with the production formula from the *requested* click point, while Firefox moves synthesized pointers to the nearest device pixel corner (asked 103 CSS px at 125%, delivered 103.2) | `pixelUnderPointer` now takes the pointer's device pixel (`devicePixelIndex`) and the same rule, so every pointer tool reads exactly what is drawn. The oracle was replaced (below) |
+| M3 | An image pasted while the colour picker is open replaces the image | The document paste listener only ignored editable targets; with focus on the area, a slider or a button, the paste imported | An app-level modal guard (`app/modalGuard.ts`), held by the picker while it is mounted (a layout effect, before any event can reach it). Pastes (`installPasteHandler`'s `isBlocked`), Ctrl + O, the file picker and drops are refused while it is held, whatever has focus, and every editing shortcut hook receives `isBlocked = confirming or modal`. Text still pastes into the hex field; the import system is unchanged |
+| L1 | Picker controls below the window after resizing 1400 × 900 → 640 × 480 | Placed once, when opened | Placed again on `resize` (at most once a frame, never otherwise, focus untouched), above the swatch or at the top margin when there is no room; never taller than the window (`max-height`, the saturation area shrinks first to 48 px, scrolling only as a last resort) |
+| L2 | Area, tracks and swatches blank in forced colours | Their colours are backgrounds, which forced colours replace | `forced-color-adjust: none` on the colour-carrying surfaces only (area, hue / alpha tracks, Current / New swatches, the Eyedropper row's swatch), with `CanvasText` / `ButtonText` edges and a `Highlight` focus ring; the dialog, text, hex field and buttons keep the system colours |
+| L3 | Reading the same pixel twice gives no second announcement | The live message was keyed by pixel, hex and revision | `ChosenColour.readings` counts deliberate readings (the picker's Apply keeps the count); the message is keyed by it, so every reading inserts a new message and no other render does |
+| L4 | Alpha percentage divisor mutation (255 → 256) escaped the tests | Only 0, 1, 128 and 255 were tested, where both agree | All 256 values against an integer-only reference, the boundary values where /256 differs, monotonicity; the production calculation is unchanged |
+
+#### Coordinate-mapping decisions (for review)
+
+Decisions 1 and 2 are superseded by the display scale grid (2026-11-11, "Phase 4 arbitrary-zoom regression" below): the rule is unchanged in form, but the bias now comes from the displayed scale instead of being the fixed 3/128. Kept as the record of what Codex verified.
+
+1. **One rule for what is shown where**: `imageIndexAtDevicePixel(d, s) = floor((d + 0.5 − 3/128) / s)`, with the renderer's `deviceTransform` adding 3/128 device pixel to the translation. It keeps the existing left / upper choice at former ties, so every earlier expectation still holds; only samples within 3/128 device pixel of an edge change side, together with the drawing.
+2. **Why 3/128**: exact in binary; it keeps every device pixel centre at least 0.023 device pixels from an image pixel edge at every zoom step from 100% and ratios 0.8–4 (including 1.1, 1.2, 1.25, 4/3, 1.5, 1.75, 2.25, 2.5), against measured browser rounding of about 0.001; invisible. Fit and wheel-zoom levels are arbitrary, so an edge can still fall within rounding error of a centre there, exactly as before, but no longer systematically.
+3. Zoomed out (smoothed), the selection overlay's "any covered pixel" rule (`imageSpanAtDevicePixel`) deliberately ignores the bias: a blend has no tie, and the rule must never leave a selected pixel unmarked.
+4. Crop drags still snap the pointer to the nearest image pixel edge in image coordinates (unchanged); the drawn edge can be up to half a device pixel from that position at fractional scales, which does not affect the rectangle's integer geometry.
+5. `devicePixelContentBoxSize` (open since Phase 2 Step 8) is still not used. In the test windows the canvas lies on whole device pixels with a backing store of its exact device size (measured: screenshots equal canvas readback byte for byte at DPR 1.25 and 1.5), but after a runtime change of display scaling the workspace's device size can be fractional and the browser then resamples the canvases (Phase 2 limitation, unchanged).
+
+#### Testing (2026-11-10)
+
+- Baseline before any change: typecheck and lint clean, 77 files / 1,341 tests, build passing; `crop.mjs --dpr 1.25,1.5` reproduced Codex's 12 failures (8 boundary mismatches, 4 `compareImage` "skipped" at fractional scales) and `colour.mjs --dpr 1.25,1.5` its 2 Firefox failures.
+- Now: typecheck and lint clean, **79 files / 1,361 unit tests** passing (20 new; tests that pinned the old transform translation now assert the bias), production build passing (381.4 kB JS, 120.7 kB gzip).
+- New unit oracle `canvas/deviceSampling.test.ts`: models the browser from the transform the renderer is given (centre sampling), not from the app's rule; requires no centre within 0.02 device pixels of an edge at the zoom steps, and agreement of pointer tools, crop overlay edges, the checkerboard and the selection overlay rule over 11 ratios × 16 zooms × 4 pans. Setting the bias to 0 fails 3 of its 6 tests. The Eyedropper unit test uses the same model. L4: the /256 mutation fails 3 tests.
+- Browser oracles are now independent of the app: crop alignment is also checked **on screen** (screenshots with the overlay hidden and shown, decoding each screen pixel's column and row from `crop-columns.png`), and `compareImage` at fractional scales reads the column and row mapping from the canvas and requires an exact nearest-neighbour enlargement. Eyedropper, Magic Wand (tolerance 0) and status bar checks use the delivered pointer position and the canvas's colour there.
+- Against the original `71b5bea` build the new checks fail as they should: 23 crop failures at DPR 1.25 / 1.5 (on screen, column 78 undarkened, the outline on kept column 37), Eyedropper and Magic Wand reading the neighbour in Chrome and the Magic Wand in Firefox, the paste imported behind the picker, Apply below a 480 px window, white swatches and area in forced colours, one announcement for two readings.
+
+| Browser script (production build, headless Chrome and Firefox) | Result |
+| --- | --- |
+| `crop.mjs --no-stress` (DPR 1, 1.25, 1.5, 2, 3; 4K timings at DPR 1) | 732 passed |
+| `colour.mjs` (DPR 1, 1.25, 1.5, 2, 3, plus forced colours) | 347 passed |
+| `smoke.mjs --dpr 1,1.25,1.5,2` | 608 passed |
+| `edit-workflow.mjs --no-perf` | 507 passed |
+| `auto-trim.mjs --no-perf` | 146 passed |
+| `png-export.mjs --no-perf` | 119 passed |
+| `edge-adjust.mjs --no-perf` | 175 passed |
+| `edit-ownership.mjs --mode both` | 52 passed |
+| `edge-cleanup.mjs --no-perf` | 885 passed |
+| `gpu-crash.mjs --kill-test-gpu-process --dpr 1,1.25,1.5,2` | DPR 1, 1.5 and 2 all passed; at 1.25 the 6 `checkOverlay` checks report "skipped at device scale 2.5" (that helper supports whole scales only: a harness limit, not a defect); its image checks pass there |
+| React Strict Mode (dev server): `crop.mjs` and `colour.mjs`, DPR 1 and 1.5 | All passed |
+
+4K crop timings (unchanged): Apply 93 / 105 ms, Undo 27 / 41 ms, Redo 9 / 15 ms (Chrome / Firefox).
+
+Re-run 2026-11-11 (fresh session, no code changes): typecheck, lint, 1,361 unit tests and the build again clean; every browser script in the table above gave the same counts (the same 6 `checkOverlay` "skipped at device scale 2.5" reports at `gpu-crash.mjs` DPR 1.25, nothing else failing).
+
+#### Known limitations after the corrections
+
+- Headless browsers rasterise canvases in software. A real GPU's texture sampling has its own precision (generally well below the 0.023 device pixel clearance), but fractional scaling on real hardware has not been verified (P4-C2, P4-E1).
+- Fit and wheel-zoom levels are arbitrary: an image pixel edge can fall within the browsers' rounding of a device pixel centre there (as before, but rare and never systematic). *(Disproved by Codex on 2026-11-11: an exact tie at 147.65625%, reached by one Ctrl + wheel event. Resolved by the display scale grid; see "Phase 4 arbitrary-zoom regression" below.)*
+- `checkOverlay` (browser harness) supports whole device scales only; the selection overlay at fractional scales is covered by unit tests and the Magic Wand browser check. *(Since 2026-11-11 `gpu-crash.mjs` reports those checks as SKIP, not as failures; they remain unverified.)*
+- Headless Firefox never matches `:focus-visible` for scripted keys, so its forced-colours focus ring is checked from the style rule; Chrome's is checked on screen.
+- With the picker open, Ctrl + O is stopped before the app sees it (the dialog stops key propagation), so the browser's own Open dialog may appear (not checked headless; pre-existing, out of this task's scope).
+
+#### Manual QA added or still required (owner; none performed by Claude)
+
+| ID | Check |
+| --- | --- |
+| P4-C2 | (as before) Crop on a real fractional-scaling display (125%, 150%) and high-DPI, Chrome and Firefox: the darkened area and outline sit exactly on the kept pixels |
+| P4-E1 | (as before) Eyedropper on real images, now also at 125% / 150% display scaling, zoomed and panned: the readout matches the pixel under the pointer; Magic Wand on the same displays |
+| P4-E3 | With the picker open, Ctrl + V an image copied from another application (real desktop clipboard, both browsers): nothing is imported; with it closed, the image opens. Text pastes into the hex field |
+| P4-L2 | Resize a real window with the picker open, down to a short window: Cancel and Apply stay reachable, focus stays |
+| P4-HC1 | A real contrast theme (Windows High Contrast / Contrast themes, or GNOME High Contrast) in both browsers: the area, tracks and swatches show their colours, borders and focus rings are visible |
+| P4-A1 | (as before) Orca, now including two readings of the same pixel: announced twice |
+
+The Phase 3 Manual QA Backlog above is unchanged and still pending.
+
+### Phase 4 arbitrary-zoom regression (Codex verification, 2026-11-11)
+
+Codex independently verified the seven audit corrections above. **M3, L1, L2, L3 and L4 passed**; M1 and M2 stayed open because of a new medium-severity regression introduced by the fixed 3/128 offset. The owner authorised fixing that regression (and classifying the GPU harness's unsupported checks) only. Replace Colour stays unavailable (RC1–RC6 unchanged), Phase 5 is not started, nothing was committed, and **neither Phase 3 nor Phase 4 is approved**. All changes are uncommitted on `phase/04-crop-colour`, awaiting independent verification.
+
+#### The regression
+
+- **Reproduction** (Codex, reproduced here independently): `crop-columns.png` at 100%, DPR 1, then one pixel-mode Ctrl + wheel event of −100 · ln(189/128) / ln(1.25) px through the workspace's wheel handler: zoom 147.65625% (scale 189/128). The boundary after image column 0 is drawn at 189/128 + 3/128 = 1.5 device pixels from the image's corner, exactly the centre of device pixel 1. Both Chrome and Firefox drew column 0 (and row 0) there; the Eyedropper, the Magic Wand and the status bar read pixel (1, 1); the crop overlay for a rectangle starting at (1, 1) left column 0 undarkened and put its outline on it, before and after panning. Crop application was unaffected (integer geometry). Codex measured the canvas showing (0, 0, 0, 255) where the Eyedropper read (2, 3, 18, 255); on `71b5bea` (no offset) the two agreed there.
+- Reproduced here in Firefox exactly (zoom 1.4765625: device (1, 1) showed (0, 0), the Eyedropper read (1, 1)). Chrome's real wheel input, asked for the same delta, delivered a slightly different one (zoom 1.4765625127888868), where both happened to agree; a level 10⁻⁶ below the tie failed in both browsers, so it is not one exact value but a band within the browsers' rounding.
+- **Root cause**: a fixed offset cannot keep device pixel centres away from image pixel edges at every scale. Boundary k lies at k · s + b; for any fixed b, the scale s = 1.5 − b puts boundary 1 exactly on centre 1, and wheel zoom and trackpad pinch reach every scale. The 3/128 offset had been checked only at the zoom steps. Where an edge passes within the browser's rounding of a centre, which pixel the browser draws is unspecified (measured: right-hand column at 125% / 150% scaling without the offset, left-hand column at 147.65625% with it), so no rule the tools follow can match it there.
+
+#### Approaches considered
+
+| Approach | Verdict |
+| --- | --- |
+| Another fixed offset | Rejected: fails at s = 1.5 − b for every b (proved in `deviceSampling.test.ts`) |
+| An offset chosen per frame from the visible boundaries | Rejected: for a general scale the fractional positions of N boundaries spread evenly, so the best offset leaves some centre within about 1 / (2N) device pixel of an edge (0.0001 at 4K), below the browsers' rounding (about 0.001) and far below GPU texture precision (1/256 texel) |
+| Modelling each browser's arithmetic (single-precision inverse, tie rule) | Rejected: unspecified, differs between browsers, versions and GPU / software rasterisers |
+| Reading the canvas back to see what was drawn (per pointer event, or per frame for the overlays) | Rejected: GPU readbacks stall rendering and can move Chrome's canvas off the GPU; a probe canvas is not guaranteed to be rasterised the same way; the crop and selection overlays would need readbacks of every boundary |
+| Drawing the magnified image ourselves, or one `drawImage` per visible column and row with whole-device-pixel destinations | Rejected without a demonstrated need: a device-sized buffer (33 MB at 4K) refilled on every pan, or thousands of draw calls per frame near 100%; a new rendering path |
+| **Display scale grid: show unsmoothed views at the nearest scale whose boundary positions are known exactly, with the offset derived from that scale** | **Chosen** |
+
+#### The correction: display scale grid
+
+`canvas/devicePixels.ts`:
+
+- `displayZoom(zoom, ratio)`: at 100% and above, the zoom moved to the nearest *grid scale* (zoom × ratio = p / q in lowest terms with p, q ≤ 64, or a whole number), never below 100%; below 100% (smoothed, a blend with no tie) unchanged.
+- `imageDrawBias(scale)`: 1 / (2q) for a grid scale with even q, 0 for odd q (whole numbers included) and for scales that are not grid scales. With the image's corner on a whole device pixel, boundaries lie at multiples of 1 / q; for odd q they never meet a centre (odd multiples of ½), for even q the shift makes them odd multiples of 1 / (2q), which never meet one either. **Every device pixel centre is at least 1 / (2q) ≥ 1/128 device pixel, and 1 / (2p) ≥ 1/128 image pixel, from every image pixel edge** (scales up to 64; above that, whole numbers, at least half a device pixel), many times the browsers' rounding and twice the 1/256-texel precision of GPU texture lookups. Verified numerically over 10⁹ boundaries (21 ratios, 3,000 random wheel zooms each, 16,384 boundaries per view): worst 1/128 device pixel and 1/128 image pixel.
+- `toDisplayViewport`: the display viewport, zoom on the grid and offset on whole device pixels; `editorState.displayViewport` uses it, so rendering, overlays, pointer tools and the zoom readout share it.
+
+Behaviour: the displayed zoom is at most about 0.8% from the requested one (1.6% at device scales just above 32); 147.65625% is shown at 31/21 = 147.62%. Every zoom step at display scaling in quarters (1, 1.25, 1.5, 1.75, 2, 2.25, 2.5, 3, 4), and every step up to 200% at 110% / 133% browser zoom and Firefox's 60 / n ratios, is shown exactly as before. The stored zoom stays as requested (pinch movements add up; zooming in and back out returns exactly); zoom actions anchor with the zooms as displayed before and after (`zoomTo`), so the image point under the pointer stays exactly under it. Whole-number scales (100% and 200% at DPR 1, 100% at DPR 2, …) are drawn on their corner again, with no offset, as before the audit.
+
+Why this one: it removes the possibility of a tie by construction instead of avoiding the ones found so far; it keeps one `drawImage` per frame, no extra buffers, copies or readbacks; it is one small pure module with a provable margin; and it changes no other contract (the rule `floor((d + 0.5 − bias) / scale)` and every caller stay the same; the bias is derived from the scale by the same function everywhere). Cost: about 0.3–0.5 µs per call (measured, Node), a handful of calls per frame and per pointer move.
+
+#### Coordinate-mapping contract (as of 2026-11-11)
+
+1. The display viewport is the only viewport anything is drawn or hit-tested with: zoom on the grid at 100% and above, offset on whole device pixels.
+2. The image pixel shown at device pixel d (counted from the image's corner) is `imageIndexAtDevicePixel(d, scale) = floor((d + 0.5 − imageDrawBias(scale)) / scale)`; the renderer draws with the same bias. Pointer tools take the device pixel the delivered pointer position is in (`devicePixelIndex`).
+3. Crop overlay edges, the checkerboard and the selection overlay (at a scale of 1 and above) are placed from that rule (`devicePixelBoundary`); zoomed out, the selection overlay's "any covered pixel" rule (`imageSpanAtDevicePixel`) is unchanged.
+4. Crop geometry stays whole image pixels and pointer drags snap to the nearest pixel edge in image coordinates (unchanged).
+
+#### Tests added or changed
+
+- `canvas/deviceSampling.test.ts` (16 tests, was 6): display viewports (as rendered) at every zoom step from 100%, Codex's level (exact, as Chrome's real wheel input reaches it, and 10⁻⁶ either side), 12 random and 7 fixed arbitrary levels, 18 device pixel ratios (including Chrome's single-precision 1.100000023841858 and Firefox's 12/11, 30/17 and 60/67) and 4 pans: no centre within 1/128 device pixel or 1/128 image pixel of an edge; pointer tools, crop overlay edges (including the rectangle at (1, 1)), the checkerboard and the selection overlay rule against a model of the browser built only from the transform the renderer is given. The grid's properties (steps exact at the usual ratios, at most 1.6% elsewhere, never below 100%, stable). The fixed-3/128 tie at 189/128 and that every fixed offset has such a scale. Codex's case through the editor: the wheel conversion of `workspaceInput.ts`, the reducer, four pans and DPR 1, 1.25, 1.5, 2 and 3, with Eyedropper, Magic Wand, status bar and crop overlay against the model, each device pixel required to be clear of every edge first.
+- Emulating the defective code (identity `displayZoom`, `imageDrawBias` = 3/128) fails 4 of these tests, including Codex's case at DPR 1 ("device (412, 241): an image pixel edge passes through its centre").
+- Updated, not weakened: tests that pinned the 3/128 translation now assert `imageDrawBias` of their scale (0 for whole numbers, 1/8 for 1.25, 1/4 for 2.5, 1/16 for 0.625); the zoom-anchor test measures the anchor with the zoom as displayed (it now also covers an off-grid level, 1.0137); the `devicePixels.test.ts` test of the constant itself was removed with the constant.
+- New browser script `scripts/browser/arbitrary-zoom.mjs` (oracle independent of the app's mapping; see `scripts/browser/README.md`), and `wheel()` (real Ctrl / Shift + wheel input) in `lib/browsers.mjs`. Against the build before this correction it fails 42 checks at DPR 1 (147.65625% and just below it, Chrome and Firefox: Eyedropper, Magic Wand and status bar, crop edges on the canvas and on screen, the stripes diagonal).
+- GPU harness: `createReport()` gained `skip(name, reason)`; SKIP lines are counted separately, never as passes, and do not change the exit code (verified: a skip alone exits 0, a failure exits 1). `gpu-crash.mjs` reports its three `checkOverlay` checks as SKIP at fractional device scales, where that helper cannot run.
+
+#### Verification (2026-11-11)
+
+- Baseline before any change: typecheck and lint clean, 79 files / 1,361 unit tests, build passing; Codex's case reproduced in Firefox (above).
+- Now: typecheck and lint clean; **79 files / 1,370 unit tests** passing (`deviceSampling.test.ts` 6 → 16, one constant test removed); production build passing (382.1 kB JS, 121.1 kB gzip; was 381.4 / 120.7).
+
+| Browser script (headless Chrome and Firefox) | Result |
+| --- | --- |
+| `arbitrary-zoom.mjs` (new; DPR 1, 1.25, 1.5, 2, 3) | 1,520 PASS, 0 FAIL, 0 SKIP (152 per browser and ratio) |
+| `arbitrary-zoom.mjs` against the build before this correction (DPR 1) | 262 PASS, **42 FAIL** (as intended) |
+| `crop.mjs --no-stress` (DPR 1–3; 4K timings) | 732 PASS (unchanged) |
+| `colour.mjs` (DPR 1–3, forced colours) | 347 PASS (unchanged) |
+| `smoke.mjs --dpr 1,1.25,1.5,2` | 608 PASS (unchanged) |
+| `edit-workflow.mjs --no-perf` | 507 PASS |
+| `auto-trim.mjs --no-perf` | 146 PASS |
+| `png-export.mjs --no-perf` | 119 PASS |
+| `edge-adjust.mjs --no-perf` | 175 PASS |
+| `edit-ownership.mjs --mode both` | 52 PASS |
+| `edge-cleanup.mjs --no-perf` | 885 PASS |
+| `gpu-crash.mjs --kill-test-gpu-process --dpr 1,1.25,1.5,2` (Chrome) | 86 PASS, 0 FAIL, **6 SKIP** (the `checkOverlay` checks at DPR 1.25, device scale 2.5: not verified); exit 0 |
+| React Strict Mode (dev server), DPR 1 and 1.5: `arbitrary-zoom.mjs` / `crop.mjs --no-perf --no-stress` / `colour.mjs` | 608 / 292 / 146 PASS, 0 FAIL |
+
+Performance (production, headless, this machine): 240 alternating arbitrary Ctrl + wheel zooms and pans of a 4K screenshot with a 7.3-megapixel selection at DPR 1.25, time from each input to the next frame: Chrome median 16.8 / p95 19.3 ms before, 16.8 / 19.5 ms after; Firefox 16.0 / 18.0 ms both. 4K crop Apply / Undo / Redo 104 / 28 / 9 ms (Chrome), 99 / 46 / 22 ms (Firefox), history 24.9 MB, as before. No buffers, copies or readbacks were added; memory is unchanged.
+
+#### Known limitations
+
+- *(Corrected by the zoom follow-up below: 1/128 holds for exact grid scales; at 100% on a ratio accepted within the grid's tolerance the bound is 0.395/q ≥ 1/162.)* The guarantee is a margin of at least 1/128 device pixel (and 1/128 texel) against the browser's rounding. Headless browsers rasterise in software; real GPUs are expected to be well within it (1/256-texel lookup precision), but real hardware at fractional scaling has not been checked (P4-C2, P4-E1). Above 64 device pixels per image pixel (3200% at DPR above 2) scales are whole numbers and the margin is half a device pixel, 1/(2 × scale) of a texel, as before.
+- *(Corrected by the zoom follow-up below: up to 0.80% / 0.95% / 1.15% / 1.54% for device scales up to 4 / 16 / 32 / above.)* The displayed zoom can differ from the requested one by up to about 0.8% (1.6% at device scales just above 32); pinch zoom therefore moves in small steps near whole-number scales. The readout rounds to whole percent and shows the displayed zoom.
+- Exact 189/128 cannot be reached with WebDriver's wheel input (whole pixels only), so the browser script dispatches that wheel event to the canvas (the app's own listener); trusted wheel input is checked at the other levels.
+- Firefox's driver delivers pointers at whole CSS pixels, so at fractional ratios some target device pixels cannot be clicked exactly; those clicks are checked where they land.
+- `checkOverlay` still supports whole device scales only; selection-overlay restoration after a GPU crash at fractional scales is **not verified** (6 SKIP).
+- Below 100% (smoothed), the zoom and the pixel-under-pointer rule are unchanged; the display is a blend there, so "the pixel shown" is approximate by nature (as before).
+
+#### Manual QA added or still required (owner; none performed by Claude)
+
+| ID | Check |
+| --- | --- |
+| P4-Z1 | Real Chrome and Firefox, Ctrl + wheel and trackpad pinch to arbitrary zooms (including around 148%) on real and fractional-scaling displays: Eyedropper, Magic Wand, status bar and crop outline agree with the pixel seen; zooming feels smooth and the point under the pointer stays put |
+| P4-C2, P4-E1 | (as before) fractional scaling on real hardware |
+
+P4-E3, P4-L2, P4-HC1 and P4-A1 above and the Phase 3 Manual QA Backlog are unchanged and still pending.
+
+#### Decisions for the owner
+
+1. The display scale grid changes what is displayed at off-ladder zoom levels by up to about 0.8% (1.6% at the highest scales) and shows that zoom in the readout; the zoom steps are unchanged. Accept, or ask for a finer grid (smaller margin) or a different approach.
+2. The grid limit (numerators and denominators up to 64, margin 1/128) is an implementation choice balancing margin and zoom accuracy.
+
+Replace Colour decisions RC1–RC6 above are unchanged.
+
+### Phase 4 zoom follow-up (Codex recheck, 2026-11-11)
+
+Codex independently verified the display scale grid: the 147.65625% regression is fixed at every tested device pixel ratio, Crop, Magic Wand, Eyedropper and the status bar agree with the rendered pixels in the reviewed cases, and the exact-rational construction is sound. Approval was blocked on the findings below; the owner authorised fixing them without redesigning pixel selection. Nothing is committed; Phases 3 and 4 are not approved; RC1–RC6 are unchanged.
+
+| # | Severity | Codex finding | Outcome |
+| --- | --- | --- | --- |
+| Z1 | Medium | Pointer-centred zoom drift: `zoomTo` used the displayed zoom but not the snapped offset or the drawing bias. DPR 1.5, trusted Ctrl + wheel 100% → 3200%: the anchored point moved 7.5 device pixels | **Fixed** (reproduced first: 7.5–8.5 device pixels in Chrome and Firefox) |
+| Z2 | Medium | Actual Size at a DPR near 1.01 stores 100% but draws 100.5815% | **Investigated; owner decision required** (options below). *Resolved: owner chose Option D; implemented in "Phase 4 Actual Size decision and visual verification" below* |
+| Z3 | Low | Zoom In stays enabled at the requested 3200% where the displayed zoom is below it | **Fixed** |
+| Z4 | — | The 1/128 clearance claim is not valid for scales accepted within the grid's tolerance (DPR 1.0158731073015872, 100%, boundary 16,348: 0.00644 device pixels) | **Confirmed independently; guarantee revised** |
+| Z5 | UX | The device scale 32 → 33 transition is a 3.125% jump | **Documented** (measured below) |
+| Z6 | (found here) | Wheel notches up and back down to 100% stored 99.99999999999992% (1.25¹⁵ × 0.8¹⁵ ≠ 1): drawn smoothed and off the grid while the readout said 100% (Chrome, DPR 1.01) | **Fixed** |
+
+#### Z1: zoom anchoring against the drawn image
+
+Root cause: the anchored image point was measured, and placed, with the stored viewport at the displayed zoom, ignoring the two things the renderer adds: the offset snapped to whole device pixels and the drawing bias of the scale (`imageDrawBias`, up to 1/4 device pixel). The point the user saw differed from the point kept by up to that amount at the starting zoom, and every later zoom magnified the difference by the zoom ratio (1/4 device pixel × 32 = 8 device pixels).
+
+Fix (`canvas/zoomAnchor.ts`, `editor/editorState.ts` `zoomAbout`):
+- `imagePointAtPointer` measures the image point under the anchor through `deviceTransform` of the display viewport: exactly what is drawn.
+- `viewportDrawingAt` returns the viewport that draws that point at the anchor, with its offset on whole device pixels (the inverse of the drawing transform at the new zoom, bias included). Of the two whole-pixel offsets either side of the exact one it takes the nearer, unless only the other keeps the point's image pixel in the anchor's device pixel (so the pixel under the pointer stays the same while zooming in); an exact placement is always kept. The point therefore stays within half a device pixel of the pointer, or one device pixel where keeping its pixel needs it.
+- Re-measuring each step would add up each step's snapping (a trackpad pinch sends hundreds), so `state.zoomAnchor` remembers the image point a zoom kept; a zoom about the same anchor that continues from the viewport that zoom produced (same viewport object, same ratio) keeps that exact point. Any pan, resize, Fit, other anchor or a zoom that had to move the image to keep it reachable starts afresh.
+- Results: no cumulative drift; zooming in and back out, or out and back in, about one anchor returns to exactly the starting transform; panning is unchanged. The stored zoom is still exactly as requested. Zoom In / Zoom Out / Actual Size use the same path about the workspace centre.
+
+#### Z2: Actual Size at device pixel ratios off the grid (owner decision)
+
+Root cause: at 100% the device scale is the DPR itself. `displayZoom` shows unsmoothed views at the nearest grid scale at or above the DPR; when the DPR is not within 10⁻⁷ of a grid scale, 100% is displayed at a neighbouring grid scale (Chrome at 101% Windows scaling reports 1.0099999904632568; 64/63 gives 100.5815%). The "never below 100%" restriction is not the cause at 1.01 (64/63 is also the nearest grid scale overall); it keeps the view unsmoothed (below 100% is drawn smoothed) and pushes other ratios upward (for example 1.925 → 52/27, 100.05%).
+
+Scope (computed for this report): Firefox's ratios are 60/n, which are grid scales for every ratio ≥ 0.94, so Firefox always shows exactly 100% (101% scaling gives 60/59, exact). Chrome: 4 of 75 combinations of OS scaling (100–400% in the usual steps) and browser zoom presets show 100% off by more than 10⁻⁶ (worst 100.36%, at 2.025), and 296 of 401 custom Windows scalings in 1% steps (worst 101.52%). The readout shows the displayed zoom (101% at 1.01), but the 100% button does not give 100%.
+
+Why exact 100% cannot simply be allowed: with the scale fixed at the DPR, the best possible margin (the best drawing offset, found from the gaps between the 16,385 boundary positions modulo one device pixel; three-distance theorem) depends on the DPR's rational approximations. Measured: every Chrome preset combination (ratios from 0.9) keeps at least 1/85 device pixel, but only 70 of 76 keep 1/128 of both a device pixel and a texel (all keep 1/256); custom Windows scalings keep as little as 1/319 device pixel and about 1/1430 texel (449%), and only 194 of 401 keep 1/256 of both; arbitrary ratios (for example a GNOME fractional scale such as 2560/1463) fall below 10⁻⁴, far below browser rounding. So exact 100% and the current margin cannot coexist at every ratio without a different rendering path.
+
+Options (not implemented; for the owner):
+
+| Option | Actual Size | Pixel agreement | Cost |
+| --- | --- | --- | --- |
+| A. Keep the grid (current) | Nearest grid scale, 100.58% at 1.01 (shown as 101%) | Guaranteed margin (1/162 or better) | None. The owner has said this is misleading |
+| B. Exact 100%, unsmoothed, with the best drawing offset for that DPR | Exact | Margin depends on the DPR: fine for Chrome presets, weaker for many custom scalings, unreliable for arbitrary ratios | About 1.3 ms once per DPR (cached); a new, DPR-dependent guarantee |
+| C. Exact 100%, smoothed, at DPRs off the grid | Exact, but slightly soft on those displays only | No ties to break (each device pixel is a blend; the tools read the pixel with the largest weight); the Eyedropper reads the stored colour, not the blend | None |
+| **D. B where its margin is at least 1/256 device pixel and texel, else C (recommended)** | Exact everywhere; crisp wherever reliable | At least 1/256 where crisp; blend elsewhere | As B |
+| E. Draw 100% column by column or through an intermediate image | Exact and crisp | Exact | Thousands of draw calls per frame or a full-size intermediate buffer: rejected on performance |
+
+Recommendation: D, with P4-Z2 (below) on real hardware. Until decided, Actual Size behaves as before at off-grid DPRs, and `scripts/browser/zoom-anchor.mjs` reports that case as PENDING (not as a pass).
+
+#### Z3: Zoom In at the maximum
+
+`zoomAvailability(state)` decides Zoom In / Zoom Out from the stored (requested) zoom; the status bar takes `canZoomIn` / `canZoomOut` and still shows the displayed zoom. At the requested 3200% Zoom In is disabled even where 3200% is displayed as 3168% (Chrome 1.01) or 3182% (1.1); the reducer was already clamped (a press or Ctrl + wheel there changes nothing).
+
+#### Z4: the clearance guarantee, revised
+
+- **Proved (exact arithmetic):** at a scale exactly p/q (lowest terms), every device pixel centre is at least 1/(2q) device pixel (≥ 1/128) and 1/(2p) texel (≥ 1/128) from every image pixel edge. Displayed zooms above 100% are grid scales up to double rounding (≈10⁻¹⁵ relative; under 10⁻⁹ device pixel of drift across 16,384 pixels).
+- **Proved, with the tolerance:** at exactly 100%, the scale is the DPR, accepted as grid scale g when |s − g| ≤ 10⁻⁷·g. Edge k moves k·|s − g|, so the bound is 1/(2q) − N·|s − g| for an image N pixels across; with N ≤ 16,384 (the import limit) and g ≤ 64/q this is at least 0.395/q device pixel (≥ 1/162) and 0.395/p texel. Codex's counterexample (0.00644183 at boundary 16,348) was reproduced and lies above this bound (0.00644).
+- **Observed only:** browsers hold canvas transforms in single precision and GPUs sample with limited sub-texel precision. The margins are many times the rounding measured in headless Chrome and Firefox (about 0.001 device pixel), and the browser tests check the result there; real GPUs and drivers have not been measured. Numerical sweeps check the implementation; they are not proofs.
+
+#### Z5: quantisation jumps and plateaus (measured)
+
+Largest difference between displayed and requested zoom: 0.80% up to device scale 4, 0.95% up to 16, 1.15% up to 32, 1.54% above. Above device scale 32 only whole numbers remain (numerators are limited to 64), so neighbouring displayed scales are up to 3.1% apart (32 → 33). A slow pinch there holds one size over up to 3.1% of requested zoom, then steps by up to 3.1%. Where the jumps start: DPR 1 at about 2175% (largest step 2.3%), DPR 1.25 at about 2600%, 1.5 at about 2170%, 2 at about 1625%, 3 at about 1085% (3.1% each). At the limit, 3200% is displayed as 3168% (Chrome 1.01), 3182% (1.1) or 3245% (Firefox 60/59). Zoom steps at the usual ratios are exact. Not changed; a finer grid would trade margin for smoothness (owner decision 2 of the arbitrary-zoom regression).
+
+#### Tests added
+
+- `canvas/zoomAnchor.test.ts` (new, 3): the measured point is the one the renderer draws (`planFrame`); placements stay within one device pixel, on whole device pixels, and keep the pointer's pixel when the exact placement shows it; exact placements return to the exact transform.
+- `editor/editorState.test.ts`: anchoring checked against `planFrame`'s transform, not the stored viewport: Codex's case (trusted-wheel factors 100% → 3200% at DPRs 1–3, 1.01, 1.1), from Fit and from 100%; 260 small pinch steps without drift and back; out and back in; a pan between zooms; the pixel under the pointer kept, checked with `pixelUnderPointer`; wheel round trips return to exactly 100%; Zoom In / Out availability at both limits at seven DPRs. On the previous anchoring, 3 of these fail (as do the browser checks below).
+- `canvas/deviceSampling.test.ts` (+5): Codex's counterexample; the tolerance-aware bound for every grid scale at the edge of the tolerance over 16,384 pixels; 1/128 for scales displayed above 100% over 16,384 pixels; both sides of display grid transitions; 100% exact, crisp, at ratios on the grid.
+- `scripts/browser/zoom-anchor.mjs` (new): what the browser is given (the transform of each `drawImage` call, read from the canvas context), the delivered wheel positions, canvas readback and the controls, at DPR 1, 1.01, 1.1, 1.25, 1.5, 2 and 3: Actual Size via a real click; real Ctrl + wheel notches 100% → 3200% at three pointers, and up and back; Zoom In clicks to 3200%; Zoom In disabled at the maximum, a click and a wheel notch there change nothing. Against the previous build at DPR 1.5 and 1.01 it fails 14 checks.
+- `scripts/browser/arbitrary-zoom.mjs`: views just above 100% and either side of a display grid transition near 133% (grid scales worked out in the script).
+
+#### Verification
+
+Run 2026-11-11 against the production build unless noted (headless Chrome and Firefox, software rendering).
+
+| Check | Result |
+| --- | --- |
+| `tsc -b`, `eslint .`, `npm run build` | PASS (382.96 kB JS, 121.41 kB gzip) |
+| Unit tests | 1,384 PASS in 80 files (was 1,370 in 79) |
+| `zoom-anchor.mjs`, Chrome + Firefox × DPR 1, 1.01, 1.1, 1.25, 1.5, 2, 3 | 139 PASS, 0 FAIL, **1 PENDING** (Actual Size at Chrome 1.01: draws 64/63, 100.58%; Z2). Firefox at 1.01 (60/59) shows exactly 100% |
+| `zoom-anchor.mjs` against the build before this follow-up, DPR 1.5 and 1.01 | 24 PASS, **14 FAIL** (drift 7.5–8.5 device px in both browsers, up to 26 px with Zoom In; Zoom In enabled at 3200% at Chrome 1.01; 100% not regained), 2 PENDING |
+| `arbitrary-zoom.mjs`, Chrome + Firefox × DPR 1, 1.25, 1.5, 2, 3 (with the new 100.01% and grid-transition views) | 1,940 PASS, 0 FAIL |
+| `arbitrary-zoom.mjs --dpr 1.01,1.1` | 614 PASS, **162 FAIL**: every failure is the screenshot form of the crop check ("no image pixel on screen" on the y line) at Chrome 1.01, Chrome 1.1 and Firefox 1.1; the canvas form of the same check, all Eyedropper, Magic Wand, status bar, enlargement and stripes checks pass, and Firefox 1.01 (60/59) passes all 194. The build from before the display scale grid fails the same 54 checks at Chrome 1.1 (140 PASS), so this is pre-existing and not caused by this work: **not verified** at those ratios (screenshot geometry, where the canvas's top is not on a whole device pixel, is the suspected cause; not investigated) |
+| `gpu-crash.mjs --kill-test-gpu-process --dpr 1,1.25,1.5,2` | 86 PASS, 0 FAIL, 6 SKIP (as before; not verified); exit 0 |
+| smoke / crop / colour | 608 / 732 / 347 PASS (unchanged counts) |
+| edit-workflow / auto-trim / png-export / edge-adjust / edit-ownership / edge-cleanup | 507 / 146 / 119 / 175 / 52 / 885 PASS (unchanged counts) |
+| React Strict Mode (dev server): `zoom-anchor.mjs --dpr 1,1.01,1.5` / `arbitrary-zoom.mjs --dpr 1.5` | 59 PASS + 1 PENDING / 388 PASS, 0 FAIL |
+| Manual QA | Not performed (P4-Z2 added) |
+
+#### Performance
+
+Rendering is unchanged (one `drawImage` per frame; no buffers, copies or readbacks). A zoom now also measures and places one point (a few microseconds); `zoomAvailability` compares two numbers per render.
+
+#### Known limitations
+
+- Actual Size at DPRs off the display grid (Z2) is the open decision; real fractional-scaling hardware is untested.
+- The anchored point can be up to one device pixel from the pointer (half normally; one where keeping the pixel under the pointer needs it). Starting below 100% (smoothed), the pixel under the pointer is a blend, so only the point is kept.
+- Quantisation jumps up to 3.1% above device scale 32 (Z5).
+- WebDriver wheel input is whole pixels (Firefox also whole positions); exact 147.65625% is still a dispatched wheel event.
+- `checkOverlay` remains whole-scale only (6 SKIP in `gpu-crash.mjs`).
+- The screenshot crop check in `arbitrary-zoom.mjs` fails at DPR 1.01 / 1.1 (Chrome) and 1.1 (Firefox), identically on the pre-grid build: not verified there; the canvas-readback crop check passes.
+
+#### Manual QA added (owner; none performed by Claude)
+
+| ID | Check |
+| --- | --- |
+| P4-Z2 | Real Chrome and Firefox: zoom with Ctrl + wheel and trackpad pinch from 100% to 3200% and back with the pointer on a small feature, at 100%, 125%, 150% and a custom scaling such as 101%: the feature stays under the pointer; Zoom In disables at 3200%; Actual Size shows 100% (or, at off-grid scalings, the agreed behaviour) |
+
+P4-Z1, P4-C2, P4-E1, the other Phase 4 checks and the Phase 3 Manual QA Backlog are unchanged and still pending.
+
+#### Decisions for the owner
+
+1. Actual Size at device pixel ratios off the display grid (Z2): options A–E above; D recommended.
+2. Whether the up-to-3.1% steps above device scale 32 (Z5) are acceptable, or a finer grid at high zoom is wanted (smaller margin there).
+3. Earlier decisions 1–2 of the arbitrary-zoom regression stand, with the corrected figures.
+
+Replace Colour decisions RC1–RC6 are unchanged.
+
+### Phase 4 Actual Size decision and visual verification (2026-11-11)
+
+The owner provisionally approved **Option D** for Actual Size and asked for the 162 screenshot failures at DPR 1.01 and 1.1 to be investigated, not dismissed. Nothing is committed; Phases 3 and 4 are not approved; RC1–RC6 are unchanged.
+
+#### Actual Size (Option D, as implemented)
+
+- Exactly 100% (Actual Size, or any zoom stored as exactly 100%, including a wheel round trip) is **always displayed at exactly 100%**: the device scale is the device pixel ratio itself, one image pixel per CSS pixel, readout 100% (`displayZoom(1, ratio) = 1`).
+- **Crisp** (nearest-neighbour) where the ratio is a display grid scale (`isGridScale`: p/q with p, q ≤ 64, or a whole number, within 10⁻⁷), with the proved margin (1/(2q) − N·|s − g| ≥ 0.395/q ≥ 1/162 device pixel and texel). This covers ratios 1, 1.25, 1.5, 1.75, 2, 2.25, 2.5, 3, 4, Chrome's 110% (1.100000023841858) and every Firefox ratio (60/n), so ordinary ratios are unchanged.
+- **Smoothed** where it is not (`usesSmoothing(1, ratio)`): Chrome at 101% (1.0099999904632568), 119%, about 296 of the 401 custom 1% Windows scalings, and 4 of 75 Chrome preset combinations (such as 2.025). The drawing offset is 0 there, so the pointer tools read the stored pixel nearest each device pixel's centre, which is the largest part of the blend shown there.
+- **Decision criterion (conservative):** crisp only where the proved guarantee applies. A drawing offset chosen for each ratio could make a few more ratios crisp (1.925 and 3.85, for example), but its margin would only be measured, not proved, and it would need a second bias source through the selection overlay, so it was not done.
+- **What smoothing changes:** only what is shown. On those displays 100% is slightly soft and the colour seen near an edge can blend neighbouring pixels. The stored pixels are never modified. The Eyedropper returns exact stored RGBA; selection, crop, edits and export use the stored pixels. No copies, readbacks or allocations were added.
+- **Every other zoom is unchanged.** Just above exactly 100% the grid applies again (100.58% at 1.01, crisp); just below, smoothed as before.
+
+#### The 162 screenshot failures: a real rendering defect, fixed
+
+Investigation (probe comparing screenshots with canvas readback pixel by pixel, and reading the browser's own `devicePixelContentBoxSize`):
+
+- With the Magic Wand's options row, the canvas sat at device positions such as 194.109; with the Crop tool's row at 152.547 (Chrome 1.1), 140.312 (Chrome 1.01) and 151.364 (Firefox 1.1). Browsers place an element's edges on device pixels by rounding each edge, so the canvas's box was 701, 647 and 697 device rows, while the app's backing store (CSS height × ratio, rounded) was 702, 646 and 696.
+- The browser then scaled the whole bitmap into the box: **84–99% of the image's pixels on screen differed from the canvas**. At 1.25 and 1.5 positions were whole device pixels and the screen matched exactly. That was the "no image pixel on screen" failure. It was a genuine application defect on such displays, the Phase 2 carry-over "devicePixelContentBoxSize", not a harness artefact.
+- Second defect, same cause: pointer positions were measured from the canvas's fractional layout position, not from the device pixel the browser draws it from. Pointers were up to half a device pixel off, and a whole device pixel off where the corner was rounded down (Chrome 1.01 with the Crop tool: layout 140.31, drawn from 140). The harness's own pointer oracle made the same assumption, which is why tool checks still passed. Zooming magnified it: 2.4–11.7 device pixels of anchor drift at 3200% once the harness measured from the true corner.
+
+Fix:
+- The canvas is observed with `ResizeObserver({ box: 'device-pixel-content-box' })`; `WorkspaceMetrics.deviceSize` carries the browser's device box, and `backingStoreSize` uses it for the image and selection canvases (fallback: the rounded CSS size, as before, where the browser does not report it).
+- `clientToViewport(client, rect, ratio)` measures from the rounded corner.
+
+After the fix, screenshot = canvas exactly (0 differing pixels) and box = backing store at every tested ratio and tool. The harness pointer oracles (`arbitrary-zoom.mjs` `observed`/`clickDevice`, `zoom-anchor.mjs` delivered positions) now also count from the corner the browser draws from. Regression: `zoom-anchor.mjs` checks box = backing store and screen = canvas with each of four tools' options rows; with the fix reverted it fails 19 checks at 1.01/1.1 (7 screen/box, 12 anchor drift). Unit tests cover `backingStoreSize` with a reported size, `clientToViewport` with the measured positions, and a device-size-only resize.
+
+#### High zoom
+
+- Steps of up to 3.1% above device scale 32 are kept (owner: provisionally acceptable for V1). Anchoring and reversibility are unchanged and re-verified.
+- 3245% at the 3200% limit (Firefox 60/59) contradicted FEATURE_SPEC §3 ("Zoom range: 1% to 3200%"). Small boundary correction: the displayed scale is the nearest grid scale at or below 3200% × ratio (`MAX_DISPLAY_ZOOM`). Nothing changes below the top of the range. At the limit the readout is 3200% at the usual ratios, otherwise up to one whole device scale step below it: 3147% (Firefox 60/59), 3117% (Firefox 60/55, the largest gap, 2.6%), 3168% (Chrome 1.01), 3182% (Chrome 1.1).
+
+#### Tests added
+
+- `canvas/deviceSampling.test.ts`, "Actual Size (Option D)" (4): exactly 100% and the crisp/smoothed choice at 11 on-grid and 6 off-grid ratios (planFrame's transform and smoothing flag); off the grid, Eyedropper, Magic Wand and status bar read the pixel nearest each device pixel centre with exact bytes; crop edges at whole device pixels where the drawn pixel changes; just above and below 100%. The 1/128 clearance test now covers crisp views only; the display bound test allows one whole step at the 3200% limit and asserts nothing above it.
+- `canvas/devicePixels.test.ts`: `MAX_DISPLAY_ZOOM` equals `MAX_ZOOM`, and no displayed zoom exceeds it at 15 ratios; `backingStoreSize` with a reported device size. `canvas/rendering.test.ts`: `usesSmoothing` at an off-grid 100%. `canvas/coordinates.test.ts`: `clientToViewport` from the rounded corner (measured positions). `editor/editorState.test.ts`: a device-size-only resize reaches the renderer.
+- `scripts/browser/zoom-anchor.mjs`: Actual Size exact at DPR 1, 1.01, 1.1, 1.19, 1.25, 1.5, 2, 3 with the crisp/smoothed choice worked out independently; smoothed: 40 real Eyedropper clicks with exact bytes and the pixel dominating the colour shown; crisp: exact enlargement; screen = canvas with four tools; the limit not above 3200%.
+- `scripts/browser/arbitrary-zoom.mjs`: a smoothed 100% view reports its four nearest-neighbour check groups as **SKIP** (not applicable to a blend; covered by `zoom-anchor.mjs`), never PASS.
+
+#### Verification
+
+| Check | Input | Result |
+| --- | --- | --- |
+| `tsc -b`, `eslint .`, `npm run build` | — | PASS (383.78 kB JS, 121.73 kB gzip) |
+| Unit tests | — | 1,392 PASS in 80 files, 0 FAIL |
+| `zoom-anchor.mjs`, Chrome + Firefox × DPR 1, 1.01, 1.1, 1.19, 1.25, 1.5, 2, 3 | real clicks and Ctrl + wheel; dispatched setup | 240 PASS, 0 FAIL (smoothed Actual Size at Chrome 1.01 and 1.19; crisp elsewhere, Firefox's 1.01 → 60/59 and 1.19 → 1.2 included) |
+| `zoom-anchor.mjs` with the device-box and screen-corner fix reverted, DPR 1.01 and 1.1 | as above | 41 PASS, **19 FAIL** (as expected: 7 box/screen, 12 anchor drift 2.4–11.7 device px) |
+| `arbitrary-zoom.mjs`, Chrome + Firefox × DPR 1, 1.25, 1.5, 2, 3 | dispatched wheel events (exact levels) and real wheel | 1,940 PASS, 0 FAIL |
+| `arbitrary-zoom.mjs --dpr 1.01,1.1` (previously 614 PASS / 162 FAIL) | as above | 762 PASS, 0 FAIL, **8 SKIP** (Chrome 1.01's smoothed 100% views: nearest-neighbour checks not applicable; covered by zoom-anchor) |
+| `gpu-crash.mjs --kill-test-gpu-process --dpr 1,1.25,1.5,2` | — | 86 PASS, 0 FAIL, 6 SKIP (unchanged; not verified) |
+| smoke / crop / colour | real and dispatched | 608 / 732 / 347 PASS (counts unchanged) |
+| edit-workflow / auto-trim / png-export / edge-adjust / edit-ownership / edge-cleanup | real and dispatched | 507 / 146 / 119 / 175 / 52 / 885 PASS (counts unchanged) |
+| React Strict Mode (dev server): `zoom-anchor.mjs --dpr 1,1.01,1.1,1.5` / `arbitrary-zoom.mjs --dpr 1.1,1.5` | as above | 120 / 776 PASS, 0 FAIL |
+| Manual QA | — | Not performed (P4-Z3 added) |
+
+Input kinds: "real" means trusted input through the Chrome DevTools Protocol or WebDriver BiDi (clicks, Ctrl + wheel; Firefox's driver sends whole CSS pixels and whole wheel deltas); exact 147.65625% and the other fractional wheel levels in `arbitrary-zoom.mjs` are wheel events dispatched to the canvas (the app's own listener); tool choices, crop fields, Fit and Actual Size in setup are dispatched actions unless a check says it clicked. All browser runs are headless with software rendering; no real GPU or physical fractional-scaling display was used.
+
+#### Known limitations
+
+- Smoothed Actual Size on off-grid ratios is slightly soft by design.
+- Displayed zoom at the 3200% limit can be up to one whole device scale step (≤ 3.1%) below 3200% at some ratios; steps of up to 3.1% above device scale 32.
+- `device-pixel-content-box` is used where reported (Chrome, Firefox); other browsers fall back to the rounded CSS size and could still see the one-pixel rescale at fractional positions.
+- The corner rounding rule (round each edge) was measured in Chrome and Firefox only.
+- `checkOverlay` remains whole-scale only (6 SKIP in `gpu-crash.mjs`).
+
+#### Manual QA (owner; none performed by Claude)
+
+| ID | Check |
+| --- | --- |
+| P4-Z3 | On a real display at a custom scaling such as 101% or 119% (Chrome): Actual Size reads 100%, looks slightly soft, and the Eyedropper / Magic Wand pick the pixel seen; switch tools (Magic Wand, Crop, Auto Trim) and check the image does not shift or blur and the crop outline stays on pixel edges |
+
+P4-Z1, P4-Z2, P4-C2, P4-E1, the other Phase 4 checks and the Phase 3 Manual QA Backlog are unchanged and still pending.
+
+#### Decisions for the owner
+
+1. Confirm Option D as implemented (crisp only where proved; smoothed elsewhere).
+2. Confirm the 3200% display cap (readout up to one step below 3200% at some ratios, never above).
+
+Replace Colour decisions RC1–RC6 are unchanged.
 
 ---
 

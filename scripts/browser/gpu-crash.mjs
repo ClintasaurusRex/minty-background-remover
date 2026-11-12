@@ -17,6 +17,10 @@
 //
 // --gpu adds Chrome's --enable-gpu. Firefox is not covered: headless Firefox has no separate GPU
 // process to stop.
+//
+// The overlay checks use checkOverlay(), which supports whole device scales only. At other scales
+// (200% at a device pixel ratio of 1.25 is 2.5) they are reported as SKIP, not verified, and do not
+// affect the exit code; every other check still runs there.
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { launchChrome, sleep, waitFor } from './lib/browsers.mjs'
@@ -43,6 +47,17 @@ if (process.platform !== 'linux') {
 
 const report = createReport()
 
+/**
+ * A check built on checkOverlay(), which supports whole device scales only (zoom × device pixel
+ * ratio 2.5 at 200% and 125% display scaling is not one): recorded as SKIP there, never as a pass
+ * or a failure. The other checks (image exact, overlay unchanged against its snapshot) work at any
+ * scale and still run.
+ */
+function overlayCheck(name, result, ok) {
+  if (result?.skipped) report.skip(name, `checkOverlay: ${result.skipped}; whole device scales only`)
+  else report.check(name, ok(result), JSON.stringify(result))
+}
+
 async function run(url, fixtures, { dpr, reducedMotion }) {
   const browser = await launchChrome({ dpr, width: 1400, height: 900, reducedMotion, gpu: values.gpu })
   const label = browser.name
@@ -62,7 +77,7 @@ async function run(url, fixtures, { dpr, reducedMotion }) {
     await settle(browser)
     await sleep(400)
     const before = await browser.eval('window.__minty.checkOverlay()')
-    report.check(`${label}: overlay correct before the crash`, before.selection && before.wrongTint === 0 && before.wrongClear === 0 && before.boundary > 0, JSON.stringify(before))
+    overlayCheck(`${label}: overlay correct before the crash`, before, (r) => r.selection && r.wrongTint === 0 && r.wrongClear === 0 && r.boundary > 0)
     await browser.eval(`(() => {
       const s = window.__minty.state()
       window.__before = { selection: s.selection, document: s.document, viewport: s.viewport, draws: { ...window.__minty.draws } }
@@ -92,10 +107,10 @@ async function run(url, fixtures, { dpr, reducedMotion }) {
     const image = await browser.eval('window.__minty.compareImage()')
     report.check(`${label}: image layer shows the document exactly`, !image.skipped && image.failures === 0, JSON.stringify(image.skipped ?? { pixels: image.n, wrong: image.wrong }))
     const overlay = await browser.eval('window.__minty.checkOverlay()')
-    report.check(
+    overlayCheck(
       `${label}: overlay complete: tint exact, nothing elsewhere, boundary drawn`,
-      overlay.selection && overlay.wrongTint === 0 && overlay.wrongClear === 0 && overlay.strange === 0 && overlay.boundary > 0,
-      JSON.stringify(overlay),
+      overlay,
+      (r) => r.selection && r.wrongTint === 0 && r.wrongClear === 0 && r.strange === 0 && r.boundary > 0,
     )
     const changed = await browser.eval('window.__minty.compareOverlayWithSnapshot()')
     if (reducedMotion) report.check(`${label}: overlay identical to before the crash`, changed.pixels === 0, JSON.stringify(changed))
@@ -121,10 +136,10 @@ async function run(url, fixtures, { dpr, reducedMotion }) {
     const offset = await browser.eval('window.__offset')
     report.check(`${label}: the pan moved the view`, moved.x !== offset.x || moved.y !== offset.y, `${JSON.stringify(offset)} → ${JSON.stringify(moved)}`)
     const panned = await browser.eval('window.__minty.checkOverlay()')
-    report.check(
+    overlayCheck(
       `${label}: after a pan, overlay still complete`,
-      panned.selection && panned.wrongTint === 0 && panned.wrongClear === 0 && panned.strange === 0 && panned.boundary > 0,
-      JSON.stringify(panned),
+      panned,
+      (r) => r.selection && r.wrongTint === 0 && r.wrongClear === 0 && r.strange === 0 && r.boundary > 0,
     )
     const pannedImage = await browser.eval('window.__minty.compareImage()')
     report.check(`${label}: after a pan, image exact`, !pannedImage.skipped && pannedImage.failures === 0, JSON.stringify(pannedImage.skipped ?? { pixels: pannedImage.n, wrong: pannedImage.wrong }))

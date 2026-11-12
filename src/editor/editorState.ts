@@ -1,9 +1,10 @@
 import { viewportToImage } from '../canvas/coordinates'
 import { cropRectOnScreen, hitTestCrop } from '../canvas/cropOverlay'
-import { snapToDevicePixels } from '../canvas/devicePixels'
+import { snapToDevicePixels, toDisplayViewport } from '../canvas/devicePixels'
 import type { DisplayImage } from '../canvas/displayImage'
 import { keepImageReachable, limitPan } from '../canvas/pan'
-import { clampZoom, fitViewport, nextZoomStep, panBy, resizeViewport, zoomAt } from '../canvas/viewport'
+import { MAX_ZOOM, MIN_ZOOM, clampZoom, fitViewport, nextZoomStep, panBy, resizeViewport } from '../canvas/viewport'
+import { imagePointAtPointer, viewportDrawingAt } from '../canvas/zoomAnchor'
 import {
   type CropField,
   type CropHandle,
@@ -56,6 +57,11 @@ export type { DocumentVersion } from './types'
 export interface WorkspaceMetrics {
   readonly size: Size
   readonly devicePixelRatio: number
+  /**
+   * The canvas's content box in device pixels as the browser lays it out (device-pixel-content-box),
+   * when the browser reports it: the canvas backing store (backingStoreSize, canvas/devicePixels.ts).
+   */
+  readonly deviceSize?: Size | null
 }
 
 /**
@@ -66,6 +72,16 @@ export interface WorkspaceMetrics {
 export type EditorImportResult =
   | { readonly ok: true; readonly document: ImageDocument; readonly bitmap: ImageBitmap }
   | { readonly ok: false; readonly error: ImportError }
+
+/** The image point a zoom kept at its anchor (imagePointAtPointer), and the viewport it did that for. */
+export interface ZoomAnchor {
+  readonly viewport: ViewportState
+  readonly devicePixelRatio: number
+  /** Viewport point (CSS px). */
+  readonly anchor: Point
+  /** Image point (image px) drawn at the anchor. */
+  readonly image: Point
+}
 
 export interface EditorState {
   /** The open image, or null before the first successful import. */
@@ -100,6 +116,12 @@ export interface EditorState {
   readonly importError: ImportError | null
   /** The Space + drag pan in progress, or null. */
   readonly pan: PanDrag | null
+  /**
+   * The image point the last zoom kept under its anchor, so the next zoom about the same anchor
+   * keeps exactly that point rather than one re-measured from the snapped display (see zoomAbout).
+   * Valid only while `viewport` is still the very viewport that zoom produced.
+   */
+  readonly zoomAnchor: ZoomAnchor | null
   /** An informational message about the latest import, shown until dismissed or the next import starts. */
   readonly importNotice: ImportNotice | null
   /** The tool used by clicks on the image. Null until an image is open. */
@@ -390,6 +412,12 @@ export interface ChosenColour {
    * open image's current content.
    */
   readonly sample: { readonly version: DocumentVersion; readonly pixel: PixelCoordinate } | null
+  /**
+   * How many Eyedropper readings the session has made, this one included (the colour picker's
+   * Apply keeps the count). Each deliberate reading, of the same pixel again included, has its own
+   * number, so its announcement is made again, and nothing else changes it (Phase 4 audit, L3).
+   */
+  readonly readings: number
 }
 
 export type EditorAction =
@@ -591,6 +619,7 @@ export const initialEditorState: EditorState = {
   pendingImportId: null,
   importError: null,
   pan: null,
+  zoomAnchor: null,
   importNotice: null,
   activeTool: null,
   magicWand: DEFAULT_MAGIC_WAND_SETTINGS,
@@ -677,17 +706,13 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return resizeWorkspace(state, action.workspace)
 
     case 'zoom-scaled':
-      return withViewport(state, (viewport, workspace, document) =>
-        Number.isFinite(action.factor) && action.factor > 0
-          ? keepImageReachable(zoomTo(viewport, action.anchor, viewport.zoom * action.factor), document, workspace.size)
-          : viewport,
-      )
+      if (!Number.isFinite(action.factor) || !(action.factor > 0)) return state
+      return zoomAbout(state, action.anchor, (zoom) => zoom * action.factor, false)
 
     case 'zoom-stepped':
-      return withViewport(state, (viewport, workspace, document) => {
-        const next = zoomTo(viewport, centreOf(workspace.size), nextZoomStep(viewport.zoom, action.direction))
-        return settled(keepImageReachable(next, document, workspace.size), viewport, workspace)
-      })
+      return state.workspace
+        ? zoomAbout(state, centreOf(state.workspace.size), (zoom) => nextZoomStep(zoom, action.direction), true)
+        : state
 
     case 'zoom-fitted':
       return withViewport(state, (_viewport, workspace, document) =>
@@ -695,10 +720,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       )
 
     case 'zoom-actual-size':
-      return withViewport(state, (viewport, workspace, document) => {
-        const next = zoomTo(viewport, centreOf(workspace.size), 1)
-        return settled(keepImageReachable(next, document, workspace.size), viewport, workspace)
-      })
+      return state.workspace ? zoomAbout(state, centreOf(state.workspace.size), () => 1, true) : state
 
     case 'pan-drag-started':
       if (!state.viewport || !state.document) return state
@@ -759,11 +781,12 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const { document } = state
       if (state.activeTool !== 'eyedropper' || !document || !isVersionOf(version, document) || !isRgba(colour)) return state
       if (!(pixel.x >= 0 && pixel.y >= 0 && pixel.x < document.width && pixel.y < document.height)) return state
-      return { ...state, colour: { value: { ...colour }, sample: { version, pixel: { x: pixel.x, y: pixel.y } } } }
+      const readings = (state.colour?.readings ?? 0) + 1
+      return { ...state, colour: { value: { ...colour }, sample: { version, pixel: { x: pixel.x, y: pixel.y } }, readings } }
     }
 
     case 'colour-chosen':
-      return isRgba(action.colour) ? { ...state, colour: { value: { ...action.colour }, sample: null } } : state
+      return isRgba(action.colour) ? { ...state, colour: { value: { ...action.colour }, sample: null, readings: state.colour?.readings ?? 0 } } : state
 
     case 'magic-wand-tolerance-changed': {
       if (!Number.isFinite(action.tolerance)) return state
@@ -1261,12 +1284,80 @@ function withEdgeSettings(state: EditorState, change: Partial<EdgeSettings>): Ed
 }
 
 /**
- * Zooms about `anchor`, clamped to the supported range. At a limit the viewport is
- * returned as it is, so pressing against a limit cannot nudge the image.
+ * Zooms about `anchor` (a viewport point) to `zoomFor(current zoom)`, clamped to the supported
+ * range. At a limit the state is returned as it is, so pressing against a limit cannot nudge the
+ * image.
+ *
+ * The image point the user sees under the anchor stays under it as drawn (canvas/zoomAnchor.ts):
+ * it is measured through the transform the image is actually drawn with (imagePointAtPointer:
+ * display zoom, snapped offset and drawing bias), and the new viewport draws it at the anchor again
+ * (viewportDrawingAt), on whole device pixels, preferring the offset that keeps its image pixel in
+ * the anchor's device pixel. The point moves by at most a device pixel, and later zooming never
+ * magnifies that.
+ *
+ * Re-measuring at every step would add up each step's snapping instead (a trackpad pinch sends
+ * hundreds of steps), so a zoom about the same anchor continuing from the viewport the previous
+ * zoom produced keeps that zoom's image point (state.zoomAnchor) exactly. The stored zoom stays as
+ * requested, so small pinch movements add up, and zooming in and back out about one anchor returns
+ * exactly to the start as displayed. `settle` is for discrete commands: a zoom that had to move the
+ * image to keep it reachable is snapped to whole device pixels again (settled).
  */
-function zoomTo(viewport: ViewportState, anchor: Point, zoom: number): ViewportState {
-  const next = clampZoom(zoom)
-  return next === viewport.zoom ? viewport : zoomAt(viewport, anchor, next)
+function zoomAbout(
+  state: EditorState,
+  anchor: Point,
+  zoomFor: (zoom: number) => number,
+  settle: boolean,
+): EditorState {
+  const { viewport, workspace, document } = state
+  if (!viewport || !workspace || !document) return state
+  const zoom = exactActualSize(clampZoom(zoomFor(viewport.zoom)))
+  if (zoom === viewport.zoom) return state
+  const ratio = workspace.devicePixelRatio
+  const image =
+    continuedZoomPoint(state.zoomAnchor, viewport, anchor, ratio) ??
+    imagePointAtPointer(toDisplayViewport(viewport, ratio), anchor, ratio)
+  const anchored = viewportDrawingAt(image, anchor, zoom, ratio)
+  const reachable = keepImageReachable(anchored, document, workspace.size)
+  const next = settle && reachable !== anchored ? settled(reachable, viewport, workspace) : reachable
+  const zoomed = withViewport(state, () => next)
+  if (zoomed === state) return state
+  // A zoom that had to move the image to keep it reachable no longer has the point at the anchor.
+  const zoomAnchor = reachable === anchored ? { viewport: next, devicePixelRatio: ratio, anchor, image } : null
+  return { ...zoomed, zoomAnchor }
+}
+
+/**
+ * Relative distance from 100% within which a requested zoom is 100%: floating-point error only, as
+ * left by wheel notches up and back down (1.25^15 × 0.8^15 is not exactly 1).
+ */
+const ACTUAL_SIZE_TOLERANCE = 1e-9
+
+/**
+ * 100% for a zoom within floating-point error of it. Without this, wheel zooming back to 100% could
+ * store 99.99999999999992%: smoothed (blurred) and off the display scale grid, while the readout
+ * says 100%.
+ */
+function exactActualSize(zoom: number): number {
+  return Math.abs(zoom - 1) <= ACTUAL_SIZE_TOLERANCE ? 1 : zoom
+}
+
+/** The image point the previous zoom kept at `anchor`, when this zoom continues from its result. */
+function continuedZoomPoint(
+  remembered: ZoomAnchor | null,
+  viewport: ViewportState,
+  anchor: Point,
+  devicePixelRatio: number,
+): Point | null {
+  if (
+    !remembered ||
+    remembered.viewport !== viewport ||
+    remembered.devicePixelRatio !== devicePixelRatio ||
+    remembered.anchor.x !== anchor.x ||
+    remembered.anchor.y !== anchor.y
+  ) {
+    return null
+  }
+  return remembered.image
 }
 
 function centreOf(size: Size): Point {
@@ -1307,7 +1398,9 @@ function resizeWorkspace(state: EditorState, workspace: WorkspaceMetrics): Edito
     previous &&
     previous.size.width === workspace.size.width &&
     previous.size.height === workspace.size.height &&
-    previous.devicePixelRatio === workspace.devicePixelRatio
+    previous.devicePixelRatio === workspace.devicePixelRatio &&
+    (previous.deviceSize?.width ?? null) === (workspace.deviceSize?.width ?? null) &&
+    (previous.deviceSize?.height ?? null) === (workspace.deviceSize?.height ?? null)
   ) {
     return state
   }
@@ -1348,14 +1441,26 @@ function settled(
 }
 
 /**
- * The viewport to draw and hit-test with: the stored viewport snapped to whole
- * device pixels. Rendering and pointer-to-pixel conversion must both use this value
- * so they always agree. Wheel zoom and resizes store unsnapped values (see settled)
- * so they never accumulate rounding.
+ * The viewport to draw and hit-test with: the stored viewport with its offset snapped to
+ * whole device pixels and, at 100% and above, its zoom moved to the display scale grid
+ * (toDisplayViewport, canvas/devicePixels.ts), so every browser draws exactly the image
+ * pixel the tools expect at every device pixel. Rendering, overlays, pointer-to-pixel
+ * conversion and the zoom readout must all use this value so they always agree. Wheel
+ * zoom and resizes store unsnapped values (see settled) so they never accumulate rounding.
  */
 export function displayViewport(state: EditorState): ViewportState | null {
   if (!state.viewport || !state.workspace) return null
-  return snapToDevicePixels(state.viewport, state.workspace.devicePixelRatio)
+  return toDisplayViewport(state.viewport, state.workspace.devicePixelRatio)
+}
+
+/**
+ * Whether Zoom In and Zoom Out can change the zoom: decided by the stored (requested) zoom, which
+ * the reducer clamps, not by the displayed zoom, which the display scale grid can put just below
+ * 3200% (at 101% scaling, 3200% is displayed as 3168%) while the requested zoom is at the limit.
+ */
+export function zoomAvailability(state: EditorState): { readonly zoomIn: boolean; readonly zoomOut: boolean } {
+  const zoom = state.viewport && state.workspace && state.document ? state.viewport.zoom : null
+  return { zoomIn: zoom !== null && zoom < MAX_ZOOM, zoomOut: zoom !== null && zoom > MIN_ZOOM }
 }
 
 export function isImporting(state: EditorState): boolean {

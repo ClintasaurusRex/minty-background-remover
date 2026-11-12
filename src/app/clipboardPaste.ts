@@ -45,17 +45,23 @@ export interface PasteHandlers {
   readonly onFiles: (files: File[]) => void
   /** Ctrl+V outside a text field with nothing usable on the clipboard. */
   readonly onNoImage: () => void
+  /**
+   * Whether pastes must be ignored now: while a dialog is open over the editor (the replace
+   * confirmation, the colour picker), a paste never imports an image and shows no message. Pastes
+   * into its text fields still paste text as usual (the browser's default is left alone).
+   */
+  readonly isBlocked?: () => boolean
 }
 
 /**
- * Listens for paste anywhere in the document. Pastes into editable fields, and
- * pastes another handler has already taken, are left alone. The default action is
- * only prevented when files are being imported. Returns a function that removes the
- * listener.
+ * Listens for paste anywhere in the document. Pastes into editable fields, pastes
+ * another handler has already taken and pastes while `isBlocked()` are left alone. The
+ * default action is only prevented when files are being imported. Returns a function
+ * that removes the listener.
  */
-export function installPasteHandler(target: EventTarget, { onFiles, onNoImage }: PasteHandlers): () => void {
+export function installPasteHandler(target: EventTarget, { onFiles, onNoImage, isBlocked }: PasteHandlers): () => void {
   const onPaste = (event: Event) => {
-    if (event.defaultPrevented || isEditableTarget(event.target)) return
+    if (event.defaultPrevented || isEditableTarget(event.target) || isBlocked?.()) return
     const files = clipboardFiles((event as Partial<ClipboardEvent>).clipboardData)
     if (files.length === 0) {
       onNoImage()

@@ -21,7 +21,9 @@ export interface EyedropperOptionsProps {
  * opaque), its four RGBA values, alpha as a percentage and the pixel it came from. The swatch opens
  * the colour picker to adjust it or type another. Nothing here changes the image.
  *
- * Each new reading is announced once (a polite status region keyed by the reading).
+ * Each reading is announced once, a repeated reading of the same pixel included: the polite status
+ * region's message is keyed by the reading's number (ChosenColour.readings), so every reading puts
+ * a new message in the region and no other render does.
  */
 export function EyedropperOptions({ colour, sampledPixel, onChooseColour }: EyedropperOptionsProps) {
   const swatchRef = useRef<HTMLButtonElement>(null)
@@ -73,7 +75,7 @@ export function EyedropperOptions({ colour, sampledPixel, onChooseColour }: Eyed
       </div>
       <div className="visually-hidden" role="status">
         {colour && where && (
-          <span key={`${where}:${formatHex(colour.value)}:${colour.sample?.version.revision}`}>
+          <span key={colour.readings}>
             Colour read from {where}: {describeColour(colour.value)}.
           </span>
         )}

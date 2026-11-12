@@ -65,6 +65,7 @@ export function SelectionOverlayCanvas({ selection, viewport, workspace }: Selec
             viewport,
             viewportSize: workspace.size,
             devicePixelRatio: workspace.devicePixelRatio,
+            deviceSize: workspace.deviceSize,
           })
         : null
     overlay.renderer.render(plan, selection, overlay.ants.pattern())

@@ -71,7 +71,7 @@ export function useWheelInput(
         const pixels = wheelDeltaPixels(event.deltaY, event.deltaMode, workspace.clientHeight)
         if (pixels === 0) return
         zoomFactor *= wheelZoomFactor(pixels)
-        zoomAnchor = clientToViewport({ x: event.clientX, y: event.clientY }, canvas.getBoundingClientRect())
+        zoomAnchor = clientToViewport({ x: event.clientX, y: event.clientY }, canvas.getBoundingClientRect(), window.devicePixelRatio)
       } else {
         const delta = wheelPanDelta(event, { width: workspace.clientWidth, height: workspace.clientHeight })
         if (delta.x === 0 && delta.y === 0) return
@@ -221,7 +221,7 @@ export function usePointerPosition(
       const canvas = canvasRef.current
       if (!canvas) return
       const rect = canvas.getBoundingClientRect()
-      const point = clientToViewport({ x: event.clientX, y: event.clientY }, rect)
+      const point = clientToViewport({ x: event.clientX, y: event.clientY }, rect, window.devicePixelRatio)
       const inside = point.x >= 0 && point.y >= 0 && point.x < rect.width && point.y < rect.height
       onPointerPosition(inside ? point : null)
     }
@@ -270,7 +270,7 @@ export function useCropPointer(
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || !enabled) return
-    const pointAt = (event: PointerEvent) => clientToViewport({ x: event.clientX, y: event.clientY }, canvas.getBoundingClientRect())
+    const pointAt = (event: PointerEvent) => clientToViewport({ x: event.clientX, y: event.clientY }, canvas.getBoundingClientRect(), window.devicePixelRatio)
     const showCursor = (point: Point) => {
       const screen = screenRef.current
       canvas.style.setProperty('--crop-cursor', cropCursor(screen ? hitTestCrop(screen, point) : { kind: 'outside' }))
@@ -301,7 +301,7 @@ export function useCropPointer(
       const canvas = canvasRef.current
       if (!canvas || !enabled || event.button !== 0) return
       canvas.setPointerCapture(event.pointerId)
-      const point = clientToViewport({ x: event.clientX, y: event.clientY }, canvas.getBoundingClientRect())
+      const point = clientToViewport({ x: event.clientX, y: event.clientY }, canvas.getBoundingClientRect(), window.devicePixelRatio)
       onCropPointer({ type: 'start', point })
     },
     [canvasRef, enabled, onCropPointer],

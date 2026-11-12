@@ -4,7 +4,7 @@ import { createSelectionMask } from '../image/selection/selectionMask'
 import { selectAll } from '../image/selection/selectionOperations'
 import { maskBytes } from '../image/selection/testFixtures'
 import { pixelUnderPointer } from './coordinates'
-import { snapToDevicePixels } from './devicePixels'
+import { imageDrawBias, snapToDevicePixels } from './devicePixels'
 import { intersect, planFrame } from './rendering'
 import {
   type BoundaryPattern,
@@ -741,8 +741,11 @@ describe('planSelectionOverlay', () => {
       expect(overlay.backingStore).toEqual(frame.backingStore)
       expect(overlay.scale).toBe(zoom * devicePixelRatio)
       if (frame.image) {
-        expect(overlay.origin.x).toBeCloseTo(frame.image.transform.e, 9)
-        expect(overlay.origin.y).toBeCloseTo(frame.image.transform.f, 9)
+        // The image's corner, on a whole device pixel; the image itself is drawn the bias past it
+        // and the overlay's pixels follow imageIndexAtDevicePixel, which allows for that.
+        expect(overlay.origin).toEqual(frame.checker!.origin)
+        expect(overlay.origin.x).toBeCloseTo(frame.image.transform.e - imageDrawBias(overlay.scale), 9)
+        expect(overlay.origin.y).toBeCloseTo(frame.image.transform.f - imageDrawBias(overlay.scale), 9)
         expect(overlay.scale).toBeCloseTo(frame.image.transform.a, 12)
       }
     }

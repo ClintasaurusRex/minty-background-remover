@@ -48,6 +48,7 @@ export function ImageCanvas({ canvasRef, document, image, viewport, workspace, o
         viewport: viewport ?? { zoom: 1, offset: { x: 0, y: 0 } },
         viewportSize: workspace.size,
         devicePixelRatio: workspace.devicePixelRatio,
+        deviceSize: workspace.deviceSize,
       })
       // The content key says which document revision the image shows, so a new revision is
       // always drawn, whatever image object it comes with.
@@ -75,21 +76,33 @@ export function ImageCanvas({ canvasRef, document, image, viewport, workspace, o
 }
 
 /**
- * Reports the element's CSS size and the device pixel ratio whenever either changes
- * (window resizes, browser zoom, moving to another display). Returns a cleanup function.
+ * Reports the element's CSS size, its size in device pixels as the browser lays it out (its
+ * device-pixel-content-box, where the browser reports it) and the device pixel ratio whenever
+ * any changes (window resizes, browser zoom, moving to another display, and layout above the
+ * canvas moving it to another fractional device pixel position). Returns a cleanup function.
  */
 function observeWorkspace(element: Element, onResize: (workspace: WorkspaceMetrics) => void): () => void {
   let size: Size | null = null
+  let deviceSize: Size | null = null
   const report = () => {
-    if (size) onResize({ size, devicePixelRatio: window.devicePixelRatio })
+    if (size) onResize({ size, devicePixelRatio: window.devicePixelRatio, deviceSize })
   }
 
   const resizeObserver = new ResizeObserver((entries) => {
-    const { width, height } = entries[entries.length - 1].contentRect
+    const entry = entries[entries.length - 1]
+    const { width, height } = entry.contentRect
     size = { width, height }
+    const device = entry.devicePixelContentBoxSize?.[0]
+    deviceSize = device ? { width: device.inlineSize, height: device.blockSize } : null
     report()
   })
-  resizeObserver.observe(element)
+  try {
+    // Fires when the device pixel size changes even where the CSS size does not.
+    resizeObserver.observe(element, { box: 'device-pixel-content-box' })
+  } catch {
+    // Browsers without device-pixel-content-box: the CSS size, rounded (backingStoreSize).
+    resizeObserver.observe(element)
+  }
 
   // A resolution media query matching the current ratio stops matching when it changes.
   let ratioQuery: MediaQueryList | null = null

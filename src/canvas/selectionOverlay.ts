@@ -1,6 +1,6 @@
 import type { Point, Rectangle, SelectionMask, Size, ViewportState } from '../editor/types'
 import { imageIndexAtDevicePixel, imageSpanAtDevicePixel } from './coordinates'
-import { backingStoreSize } from './devicePixels'
+import { backingStoreSize, imageDrawBias } from './devicePixels'
 import { intersect } from './rendering'
 
 /*
@@ -89,6 +89,8 @@ export interface SelectionOverlayInput {
   /** The overlay canvas's size in CSS pixels: the same as the image canvas. */
   readonly viewportSize: Size
   readonly devicePixelRatio: number
+  /** The canvas's content box in device pixels, when known: the same as the image canvas's. */
+  readonly deviceSize?: Size | null
 }
 
 export interface OverlayTile {
@@ -122,8 +124,9 @@ export function planSelectionOverlay({
   viewport,
   viewportSize,
   devicePixelRatio,
+  deviceSize,
 }: SelectionOverlayInput): SelectionOverlayPlan {
-  const backingStore = backingStoreSize(viewportSize, devicePixelRatio)
+  const backingStore = backingStoreSize(viewportSize, devicePixelRatio, deviceSize)
   const scale = viewport.zoom * devicePixelRatio
   const lineWidth = boundaryLineWidth(devicePixelRatio)
   // Already whole numbers for a snapped viewport; rounding removes floating-point noise.
@@ -784,11 +787,12 @@ function fillBitsZoomedIn(
 
   // The image column shown in each device column. Columns increase with x, so those inside the
   // selection's bounds form one run, first ..= last.
+  const bias = imageDrawBias(scale)
   const columns = scratch.ints('columns', width)
   let first = width
   let last = -1
   for (let c = 0; c < width; c++) {
-    const x = imageIndexAtDevicePixel(x0 + c, scale)
+    const x = imageIndexAtDevicePixel(x0 + c, scale, bias)
     columns[c] = x
     if (x >= bounds.x && x < boundsRight) {
       if (first > c) first = c
@@ -797,7 +801,7 @@ function fillBitsZoomedIn(
   }
 
   for (let r = 0; r < height; r++) {
-    const y = imageIndexAtDevicePixel(y0 + r, scale)
+    const y = imageIndexAtDevicePixel(y0 + r, scale, bias)
     if (y < bounds.y || y >= boundsBottom || first > last) {
       rowKeys[r] = EMPTY_ROW
       continue

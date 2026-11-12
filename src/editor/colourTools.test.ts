@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { imageIndexAtDevicePixel } from '../canvas/coordinates'
+import { planFrame } from '../canvas/rendering'
 import { EyedropperOptions } from '../components/Toolbar/EyedropperOptions'
 import { type Rgba, formatHex } from '../image/colour/colour'
 import { createPixelBuffer } from '../image/pixelBuffer'
@@ -79,11 +79,15 @@ describe('Eyedropper', () => {
         const state = reduce(base, { type: 'zoom-actual-size' }, { type: 'zoom-scaled', anchor: { x: 0, y: 0 }, factor })
         const v = displayViewport(state)!
         const scale = v.zoom * devicePixelRatio
+        // What the canvas draws, modelled from the transform the renderer is given (not from the
+        // app's mapping): the image pixel under each device pixel's centre (canvas/deviceSampling.test.ts).
+        const { e, f, a } = planFrame({ imageSize: pixels, viewport: v, viewportSize: workspace.size, devicePixelRatio }).image!.transform
+        const corner = { x: Math.round(v.offset.x * devicePixelRatio), y: Math.round(v.offset.y * devicePixelRatio) }
         // Every device pixel across the image's first columns and rows, at a point inside it.
         for (let D = 0; D < Math.min(60, 20 * scale); D++) {
           const point = { x: v.offset.x + (D + 0.3) / devicePixelRatio, y: v.offset.y + (D + 0.7) / devicePixelRatio }
           const action = eyedropperClick(state, point)
-          const expected = { x: imageIndexAtDevicePixel(D, scale), y: imageIndexAtDevicePixel(D, scale) }
+          const expected = { x: Math.floor((corner.x + D + 0.5 - e) / a), y: Math.floor((corner.y + D + 0.5 - f) / a) }
           // A device pixel straddling the image's bottom edge shows what lies outside it.
           if (expected.y >= 20) {
             expect(action).toBeNull()
@@ -134,10 +138,41 @@ describe('Eyedropper', () => {
   it('takes a colour from the picker, with no location, and refuses invalid ones', () => {
     const state = opened(image(), reduce(initialEditorState, { type: 'workspace-resized', workspace: WORKSPACE }))
     const chosen = reduce(state, { type: 'colour-chosen', colour: { r: 1, g: 2, b: 3, a: 4 } })
-    expect(chosen.colour).toEqual({ value: { r: 1, g: 2, b: 3, a: 4 }, sample: null })
+    expect(chosen.colour).toEqual({ value: { r: 1, g: 2, b: 3, a: 4 }, sample: null, readings: 0 })
     expect(sampledPixel(chosen)).toBeNull()
     expect(chosen.document).toBe(state.document)
     expect(reduce(chosen, { type: 'colour-chosen', colour: { r: -1, g: 2, b: 3, a: 4 } })).toBe(chosen)
+  })
+})
+
+describe('Eyedropper readings (each one announced, Phase 4 audit L3)', () => {
+  it('numbers every reading, the same pixel read again included', () => {
+    let state = eyedropper(opened(image()))
+    const numbers = []
+    for (const [x, y] of [[4, 2], [4, 2], [4, 2], [9, 9], [4, 2]]) {
+      state = accepted(state, eyedropperClick(state, inside(state, x, y)))
+      numbers.push(state.colour!.readings)
+    }
+    expect(numbers).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('changes the number for nothing but a reading', () => {
+    const state = eyedropper(opened(image()))
+    const read = accepted(state, eyedropperClick(state, inside(state, 4, 2)))
+    const before = read.colour!.readings
+    const after = reduce(
+      read,
+      { type: 'zoom-scaled', anchor: { x: 10, y: 10 }, factor: 2 },
+      { type: 'wheel-panned', delta: { x: 5, y: 3 } },
+      { type: 'tool-selected', tool: 'magic-wand' },
+      { type: 'tool-selected', tool: 'eyedropper' },
+      { type: 'workspace-resized', workspace: { size: { width: 500, height: 400 }, devicePixelRatio: 1 } },
+    )
+    expect(after.colour).toBe(read.colour)
+    // The picker's Apply keeps the count; the next reading continues it.
+    const chosen = reduce(after, { type: 'colour-chosen', colour: { r: 1, g: 2, b: 3, a: 4 } })
+    expect(chosen.colour!.readings).toBe(before)
+    expect(accepted(chosen, eyedropperClick(chosen, inside(chosen, 4, 2))).colour!.readings).toBe(before + 1)
   })
 })
 
@@ -217,7 +252,7 @@ describe('EyedropperOptions markup', () => {
 
   it('shows hex, RGBA, alpha and where it was read, and announces the reading', () => {
     const value = { r: 26, g: 43, b: 60, a: 128 }
-    const markup = render({ colour: { value, sample: { version: { documentId: 1, revision: 0 }, pixel: { x: 4, y: 2 } } }, sampledPixel: { x: 4, y: 2 }, onChooseColour: noop })
+    const markup = render({ colour: { value, sample: { version: { documentId: 1, revision: 0 }, pixel: { x: 4, y: 2 } }, readings: 1 }, sampledPixel: { x: 4, y: 2 }, onChooseColour: noop })
     expect(markup).toContain(`>${formatHex(value)}</output>`)
     expect(markup).toContain('>RGBA 26, 43, 60, 128</output>')
     expect(markup).toContain('>Alpha 50%</output>')
@@ -227,7 +262,7 @@ describe('EyedropperOptions markup', () => {
   })
 
   it('shows a picked colour without a location or an announcement', () => {
-    const markup = render({ colour: { value: { r: 255, g: 0, b: 0, a: 255 }, sample: null }, sampledPixel: null, onChooseColour: noop })
+    const markup = render({ colour: { value: { r: 255, g: 0, b: 0, a: 255 }, sample: null, readings: 0 }, sampledPixel: null, onChooseColour: noop })
     expect(markup).toContain('#FF0000')
     expect(markup).not.toContain('from ')
     expect(markup).toContain('role="status"></div>')

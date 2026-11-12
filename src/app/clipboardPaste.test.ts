@@ -45,12 +45,13 @@ describe('installPasteHandler', () => {
     return event
   }
 
-  function setUp() {
+  function setUp(isBlocked?: () => boolean) {
     const target = new EventTarget()
     const calls: string[] = []
     const remove = installPasteHandler(target, {
       onFiles: (files) => calls.push(`files:${files.map((file) => file.name).join(',')}`),
       onNoImage: () => calls.push('no-image'),
+      isBlocked,
     })
     return { target, calls, remove }
   }
@@ -95,5 +96,37 @@ describe('installPasteHandler', () => {
     remove()
     paste(target, { items: [fileItem(png)] })
     expect(calls).toEqual([])
+  })
+
+  describe('while blocked (a dialog such as the colour picker is open, Phase 4 audit M3)', () => {
+    it('imports nothing and shows no message, wherever the paste goes', () => {
+      let blocked = true
+      const { target, calls } = setUp(() => blocked)
+      for (const eventTarget of [undefined, element(false)]) {
+        const event = paste(target, { items: [fileItem(png)] }, eventTarget)
+        // Nothing is taken: the browser's default paste (none, outside a text field) is left alone.
+        expect(event.defaultPrevented).toBe(false)
+      }
+      paste(target, { items: [stringItem('text/plain')] })
+      expect(calls).toEqual([])
+      // Closed again: pasting imports as before.
+      blocked = false
+      paste(target, { items: [fileItem(png)] })
+      expect(calls).toEqual(['files:image.png'])
+    })
+
+    it('leaves a paste into a text field (the picker\'s hex field) to the browser', () => {
+      const { target, calls } = setUp(() => true)
+      const event = paste(target, { items: [stringItem('text/plain')] }, element(true))
+      expect(event.defaultPrevented).toBe(false)
+      expect(calls).toEqual([])
+    })
+
+    it('asks at the time of each paste', () => {
+      const answers = [false, true, false]
+      const { target, calls } = setUp(() => answers.shift() ?? false)
+      for (let i = 0; i < 3; i++) paste(target, { items: [fileItem(png)] })
+      expect(calls).toEqual(['files:image.png', 'files:image.png'])
+    })
   })
 })

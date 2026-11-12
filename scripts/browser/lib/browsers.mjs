@@ -119,7 +119,7 @@ async function closeBrowser(child, profile, socket, goodbye) {
  * Headless Chrome. `gpu` adds --enable-gpu. The returned object has `pid`, the browser process,
  * so its own child processes can be found (gpu-crash.mjs).
  */
-export async function launchChrome({ dpr = 1, width = 1400, height = 900, reducedMotion = false, gpu = false } = {}) {
+export async function launchChrome({ dpr = 1, width = 1400, height = 900, reducedMotion = false, gpu = false, forcedColors = false } = {}) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'minty-chrome-'))
   const { child, failed } = start(
     process.env.CHROME ?? 'google-chrome',
@@ -150,10 +150,15 @@ export async function launchChrome({ dpr = 1, width = 1400, height = 900, reduce
     await send('Page.enable')
     await send('Runtime.enable')
     await send('Emulation.setEmulatedMedia', {
-      features: [{ name: 'prefers-reduced-motion', value: reducedMotion ? 'reduce' : 'no-preference' }],
+      features: [
+        { name: 'prefers-reduced-motion', value: reducedMotion ? 'reduce' : 'no-preference' },
+        // Chrome's forced colours emulation (as DevTools' Rendering panel): the media query and the
+        // forced system colours themselves.
+        ...(forcedColors ? [{ name: 'forced-colors', value: 'active' }] : []),
+      ],
     })
     return {
-      name: `Chrome DPR ${dpr}${gpu ? ' GPU' : ''}${reducedMotion ? ' reduced motion' : ''}`,
+      name: `Chrome DPR ${dpr}${gpu ? ' GPU' : ''}${reducedMotion ? ' reduced motion' : ''}${forcedColors ? ' forced colours' : ''}`,
       pid: child.pid,
       async open(url, ready = 'true', timeout = 20000) {
         await send('Page.navigate', { url })
@@ -226,6 +231,18 @@ export async function launchChrome({ dpr = 1, width = 1400, height = 900, reduce
         const info = keyInfo(name)
         await send('Input.dispatchKeyEvent', { type: 'keyUp', key: info.key, code: info.code, windowsVirtualKeyCode: info.keyCode, nativeVirtualKeyCode: info.keyCode })
       },
+      /**
+       * Real wheel input at (x, y) CSS px: deltas in CSS pixels (fractions allowed), with Control
+       * and / or Shift held as modifiers, as a mouse wheel or trackpad sends it.
+       */
+      async wheel(x, y, { deltaX = 0, deltaY = 0, ctrl = false, shift = false } = {}) {
+        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
+        await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX, deltaY, modifiers: (ctrl ? 2 : 0) | (shift ? 8 : 0) })
+      },
+      /** The page as composited on screen: a PNG of the viewport in device pixels, base64. */
+      async screenshot() {
+        return (await send('Page.captureScreenshot', { format: 'png' })).data
+      },
       /** Runs a Chrome DevTools Protocol command on the page. */
       cdp: (method, params = {}) => send(method, params),
       close: () => closeBrowser(child, profile, socket, () => send('Browser.close')),
@@ -238,13 +255,15 @@ export async function launchChrome({ dpr = 1, width = 1400, height = 900, reduce
 }
 
 /** Headless Firefox over WebDriver BiDi. */
-export async function launchFirefox({ dpr = 1, width = 1400, height = 900, reducedMotion = false } = {}) {
+export async function launchFirefox({ dpr = 1, width = 1400, height = 900, reducedMotion = false, forcedColors = false } = {}) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'minty-firefox-'))
   fs.writeFileSync(
     path.join(profile, 'user.js'),
     [
       `user_pref("layout.css.devPixelsPerPx", "${dpr}");`,
       `user_pref("ui.prefersReducedMotion", ${reducedMotion ? 1 : 0});`,
+      // Firefox's "override the colours specified by the page: always", which is forced colours mode.
+      ...(forcedColors ? ['user_pref("browser.display.document_color_use", 2);'] : []),
       'user_pref("dom.max_script_run_time", 0);',
       'user_pref("browser.shell.checkDefaultBrowser", false);',
       'user_pref("datareporting.policy.dataSubmissionEnabled", false);',
@@ -274,7 +293,7 @@ export async function launchFirefox({ dpr = 1, width = 1400, height = 900, reduc
     const context = (await send('browsingContext.getTree', {})).contexts[0].context
     const pointer = (actions) => send('input.performActions', { context, actions: [{ type: 'pointer', id: 'mouse', parameters: { pointerType: 'mouse' }, actions }] })
     return {
-      name: `Firefox DPR ${dpr}${reducedMotion ? ' reduced motion' : ''}`,
+      name: `Firefox DPR ${dpr}${reducedMotion ? ' reduced motion' : ''}${forcedColors ? ' forced colours' : ''}`,
       pid: child.pid,
       async open(address, ready = 'true', timeout = 20000) {
         await send('browsingContext.navigate', { context, url: address, wait: 'complete' })
@@ -344,6 +363,29 @@ export async function launchFirefox({ dpr = 1, width = 1400, height = 900, reduc
       },
       async keyUp(name) {
         await send('input.performActions', { context, actions: [{ type: 'key', id: 'keyboard', actions: [{ type: 'keyUp', value: keyInfo(name).webdriver }] }] })
+      },
+      /**
+       * Real wheel input at (x, y) CSS px, with Control and / or Shift held while it scrolls.
+       * WebDriver wheel positions and deltas are whole numbers (CSS pixels), so they are rounded.
+       */
+      async wheel(x, y, { deltaX = 0, deltaY = 0, ctrl = false, shift = false } = {}) {
+        const held = [ctrl && KEYS.Control, shift && KEYS.Shift].filter(Boolean)
+        await send('input.performActions', {
+          context,
+          actions: [
+            // Tick by tick: modifiers down, the scroll, modifiers up.
+            { type: 'key', id: 'keyboard', actions: [...held.map((m) => ({ type: 'keyDown', value: m.webdriver })), { type: 'pause' }, ...held.map((m) => ({ type: 'keyUp', value: m.webdriver }))] },
+            {
+              type: 'wheel',
+              id: 'wheel',
+              actions: [...held.map(() => ({ type: 'pause' })), { type: 'scroll', x: Math.round(x), y: Math.round(y), deltaX: Math.round(deltaX), deltaY: Math.round(deltaY), origin: 'viewport' }],
+            },
+          ],
+        })
+      },
+      /** The page as composited on screen: a PNG of the viewport in device pixels, base64. */
+      async screenshot() {
+        return (await send('browsingContext.captureScreenshot', { context, origin: 'viewport' })).data
       },
       /** Releases every key and button still held. */
       release: () => send('input.releaseActions', { context }),

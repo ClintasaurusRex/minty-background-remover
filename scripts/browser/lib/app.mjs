@@ -131,6 +131,123 @@ export const PAGE_HELPERS = `(() => {
 
   let snapshot = null
 
+  /**
+   * compareImage at a fractional device scale (zoom × device pixel ratio), where device pixels per
+   * image pixel alternate between floor(S) and ceil(S). Which image column each device column shows
+   * (and row each device row) is read from the canvas itself, not computed with the app's rule:
+   * a device column shows image column x only if every one of its pixels is image pixel x of some
+   * row (composited over the checkerboard), and likewise for rows. The result must be a proper
+   * nearest-neighbour enlargement: columns in order from 0 to width − 1 with none skipped, each
+   * shown for floor(S) or ceil(S) device pixels (when S ≥ 1), and then every pixel exact (partial
+   * alpha within 2 levels). Device pixels outside the image show nothing (alpha 0).
+   */
+  const compareFractional = () => {
+    const { s, S, e, f } = placement()
+    const canvas = imageCanvas(), dpr = devicePixelRatio
+    const { width, height, data } = s.document.pixels
+    if (S < 1) return { skipped: 'zoomed out (smoothed), device scale ' + S }
+    const shown = read(canvas)
+    const square = Math.max(1, Math.round(8 * dpr))
+    const background = (X, Y) => {
+      const u = (((X - e) % (2 * square)) + 2 * square) % (2 * square), w = (((Y - f) % (2 * square)) + 2 * square) % (2 * square)
+      return (u < square) === (w < square) ? 0x2c : 0x3a
+    }
+    const error = (X, Y, ix, iy) => {
+      const i = (iy * width + ix) * 4, j = (Y * canvas.width + X) * 4, a = data[i + 3], bg = background(X, Y)
+      let worst = shown[j + 3] === 255 ? 0 : 255
+      for (let k = 0; k < 3; k++) worst = Math.max(worst, Math.abs(shown[j + k] - (data[i + k] * a + bg * (255 - a)) / 255))
+      return { worst, limit: a === 0 || a === 255 ? 0.5 : 2 }
+    }
+    const matches = (X, Y, ix, iy) => ix >= 0 && iy >= 0 && ix < width && iy < height && (({ worst, limit }) => worst <= limit)(error(X, Y, ix, iy))
+    // The device pixels showing anything: the image's area on the canvas (outside it, alpha 0).
+    let X0 = Infinity, X1 = -1, Y0 = Infinity, Y1 = -1
+    for (let Y = 0; Y < canvas.height; Y++) for (let X = 0; X < canvas.width; X++) {
+      if (shown[(Y * canvas.width + X) * 4 + 3] !== 0) { X0 = Math.min(X0, X); X1 = Math.max(X1, X); Y0 = Math.min(Y0, Y); Y1 = Math.max(Y1, Y) }
+    }
+    if (X1 < 0) return { skipped: 'nothing visible' }
+    // Candidates near a rough estimate only (the search window, not the answer).
+    const near = (D, origin) => { const c = Math.floor((D - origin) / S); return [c - 1, c, c + 1] }
+    // For each device column (row): the image columns (rows) whose pixels it could be showing.
+    const optionsFor = (count, origin, lineCount, lineStart, pixelAt) => {
+      const all = []
+      for (let D = 0; D < count; D++) {
+        let options = near(D, origin)
+        for (let L = 0; L < lineCount && options.length; L++) options = options.filter((index) => pixelAt(D, lineStart + L, index))
+        all.push(options)
+      }
+      return all
+    }
+    // A mapping that is a proper nearest-neighbour enlargement and agrees with every device line's
+    // options: lines in order from 0 to size − 1 (unless cut by the canvas edge), none skipped,
+    // each shown for floor(S) or ceil(S) device lines. Found by search, because flat areas make
+    // neighbouring lines indistinguishable: any such mapping shows exactly the same pixels.
+    const lo = Math.floor(S), hi = Math.ceil(S)
+    // States are [line, run length, still in the first run]; the first run may be cut by the canvas.
+    const solve = (options, size, clipped) => {
+      const count = options.length
+      const key = (v, run, first) => v + ',' + run + ',' + first
+      const reach = [new Map()]
+      for (const v of options[0] ?? []) if (clipped.start || v === 0) reach[0].set(key(v, 1, clipped.start ? 1 : 0), null)
+      for (let D = 1; D < count; D++) {
+        const next = new Map()
+        for (const k of reach[D - 1].keys()) {
+          const [v, run, first] = k.split(',').map(Number)
+          if (options[D].includes(v) && run < hi && !next.has(key(v, run + 1, first))) next.set(key(v, run + 1, first), k)
+          if (options[D].includes(v + 1) && (run >= lo || first) && !next.has(key(v + 1, 1, 0))) next.set(key(v + 1, 1, 0), k)
+        }
+        if (next.size === 0) return { problem: 'no nearest-neighbour enlargement matches device line ' + D }
+        reach.push(next)
+      }
+      const end = [...reach[count - 1].keys()].find((k) => {
+        const [v, run, first] = k.split(',').map(Number)
+        return clipped.end || (v === size - 1 && (run >= lo || first))
+      })
+      if (end === undefined) return { problem: 'no enlargement ends at the last line' }
+      const map = new Array(count)
+      for (let D = count - 1, k = end; D >= 0; D--) {
+        map[D] = Number(k.split(',')[0])
+        k = reach[D].get(k)
+      }
+      return { map }
+    }
+    const columnOptions = optionsFor(X1 - X0 + 1, e - X0, Y1 - Y0 + 1, Y0, (D, Y, ix) => near(Y, f).some((iy) => matches(X0 + D, Y, ix, iy)))
+    const rowOptions = optionsFor(Y1 - Y0 + 1, f - Y0, X1 - X0 + 1, X0, (D, X, iy) => near(X, e).some((ix) => matches(X, Y0 + D, ix, iy)))
+    const columnSolution = solve(columnOptions, width, { start: X0 === 0 && e < 0, end: X1 === canvas.width - 1 })
+    const rowSolution = solve(rowOptions, height, { start: Y0 === 0 && f < 0, end: Y1 === canvas.height - 1 })
+    let columnProblem = columnSolution.problem ?? null, rowProblem = rowSolution.problem ?? null
+    let columns = columnSolution.map ?? [], rows = rowSolution.map ?? []
+    // The options above allow any nearby row for each pixel (and column for rows); settle the two
+    // mappings against each other: columns that match at the rows found, then rows at those columns.
+    for (let round = 0; round < 3 && !columnProblem && !rowProblem; round++) {
+      const strictColumns = solve(optionsFor(X1 - X0 + 1, e - X0, Y1 - Y0 + 1, Y0, (D, Y, ix) => matches(X0 + D, Y, ix, rows[Y - Y0])), width, { start: X0 === 0 && e < 0, end: X1 === canvas.width - 1 })
+      if (strictColumns.problem) { columnProblem = strictColumns.problem; break }
+      const strictRows = solve(optionsFor(Y1 - Y0 + 1, f - Y0, X1 - X0 + 1, X0, (D, X, iy) => matches(X, Y0 + D, strictColumns.map[X - X0], iy)), height, { start: Y0 === 0 && f < 0, end: Y1 === canvas.height - 1 })
+      if (strictRows.problem) { rowProblem = strictRows.problem; break }
+      const settled = strictColumns.map.join() === columns.join() && strictRows.map.join() === rows.join()
+      columns = strictColumns.map
+      rows = strictRows.map
+      if (settled) break
+    }
+    const n = { opaque: 0, transparent: 0, partial: 0 }, wrong = { opaque: 0, transparent: 0, partial: 0 }
+    let first = null, maxPartial = 0
+    if (!columnProblem && !rowProblem) {
+      for (let Y = Y0; Y <= Y1; Y++) for (let X = X0; X <= X1; X++) {
+        const ix = columns[X - X0], iy = rows[Y - Y0], a = data[(iy * width + ix) * 4 + 3]
+        const kind = a === 255 ? 'opaque' : a === 0 ? 'transparent' : 'partial'
+        n[kind]++
+        const { worst, limit } = error(X, Y, ix, iy)
+        if (kind === 'partial') maxPartial = Math.max(maxPartial, worst)
+        if (worst > limit) { wrong[kind]++; first ??= { X, Y, ix, iy } }
+      }
+    }
+    return {
+      S, fractional: true, n, wrong, columnProblem, rowProblem,
+      failures: wrong.opaque + wrong.transparent + wrong.partial + (columnProblem ? 1 : 0) + (rowProblem ? 1 : 0),
+      shownLines: { columns: new Set(columns).size, rows: new Set(rows).size }, devicePixels: (X1 - X0 + 1) * (Y1 - Y0 + 1),
+      maxPartial: +maxPartial.toFixed(2), first,
+    }
+  }
+
   window.__minty = {
     state: () => find().state,
     dispatch: (action) => find().dispatch(action),
@@ -156,7 +273,7 @@ export const PAGE_HELPERS = `(() => {
      */
     compareImage() {
       const { s, S, e, f, whole } = placement()
-      if (!whole) return { skipped: 'device scale ' + S }
+      if (!whole) return compareFractional()
       const canvas = imageCanvas(), dpr = devicePixelRatio
       const { width, height, data } = s.document.pixels
       const x0 = Math.max(0, e), y0 = Math.max(0, f)
@@ -288,17 +405,30 @@ export const PAGE_HELPERS = `(() => {
 /** Waits until the page has drawn two more frames. */
 export const settle = (browser) => browser.eval('new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 20))))')
 
-/** PASS/FAIL lines as checks run, and the exit code. */
+/**
+ * PASS, FAIL and SKIP lines as checks run, and the exit code. A skipped check is one the harness
+ * cannot perform in this configuration (say why): it is neither a pass nor a failure, it is
+ * counted and listed separately, and it does not change the exit code, which is 1 exactly when a
+ * check failed.
+ */
 export function createReport() {
   let failures = 0
+  let passes = 0
+  let skips = 0
   return {
     check(name, ok, detail = '') {
       console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` (${detail})` : ''}`)
-      if (!ok) failures++
+      if (ok) passes++
+      else failures++
+    },
+    skip(name, reason) {
+      console.log(`SKIP ${name} (${reason})`)
+      skips++
     },
     note: (text) => console.log(text),
     finish() {
-      console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed')
+      const counts = `${passes} passed, ${failures} failed${skips ? `, ${skips} skipped (not verified)` : ''}`
+      console.log(failures ? `\n${failures} check(s) failed (${counts})` : skips ? `\nAll supported checks passed (${counts})` : `\nAll checks passed (${counts})`)
       process.exitCode = failures ? 1 : 0
     },
   }

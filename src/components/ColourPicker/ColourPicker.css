@@ -9,6 +9,12 @@
   color: var(--color-text);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   font-size: var(--font-size-sm);
+  /* Never taller than the window (its 8 px placement margins included): in a short window the
+     saturation / brightness area gives up height first, so every control, Cancel and Apply
+     included, stays on screen; only an extremely short window needs scrolling. */
+  max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
 }
 
 .colour-picker[open] {
@@ -29,7 +35,9 @@
 /* Saturation grows to the right (white to the hue), brightness upwards (black at the bottom). */
 .colour-picker__area {
   position: relative;
+  flex: 0 1 140px;
   height: 140px;
+  min-height: 48px;
   border-radius: var(--radius-sm);
   background-image:
     linear-gradient(to top, #000000, transparent),
@@ -160,5 +168,37 @@
 @media (prefers-reduced-motion: reduce) {
   .colour-picker__thumb {
     transition: none;
+  }
+}
+
+/*
+ * Forced colours (Windows contrast themes, Firefox's "override colours"): the colours shown are the
+ * information here, so only the colour-carrying surfaces keep their own colours (the saturation /
+ * brightness area, the hue and alpha tracks, the Current and New swatches). Everything around them,
+ * the dialog, text, labels, the hex field and the buttons, keeps the system colours. The kept
+ * surfaces get a system-colour edge, and their focus ring uses the system highlight, so both stay
+ * visible in any contrast theme. (Phase 4 audit, L2.)
+ */
+@media (forced-colors: active) {
+  .colour-picker__area,
+  .colour-picker__slider,
+  .colour-picker__alpha-track,
+  .colour-picker__swatch {
+    forced-color-adjust: none;
+  }
+
+  .colour-picker__area,
+  .colour-picker__swatch {
+    border: 1px solid CanvasText;
+  }
+
+  .colour-picker__slider {
+    outline: 1px solid CanvasText;
+  }
+
+  .colour-picker__area:focus-visible,
+  .colour-picker__slider:focus-visible {
+    outline: var(--focus-ring-width) solid Highlight;
+    outline-offset: var(--focus-ring-offset);
   }
 }

@@ -26,17 +26,29 @@ function viewport(zoom: number, offset: Point): ViewportState {
 
 describe('clientToViewport', () => {
   it('subtracts the element position, keeping fractional values', () => {
-    expect(clientToViewport({ x: 150.5, y: 220.25 }, { left: 100, top: 120.25 })).toEqual({
+    expect(clientToViewport({ x: 150.5, y: 220.25 }, { left: 100, top: 120.25 }, 4)).toEqual({
       x: 50.5,
       y: 100,
     })
   })
 
   it('returns negative values for points above or left of the element', () => {
-    expect(clientToViewport({ x: 90, y: 100 }, { left: 100, top: 120 })).toEqual({
+    expect(clientToViewport({ x: 90, y: 100 }, { left: 100, top: 120 }, 1)).toEqual({
       x: -10,
       y: -20,
     })
+  })
+
+  it('measures from the device pixel the browser puts the element on, not its fractional layout position', () => {
+    // Measured (Phase 4 zoom follow-up): Chrome at 1.01 with the Crop tool's options row lays the
+    // canvas out at top 138.9232635498047 CSS px = device 140.3125, and draws it from device row
+    // 140; Chrome at 1.1 lays it out at device 152.547 and draws it from row 153.
+    const at = (clientY: number, top: number, ratio: number) => clientToViewport({ x: 0, y: clientY }, { left: 0, top }, ratio).y * ratio
+    // A pointer at the top of device row 141 is in the canvas's device row 1, not 0.6875.
+    expect(at(141 / 1.01, 138.9232635498047, 1.01)).toBeCloseTo(1, 9)
+    expect(at(154 / 1.100000023841858, 152.54687067696977 / 1.100000023841858, 1.100000023841858)).toBeCloseTo(1, 9)
+    // Whole device pixel positions are unchanged.
+    expect(at(300, 176, 1.25)).toBeCloseTo((300 - 176) * 1.25, 9)
   })
 })
 

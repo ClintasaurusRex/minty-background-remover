@@ -27,9 +27,14 @@ const decoder = createBrowserDecoder()
  * the import starts), the user is asked to confirm (P3-D12): `question` is the open question,
  * answered with `answerQuestion`. Only one is asked at a time. While it is open, Ctrl+O and
  * paste do nothing and other dropped images are not opened; `isConfirming()` lets other
- * shortcuts do the same.
+ * shortcuts do the same. The same holds while `isModalOpen()` (the colour picker is open, Phase 4
+ * audit M3): nothing is imported behind it, whatever has focus.
  */
-export function useImageImport(dispatch: Dispatch<EditorAction>, hasUnexportedEdits: () => boolean) {
+export function useImageImport(
+  dispatch: Dispatch<EditorAction>,
+  hasUnexportedEdits: () => boolean,
+  isModalOpen: () => boolean = () => false,
+) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [confirmation] = useState(createReplaceConfirmation)
   useLayoutEffect(() => confirmation.setNeeded(hasUnexportedEdits), [confirmation, hasUnexportedEdits])
@@ -59,9 +64,12 @@ export function useImageImport(dispatch: Dispatch<EditorAction>, hasUnexportedEd
     }),
   )
 
+  // No import starts behind a dialog.
+  const importBlocked = useCallback(() => isConfirming() || isModalOpen(), [isConfirming, isModalOpen])
+
   const openFilePicker = useCallback(() => {
-    if (!isConfirming()) inputRef.current?.click()
-  }, [isConfirming])
+    if (!importBlocked()) inputRef.current?.click()
+  }, [importBlocked])
 
   const handleFileChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
@@ -74,21 +82,21 @@ export function useImageImport(dispatch: Dispatch<EditorAction>, hasUnexportedEd
   )
 
   const openDroppedFiles = useCallback(
-    (files: readonly File[], skippedCount: number) => void sources.openDroppedFiles(files, skippedCount),
-    [sources],
+    (files: readonly File[], skippedCount: number) => {
+      // While the replace confirmation is open, confirmReplace already refuses other drops.
+      if (!isModalOpen()) void sources.openDroppedFiles(files, skippedCount)
+    },
+    [sources, isModalOpen],
   )
 
   useEffect(
     () =>
       installPasteHandler(document, {
-        onFiles: (files) => {
-          if (!isConfirming()) void sources.openPastedImages(files)
-        },
-        onNoImage: () => {
-          if (!isConfirming()) void sources.openPastedImages([])
-        },
+        onFiles: (files) => void sources.openPastedImages(files),
+        onNoImage: () => void sources.openPastedImages([]),
+        isBlocked: importBlocked,
       }),
-    [sources, isConfirming],
+    [sources, importBlocked],
   )
 
   useEffect(() => {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ViewportState } from '../editor/types'
-import { snapToDevicePixels } from './devicePixels'
+import { imageDrawBias, snapToDevicePixels } from './devicePixels'
 import { type DisplayImage, createDisplayImageOwner, displayContentKey, releaseDisplayImage } from './displayImage'
 import { type FramePlan, planFrame } from './rendering'
 import { type DisplayContent, createWorkspaceRenderer } from './workspaceRenderer'
@@ -249,6 +249,7 @@ describe('createWorkspaceRenderer', () => {
       canvas.fire('contextrestored')
       expect(context.log.filter(([name]) => name === 'drawImage').map(([, image]) => image)).toEqual([second])
       // Placed where the latest frame puts it.
+      // (Scale 1, a whole number: drawn on its corner; imageDrawBias, devicePixels.ts.)
       expect(imageTransforms(context)).toEqual([[1, 0, 0, 1, 320, 100]])
     })
 
@@ -334,7 +335,7 @@ describe('createWorkspaceRenderer', () => {
   })
 
   describe('device pixel alignment', () => {
-    it('draws image pixel edges and checkerboard squares on whole device pixels, however the frame is drawn', () => {
+    it('draws image pixel edges (the bias past them) and checkerboard squares on whole device pixels, however the frame is drawn', () => {
       for (const devicePixelRatio of [1, 1.25, 1.5, 2, 3]) {
         for (const zoom of [0.25, 1, 2, 8]) {
           const { renderer, context, canvas } = setup()
@@ -354,7 +355,8 @@ describe('createWorkspaceRenderer', () => {
           expect(transforms[2]).toEqual(transforms[0])
           for (const [a, b, c, d, e, f] of transforms) {
             expect([a, b, c, d]).toEqual([zoom * devicePixelRatio, 0, 0, zoom * devicePixelRatio])
-            expect(Number.isInteger(e) && Number.isInteger(f)).toBe(true)
+            const bias = imageDrawBias(a as number)
+            expect(Number.isInteger((e as number) - bias) && Number.isInteger((f as number) - bias)).toBe(true)
           }
           for (const [, , sx, sy, sw, sh, dx, dy, dw, dh, smoothing] of draws) {
             expect([sx, sy, sw, sh].every(Number.isInteger)).toBe(true)

@@ -1,5 +1,6 @@
 import type { Point, Rectangle, Size, ViewportState } from '../editor/types'
 import type { CropHandle } from '../image/crop/cropRectangle'
+import { devicePixelBoundary, imageCornerDevicePixel } from './coordinates'
 
 /*
  * Where the crop rectangle appears in the workspace, and what a pointer press there grabs
@@ -7,12 +8,14 @@ import type { CropHandle } from '../image/crop/cropRectangle'
  * pixel ratio is used only to put the rectangle's edges exactly where the image canvas draws the
  * corresponding pixel boundaries.
  *
- * The image canvas draws each device pixel in the colour of the image pixel at its centre
- * (coordinates.ts, imageIndexAtDevicePixel), and the display viewport puts the image's corner on a
- * device pixel edge. The boundary in front of image column x is therefore drawn at device pixel
- * round(x × zoom × ratio) from that corner (a centre exactly on the boundary shows the left or
- * upper pixel, so a half rounds up). cropRectOnScreen puts the overlay's edges there, so the
- * darkened area, the outline and the image's pixels line up exactly at every zoom and ratio.
+ * The image canvas draws each device pixel in the colour of the image pixel imageIndexAtDevicePixel
+ * gives (coordinates.ts; the display viewport's scale is a grid scale and the renderer draws with
+ * imageDrawBias, so the browser has no tie to break; devicePixels.ts), and the display viewport
+ * puts the image's corner on a device pixel edge. The boundary in front of image column x is
+ * therefore at the first device pixel showing column x or later (devicePixelBoundary).
+ * cropRectOnScreen puts the overlay's edges there, so the darkened area, the outline and the
+ * image's pixels line up exactly at every zoom and ratio, fractional ones and arbitrary wheel-zoom
+ * levels included (Phase 4 audit, M1, and the arbitrary-zoom regression of 2026-11-11).
  */
 
 /** Half the size of a drawn handle square, in CSS pixels. */
@@ -27,7 +30,8 @@ export const CROP_GRAB_DISTANCE = 8
 
 /** The pixel boundary in front of image coordinate `edge`, in CSS pixels along one axis. */
 function screenEdge(offset: number, edge: number, zoom: number, devicePixelRatio: number): number {
-  return (Math.round(offset * devicePixelRatio) + Math.round(edge * zoom * devicePixelRatio)) / devicePixelRatio
+  const corner = imageCornerDevicePixel(offset, devicePixelRatio)
+  return (corner + devicePixelBoundary(edge, zoom * devicePixelRatio)) / devicePixelRatio
 }
 
 /**

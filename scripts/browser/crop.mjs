@@ -1,7 +1,7 @@
 // Manual Crop (Phase 4) in headless Chrome and Firefox.
 //
 //   npm run build
-//   node scripts/browser/crop.mjs [--browser chrome|firefox|all] [--dpr 1,2] [--no-perf] [--no-stress]
+//   node scripts/browser/crop.mjs [--browser chrome|firefox|all] [--dpr 1,1.25,1.5,2,3] [--no-perf] [--no-stress]
 //
 // Set APP_URL to test a running server instead (npm run dev runs under React Strict Mode).
 //
@@ -11,9 +11,13 @@
 // - Drawing, moving and resizing the rectangle with the mouse at 400%: whole image pixels, the
 //   nearest edges; dragging outside the image stops at its edges; a click without a drag leaves
 //   none. The overlay's size label and the fields follow.
-// - Alignment: at several zoom levels (Fit, 100%, 150%, 200%, 300%, 800%), the overlay's edges lie
-//   exactly on the device pixels where the image canvas starts showing the first kept column and
-//   row and stops after the last (read from the canvas itself).
+// - Alignment: at several zoom levels (Fit, 100%, 150%, 200%, 300%, 800%), each with fractional
+//   pans, at device pixel ratios 1, 1.25, 1.5, 2 and 3 by default: the overlay's edges lie exactly
+//   on the device pixels where the image canvas starts showing the first kept column and row and
+//   stops after the last (read from the canvas itself), and on screen (screenshots, the overlay
+//   hidden and shown) the overlay darkens exactly the removed columns and rows and no pixel partly.
+//   At fractional scales the canvas is also checked to be an exact nearest-neighbour enlargement
+//   (compareImage, which reads the column and row mapping from the canvas, not from the app).
 // - Escape cancels a pending crop without clearing the selection; with nothing pending it still
 //   clears the selection. Fields: typing, Enter (never crops), Escape.
 // - Apply with Enter, with the Apply Crop button, and by keyboard only (Chrome): the document is
@@ -37,7 +41,7 @@ import { ensureCropFixtures, ensureEdgeFixtures, ensureTrimFixtures } from './fi
 const { values } = parseArgs({
   options: {
     browser: { type: 'string', default: 'all' },
-    dpr: { type: 'string', default: '1,2' },
+    dpr: { type: 'string', default: '1,1.25,1.5,2,3' },
     'no-perf': { type: 'boolean', default: false },
     'no-stress': { type: 'boolean', default: false },
   },
@@ -140,6 +144,28 @@ const CROP_HELPERS = `(() => {
       const wrong = Object.keys(want).filter((k) => got[k] !== undefined && want[k] >= 0 && want[k] < (k.endsWith('Left') || k.endsWith('Right') ? 120 : 80) && got[k] !== want[k])
       return { ok: exactEdges && wrong.length === 0, exactEdges, wrong, got, want, zoom: m.state().viewport.zoom }
     },
+    /**
+     * For the screenshot check: the canvas's corner on screen and the device pixels showing the
+     * image (read from the canvas: alpha 0 outside it), a row and a column through the rectangle
+     * away from its handles, and the outline width. All in device pixels.
+     */
+    screenGeometry() {
+      const c = canvas(), dpr = devicePixelRatio, r = c.getBoundingClientRect(), shown = read(c), o = this.overlay()
+      let X0 = Infinity, X1 = -1, Y0 = Infinity, Y1 = -1
+      for (let Y = 0; Y < c.height; Y++) for (let X = 0; X < c.width; X++) {
+        if (shown[(Y * c.width + X) * 4 + 3]) { X0 = Math.min(X0, X); X1 = Math.max(X1, X); Y0 = Math.min(Y0, Y); Y1 = Math.max(Y1, Y) }
+      }
+      const clampY = (v) => Math.min(Math.max(v, Y0), Y1), clampX = (v) => Math.min(Math.max(v, X0), X1)
+      // A quarter of the way along each edge, clear of the corner and middle handles.
+      const row = clampY(Math.floor((o.y + o.height / 4) * dpr)), column = clampX(Math.floor((o.x + o.width / 4) * dpr))
+      return { left: r.left * dpr, top: r.top * dpr, X0, X1, Y0, Y1, row, column, line: Math.max(1, Math.floor(dpr)), rect: m.state().crop.rect }
+    },
+    /** The overlay shown or hidden; its size label (not under test, it covers the shade above the rectangle) hidden unless \`label\`. */
+    showOverlay(visible, label = false) {
+      document.querySelector('.crop-overlay').style.visibility = visible ? '' : 'hidden'
+      document.querySelector('.crop-overlay__label').style.visibility = label ? '' : 'hidden'
+      return true
+    },
     save() {
       const d = m.state().document
       saved = { width: d.width, data: new Uint8Array(d.pixels.data) }
@@ -227,6 +253,57 @@ async function setRect(browser, rect) {
   await settle(browser)
 }
 
+/**
+ * The crop overlay as composited on screen (screenshots in device pixels), against the image the
+ * screen shows, along a row and a column through the rectangle. Independent of the app's mapping:
+ * which image column and row each screen pixel shows is decoded from crop-columns.png's colours
+ * (red / 2, green / 3) in a screenshot with the overlay hidden. With the overlay shown, every screen
+ * pixel showing a removed column or row must be darkened (the shade, or the dark outline over it),
+ * the first and last device pixels inside each edge must be the light outline, and every other
+ * pixel showing a kept column or row must be exactly as without the overlay: no partly shaded or
+ * misplaced pixel anywhere along the line.
+ */
+async function screenAlignment(browser) {
+  const g = await crop(browser, 'screenGeometry()')
+  await crop(browser, 'showOverlay(false)')
+  await settle(browser)
+  const plain = decodePng(Buffer.from(await browser.screenshot(), 'base64'))
+  await crop(browser, 'showOverlay(true)')
+  await settle(browser)
+  const shaded = decodePng(Buffer.from(await browser.screenshot(), 'base64'))
+  await crop(browser, 'showOverlay(true, true)')
+  const left = Math.round(g.left), top = Math.round(g.top)
+  const at = (png, X, Y) => png.data.subarray(((Y + top) * png.width + X + left) * 4, ((Y + top) * png.width + X + left) * 4 + 3)
+  const problems = []
+  const line = (axis) => {
+    const along = axis === 'x' ? [g.X0, g.X1] : [g.Y0, g.Y1]
+    const point = (D) => (axis === 'x' ? [D, g.row] : [g.column, D])
+    const [start, size] = axis === 'x' ? [g.rect.x, g.rect.width] : [g.rect.y, g.rect.height]
+    const decode = (rgb) => (axis === 'x' ? rgb[0] / 2 : rgb[1] / 3)
+    // The device pixels where the kept columns (rows) start and stop on screen.
+    let first = null, after = null
+    for (let D = along[0]; D <= along[1]; D++) {
+      const index = decode(at(plain, ...point(D)))
+      if (!Number.isInteger(index)) { problems.push(`${axis} ${D}: no image pixel on screen`); return }
+      if (first === null && index >= start) first = D
+      if (after === null && index >= start + size) after = D
+    }
+    after ??= along[1] + 1
+    for (let D = along[0]; D <= along[1]; D++) {
+      const a = at(plain, ...point(D)), b = at(shaded, ...point(D))
+      const same = a[0] === b[0] && a[1] === b[1] && a[2] === b[2]
+      const darkened = [0, 1, 2].every((k) => b[k] <= a[k] * 0.4 + 2) && (!same || Math.max(a[0], a[1], a[2]) <= 3)
+      const white = b[0] === 255 && b[1] === 255 && b[2] === 255
+      const kind = D < first || D >= after ? 'darkened' : D < first + g.line || D >= after - g.line ? 'white' : 'same'
+      const ok = kind === 'darkened' ? darkened : kind === 'white' ? white : same
+      if (!ok) problems.push(`${axis} ${D} (image ${decode(a)}): want ${kind}, got [${[...b]}] over [${[...a]}]`)
+    }
+    return { first, after }
+  }
+  const x = line('x'), y = line('y')
+  return { ok: problems.length === 0, problems: problems.slice(0, 6), x, y, rect: g.rect, line: g.line }
+}
+
 async function exportedPixels(browser) {
   const before = await crop(browser, 'captures()')
   const button = await edit(browser, 'button("Export")')
@@ -293,7 +370,7 @@ async function workflow(browser, url, name) {
   await settle(browser)
   report.check(tag('a click outside the rectangle without a drag removes it'), (await crop(browser, 'rect()')) === null && (await crop(browser, 'overlay()')) === null)
 
-  // Alignment at several zoom levels.
+  // Alignment at several zoom levels and pans: in the canvas's pixels, and on screen.
   await setRect(browser, { x: 37, y: 21, width: 41, height: 33 })
   const zooms = [['Fit', null], ['100%', 1], ['150%', 1.5], ['200%', 2], ['300%', 3], ['800%', 8]]
   for (const [label, zoom] of zooms) {
@@ -303,8 +380,17 @@ async function workflow(browser, url, name) {
       if (zoom !== 1) await dispatch(browser, { type: 'zoom-scaled', anchor: await ev(browser, 'window.__minty.workspacePoint(57, 37)'), factor: zoom })
     }
     await settle(browser)
-    const a = await crop(browser, 'alignment()')
-    report.check(tag(`at ${label} the overlay's edges are exactly where the canvas draws the rectangle's first and last columns and rows`), a.ok, json(a))
+    // Fractional pans move the image's corner to other device pixels.
+    for (const [pan, delta] of [['', null], [', panned', { x: 13.3, y: -7.7 }], [', panned again', { x: -29.9, y: 17.45 }]]) {
+      if (delta) {
+        await dispatch(browser, { type: 'wheel-panned', delta })
+        await settle(browser)
+      }
+      const a = await crop(browser, 'alignment()')
+      report.check(tag(`at ${label}${pan} the overlay's edges are exactly where the canvas draws the rectangle's first and last columns and rows`), a.ok, json(a))
+      const screen = await screenAlignment(browser)
+      report.check(tag(`at ${label}${pan} on screen, the overlay darkens exactly the removed columns and rows, nothing partly`), screen.ok, json(screen))
+    }
   }
 
   // Escape: crop first, then the selection.
@@ -351,7 +437,10 @@ async function workflow(browser, url, name) {
   await dispatch(browser, { type: 'zoom-actual-size' })
   await settle(browser)
   const shown = await ev(browser, 'window.__minty.compareImage()')
-  report.check(tag('the canvas shows the cropped image exactly'), shown.failures === 0 && shown.n.opaque === 64 * 45 * shown.S * shown.S, json(shown))
+  const everyPixelShown = shown.fractional
+    ? shown.shownLines.columns === 64 && shown.shownLines.rows === 45 && shown.n.opaque === shown.devicePixels
+    : shown.n.opaque === 64 * 45 * shown.S * shown.S
+  report.check(tag('the canvas shows the cropped image exactly'), shown.failures === 0 && everyPixelShown, json(shown))
   const cropped = await crop(browser, 'documentBytes()')
   await crop(browser, 'blur()')
   await browser.press('z', { ctrl: true })

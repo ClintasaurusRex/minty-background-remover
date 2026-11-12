@@ -524,10 +524,27 @@ const PHOTO = `
  *
  *   crop-columns.png   120 × 80, opaque; red = 2 × column, green = 3 × row, blue varies, so the
  *                      canvas shows which column and row each device pixel draws
+ *   colour-stripes.png 60 × 40, sharp alternating colours: columns alternate red and blue, rows
+ *                      alternate alpha 255 and 128, and every third diagonal is fully transparent
+ *                      (hidden colour yellow), so every pixel looks different from all eight
+ *                      neighbours on screen
  */
-export const CROP_FIXTURE_FILES = ['crop-columns.png']
+export const CROP_FIXTURE_FILES = ['crop-columns.png', 'colour-stripes.png']
+
+/** colour-stripes.png's pixel (x, y). */
+export function stripePixel(x, y) {
+  if ((x + y) % 3 === 0) return [200, 200, 0, 0]
+  return [...(x % 2 ? [230, 30, 40] : [20, 40, 220]), y % 2 ? 128 : 255]
+}
 
 export function ensureCropFixtures({ force = false } = {}) {
+  const stripes = path.join(FIXTURES, 'colour-stripes.png')
+  if (!fs.existsSync(stripes) || force) {
+    const rgba = new Uint8Array(60 * 40 * 4)
+    for (let y = 0; y < 40; y++) for (let x = 0; x < 60; x++) rgba.set(stripePixel(x, y), (y * 60 + x) * 4)
+    fs.mkdirSync(FIXTURES, { recursive: true })
+    fs.writeFileSync(stripes, encodePng(60, 40, rgba))
+  }
   const file = path.join(FIXTURES, 'crop-columns.png')
   if (fs.existsSync(file) && !force) return FIXTURES
   const width = 120

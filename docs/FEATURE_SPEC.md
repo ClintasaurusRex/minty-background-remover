@@ -135,6 +135,8 @@ Ctrl + mouse wheel (and trackpad pinch) zooms the image only while the pointer i
 
 Images are rendered with nearest-neighbour sampling at 100% and above, and smooth downscaling below 100%.
 
+At 100% and above, the image is shown at the nearest zoom on the display scale grid (Phase 4, 2026-11-11; `ARCHITECTURE.md`, Key rules): at most 0.8% from the zoom reached up to device scale 4, 1.15% up to 32, 1.54% above (device scale = device pixels per image pixel; above 32, such as above 1600% on a 200% display, displayed sizes are up to 3.1% apart), never below 100%, and exactly the zoom steps at the usual display scaling. Actual Size (exactly 100%) always shows one image pixel per CSS pixel, readout 100%: crisp where the device pixel ratio is a grid scale (the usual scalings, and every Firefox ratio), smoothed where it is not (such as Chrome at 101% custom scaling), so the colours seen there can blend neighbouring pixels; the stored pixels and every tool are unaffected (owner decision, Option D, 2026-11-11). The displayed zoom never exceeds 3200%: at the limit it is the nearest grid scale at or below it (exactly 3200% at the usual scalings; 3117% to 3182% at some others). This is what keeps the pixel every tool picks, the crop outline and the selection overlay exactly on the pixels drawn at every zoom level. The zoom reached is kept as requested, so wheel and pinch movements add up and zooming back returns exactly to where it started; the image point under the pointer stays within a device pixel of it, as drawn. Zoom In is unavailable at the requested 3200%, whatever the readout shows.
+
 Zoom should affect only viewport presentation.
 
 It must not alter the underlying image dimensions.
@@ -479,8 +481,8 @@ The selected colour may be used by Replace Colour.
 
 ### As implemented (Phase 4, 2026-11-09; awaiting owner review)
 
-- The Eyedropper is a toolbar tool. A click reads the exact stored values of the image pixel shown under the pointer, at any zoom and device pixel ratio, and never changes the image.
-- Its options row shows a swatch (over a checkerboard), hex (`#RRGGBB`, or `#RRGGBBAA` when not opaque), RGBA, alpha as a percentage and the pixel it was read from; each reading is announced.
+- The Eyedropper is a toolbar tool. A click reads the exact stored values of the image pixel shown under the pointer, at any zoom, pan and device pixel ratio (fractional display scaling included since the Phase 4 audit corrections), and never changes the image.
+- Its options row shows a swatch (over a checkerboard), hex (`#RRGGBB`, or `#RRGGBBAA` when not opaque), RGBA, alpha as a percentage and the pixel it was read from; each reading is announced, reading the same pixel again included.
 - The swatch opens the compact colour picker (`UI_UX_SPEC.md`, Colour Picker UX) to adjust the colour or type another. The colour is kept for the session; it will be the source colour for Replace Colour.
 
 ---

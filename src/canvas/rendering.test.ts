@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { viewportToPixel } from './coordinates'
-import { snapToDevicePixels } from './devicePixels'
+import { imageDrawBias, snapToDevicePixels } from './devicePixels'
 import {
   CHECKER_SQUARE_CSS_PX,
   checkerSquareSize,
@@ -39,6 +39,7 @@ describe('planFrame', () => {
       squareSize: CHECKER_SQUARE_CSS_PX,
     })
     expect(plan.image).toEqual({
+      // At a whole-number scale the image is drawn on its corner (imageDrawBias, devicePixels.ts).
       transform: { a: 1, b: 0, c: 0, d: 1, e: 300, f: 200 },
       source: { x: 0, y: 0, width: 400, height: 200 },
       smoothing: false,
@@ -86,7 +87,8 @@ describe('planFrame', () => {
       devicePixelRatio: 1.25,
     })
     expect(plan.backingStore).toEqual({ width: 1251, height: 750 })
-    expect(plan.image?.transform).toEqual({ a: 0.625, b: 0, c: 0, d: 0.625, e: 376, f: 250 })
+    // Scale 0.625 = 5/8, an even denominator: drawn 1/16 device pixel past its corner.
+    expect(plan.image?.transform).toEqual({ a: 0.625, b: 0, c: 0, d: 0.625, e: 376 + 1 / 16, f: 250 + 1 / 16 })
     expect(plan.checker?.rect).toEqual({ x: 376, y: 250, width: 250, height: 125 })
     expect(plan.checker?.squareSize).toBe(10)
     expect(plan.image?.smoothing).toBe(true)
@@ -94,7 +96,7 @@ describe('planFrame', () => {
 
   it('keeps the checkerboard edge and the image edge in the same place', () => {
     for (const devicePixelRatio of [1, 1.25, 1.5, 2, 3]) {
-      for (const zoom of [0.137, 0.5, 1, 3]) {
+      for (const zoom of [0.137, 0.5, 1, 1.5, 3]) {
         const viewport = snapToDevicePixels({ zoom, offset: { x: 123.45, y: 67.8 } }, devicePixelRatio)
         const plan = planFrame({
           imageSize: { width: 300, height: 200 },
@@ -103,11 +105,22 @@ describe('planFrame', () => {
           devicePixelRatio,
         })
         const { transform } = plan.image!
-        expect(plan.checker!.rect.x).toBeCloseTo(transform.e, 9)
-        expect(plan.checker!.rect.y).toBeCloseTo(transform.f, 9)
-        expect(plan.checker!.rect.width).toBeCloseTo(300 * transform.a, 9)
-        // Snapped offsets put the image corner on a whole device pixel.
-        expect(plan.checker!.origin.x).toBeCloseTo(transform.e, 9)
+        const { rect, origin } = plan.checker!
+        // Snapped offsets put the image corner on a whole device pixel; the image is drawn the
+        // bias past it.
+        expect(origin.x).toBe(rect.x)
+        expect(origin.y).toBe(rect.y)
+        expect(transform.e - imageDrawBias(transform.a)).toBeCloseTo(origin.x, 9)
+        expect(transform.f - imageDrawBias(transform.a)).toBeCloseTo(origin.y, 9)
+        // Whole device pixels only, so no edge pixel is partly covered.
+        for (const value of [rect.x, rect.y, rect.width, rect.height]) expect(Number.isInteger(value)).toBe(true)
+        // Exactly the device pixels whose centres lie inside the image as drawn.
+        const inside = (device: number, start: number, size: number) => device + 0.5 > start && device + 0.5 < start + size
+        expect(inside(rect.x, transform.e, 300 * transform.a)).toBe(true)
+        expect(inside(rect.x + rect.width - 1, transform.e, 300 * transform.a)).toBe(true)
+        expect(inside(rect.x + rect.width, transform.e, 300 * transform.a)).toBe(false)
+        expect(inside(rect.y + rect.height - 1, transform.f, 200 * transform.d)).toBe(true)
+        expect(inside(rect.y + rect.height, transform.f, 200 * transform.d)).toBe(false)
       }
     }
   })
@@ -115,9 +128,12 @@ describe('planFrame', () => {
 
 describe('rendering helpers', () => {
   it('smooths only below 100%', () => {
-    expect(usesSmoothing(0.99)).toBe(true)
-    expect(usesSmoothing(1)).toBe(false)
-    expect(usesSmoothing(32)).toBe(false)
+    expect(usesSmoothing(0.99, 1)).toBe(true)
+    expect(usesSmoothing(1, 1)).toBe(false)
+    expect(usesSmoothing(32, 1)).toBe(false)
+    // Exactly 100% where the ratio is off the display grid (Actual Size, Option D): smoothed.
+    expect(usesSmoothing(1, 1.0099999904632568)).toBe(true)
+    expect(usesSmoothing(1, 1.100000023841858)).toBe(false)
   })
 
   it('keeps checkerboard squares a constant on-screen size', () => {

@@ -13,6 +13,7 @@ import {
   isImporting,
   pendingCrop,
   sampledPixel,
+  zoomAvailability,
 } from '../editor/editorState'
 import { adjustableDelete, availableEditActions, hasUnexportedEdits } from '../editor/editCommands'
 import { canExport, exportFileName } from '../editor/exportCommands'
@@ -34,6 +35,7 @@ import type { CropField } from '../image/crop/cropRectangle'
 import type { EdgeSettings } from '../image/edit/deleteWithEdges'
 import { createPointerPositionStore } from './pointerPosition'
 import { useCropCommands } from './useCropCommands'
+import { ModalGuardContext, createModalGuard } from './modalGuard'
 import { useEditCommands } from './useEditCommands'
 import { useExportCommand } from './useExportCommand'
 import { IMAGE_FILE_ACCEPT, useImageImport } from './useImageImport'
@@ -52,20 +54,23 @@ function App() {
   })
   // Read when an import is about to replace the open image (P3-D12).
   const shouldConfirmReplace = useCallback(() => hasUnexportedEdits(stateRef.current), [])
+  // Held while the colour picker is open (Phase 4 audit, M3).
+  const [modals] = useState(createModalGuard)
   const { inputRef, openFilePicker, handleFileChange, openDroppedFiles, question, answerQuestion, isConfirming } =
-    useImageImport(dispatch, shouldConfirmReplace)
+    useImageImport(dispatch, shouldConfirmReplace, modals.isHeld)
   const [pointer] = useState(createPointerPositionStore)
-  // While the replace confirmation is open, keyboard shortcuts belong to it.
-  useSelectionShortcuts(stateRef, dispatch, isConfirming)
-  const { run: runEditAction, commitEdgeSettings } = useEditCommands(stateRef, dispatch, isConfirming)
+  // While the replace confirmation or the colour picker is open, keyboard shortcuts belong to it.
+  const isBlocked = useCallback(() => isConfirming() || modals.isHeld(), [isConfirming, modals])
+  useSelectionShortcuts(stateRef, dispatch, isBlocked)
+  const { run: runEditAction, commitEdgeSettings } = useEditCommands(stateRef, dispatch, isBlocked)
   const deleteSelection = useCallback(() => runEditAction('delete-selection'), [runEditAction])
   const autoTrim = useCallback(() => runEditAction('auto-trim'), [runEditAction])
   const applyCrop = useCallback(() => runEditAction('crop'), [runEditAction])
   // Enter applies and Escape cancels the crop rectangle (Phase 4).
-  useCropCommands(stateRef, dispatch, isConfirming, runEditAction)
+  useCropCommands(stateRef, dispatch, isBlocked, runEditAction)
   const undo = useCallback(() => runEditAction('undo'), [runEditAction])
   const redo = useCallback(() => runEditAction('redo'), [runEditAction])
-  const exportImage = useExportCommand(stateRef, dispatch, isConfirming)
+  const exportImage = useExportCommand(stateRef, dispatch, isBlocked)
   const cancelReplace = useCallback(() => answerQuestion(false), [answerQuestion])
   const continueReplace = useCallback(() => answerQuestion(true), [answerQuestion])
   const editActions = availableEditActions(state)
@@ -194,108 +199,112 @@ function App() {
   }, [editError])
 
   return (
-    <div className="app">
-      <AppHeader
-        onOpenImage={openFilePicker}
-        undo={editActions.undo}
-        redo={editActions.redo}
-        onUndo={undo}
-        onRedo={redo}
-        exportStatus={exportStatus}
-        onExport={exportImage}
-      />
-      <div className="app__toolbars">
-        <Toolbar activeTool={state.activeTool} imageOpen={state.document !== null} onSelectTool={selectTool} />
-        <ToolOptions
-          activeTool={state.activeTool}
-          settings={state.magicWand}
-          availableActions={availableSelectionActions(state)}
-          onSelectionModeChange={changeSelectionMode}
-          onFloodModeChange={changeFloodMode}
-          onToleranceChange={changeTolerance}
-          onToleranceCommit={commitTolerance}
-          onSelectionAction={runSelectionAction}
-          edgeSettings={state.edgeSettings}
-          onEdgeSettingsChange={changeEdgeSettings}
-          onEdgeSettingsCommit={commitEdgeSettings}
-          adjustsLastDelete={adjustsLastDelete}
-          canDeleteSelection={editActions.deleteSelection}
-          onDeleteSelection={deleteSelection}
-          padding={state.autoTrimPadding}
-          onPaddingChange={changePadding}
-          canAutoTrim={editActions.autoTrim}
-          onAutoTrim={autoTrim}
+    <ModalGuardContext.Provider value={modals}>
+      <div className="app">
+        <AppHeader
+          onOpenImage={openFilePicker}
+          undo={editActions.undo}
+          redo={editActions.redo}
+          onUndo={undo}
+          onRedo={redo}
+          exportStatus={exportStatus}
+          onExport={exportImage}
+        />
+        <div className="app__toolbars">
+          <Toolbar activeTool={state.activeTool} imageOpen={state.document !== null} onSelectTool={selectTool} />
+          <ToolOptions
+            activeTool={state.activeTool}
+            settings={state.magicWand}
+            availableActions={availableSelectionActions(state)}
+            onSelectionModeChange={changeSelectionMode}
+            onFloodModeChange={changeFloodMode}
+            onToleranceChange={changeTolerance}
+            onToleranceCommit={commitTolerance}
+            onSelectionAction={runSelectionAction}
+            edgeSettings={state.edgeSettings}
+            onEdgeSettingsChange={changeEdgeSettings}
+            onEdgeSettingsCommit={commitEdgeSettings}
+            adjustsLastDelete={adjustsLastDelete}
+            canDeleteSelection={editActions.deleteSelection}
+            onDeleteSelection={deleteSelection}
+            padding={state.autoTrimPadding}
+            onPaddingChange={changePadding}
+            canAutoTrim={editActions.autoTrim}
+            onAutoTrim={autoTrim}
+            cropRect={cropRect}
+            imageSize={state.document}
+            canApplyCrop={editActions.crop}
+            onCropFieldChange={changeCropField}
+            onApplyCrop={applyCrop}
+            onCancelCrop={cancelCrop}
+            colour={state.colour}
+            sampledPixel={sampledPixel(state)}
+            onChooseColour={chooseColour}
+          />
+        </div>
+        <Workspace
+          document={state.document}
+          documentBitmap={state.documentBitmap}
+          selection={state.selection}
+          viewport={viewport}
+          workspace={state.workspace}
+          importing={isImporting(state)}
+          importError={state.importError}
+          importNotice={state.importNotice}
+          editError={state.editError}
+          editNotice={state.editNotice}
+          editFeedbackId={state.editFeedbackId}
+          onResize={handleResize}
+          onDismissError={dismissImportError}
+          onDismissEditError={dismissEditError}
+          onDismissEditNotice={dismissEditNotice}
+          onDismissNotice={dismissImportNotice}
+          onDropFiles={openDroppedFiles}
+          onOpenImage={openFilePicker}
+          onWheelZoom={zoomWithWheel}
+          onWheelPan={panWithWheel}
+          onPanGesture={panWithDrag}
+          crosshairPointer={state.activeTool === 'magic-wand' || state.activeTool === 'eyedropper'}
+          cropActive={state.activeTool === 'crop'}
           cropRect={cropRect}
-          imageSize={state.document}
-          canApplyCrop={editActions.crop}
-          onCropFieldChange={changeCropField}
-          onApplyCrop={applyCrop}
-          onCancelCrop={cancelCrop}
-          colour={state.colour}
-          sampledPixel={sampledPixel(state)}
-          onChooseColour={chooseColour}
+          onCropPointer={cropWithPointer}
+          onImagePress={pressImage}
+          onPointerPosition={pointer.set}
         />
+        <StatusBar
+          document={state.document}
+          viewport={viewport}
+          devicePixelRatio={state.workspace?.devicePixelRatio ?? 1}
+          activeTool={state.activeTool}
+          selection={state.selection}
+          adjustsLastDelete={adjustsLastDelete}
+          unexportedEdits={hasUnexportedEdits(state)}
+          pointer={pointer}
+          canZoomIn={zoomAvailability(state).zoomIn}
+          canZoomOut={zoomAvailability(state).zoomOut}
+          onZoomIn={() => dispatch({ type: 'zoom-stepped', direction: 1 })}
+          onZoomOut={() => dispatch({ type: 'zoom-stepped', direction: -1 })}
+          onFit={() => dispatch({ type: 'zoom-fitted' })}
+          onActualSize={() => dispatch({ type: 'zoom-actual-size' })}
+        />
+        <input
+          ref={inputRef}
+          type="file"
+          accept={IMAGE_FILE_ACCEPT}
+          hidden
+          tabIndex={-1}
+          onChange={handleFileChange}
+        />
+        {question && (
+          <DiscardEditsDialog
+            imageName={question.name}
+            source={question.source}
+            onCancel={cancelReplace}
+            onContinue={continueReplace}
+          />
+        )}
       </div>
-      <Workspace
-        document={state.document}
-        documentBitmap={state.documentBitmap}
-        selection={state.selection}
-        viewport={viewport}
-        workspace={state.workspace}
-        importing={isImporting(state)}
-        importError={state.importError}
-        importNotice={state.importNotice}
-        editError={state.editError}
-        editNotice={state.editNotice}
-        editFeedbackId={state.editFeedbackId}
-        onResize={handleResize}
-        onDismissError={dismissImportError}
-        onDismissEditError={dismissEditError}
-        onDismissEditNotice={dismissEditNotice}
-        onDismissNotice={dismissImportNotice}
-        onDropFiles={openDroppedFiles}
-        onOpenImage={openFilePicker}
-        onWheelZoom={zoomWithWheel}
-        onWheelPan={panWithWheel}
-        onPanGesture={panWithDrag}
-        crosshairPointer={state.activeTool === 'magic-wand' || state.activeTool === 'eyedropper'}
-        cropActive={state.activeTool === 'crop'}
-        cropRect={cropRect}
-        onCropPointer={cropWithPointer}
-        onImagePress={pressImage}
-        onPointerPosition={pointer.set}
-      />
-      <StatusBar
-        document={state.document}
-        viewport={viewport}
-        devicePixelRatio={state.workspace?.devicePixelRatio ?? 1}
-        activeTool={state.activeTool}
-        selection={state.selection}
-        adjustsLastDelete={adjustsLastDelete}
-        unexportedEdits={hasUnexportedEdits(state)}
-        pointer={pointer}
-        onZoomIn={() => dispatch({ type: 'zoom-stepped', direction: 1 })}
-        onZoomOut={() => dispatch({ type: 'zoom-stepped', direction: -1 })}
-        onFit={() => dispatch({ type: 'zoom-fitted' })}
-        onActualSize={() => dispatch({ type: 'zoom-actual-size' })}
-      />
-      <input
-        ref={inputRef}
-        type="file"
-        accept={IMAGE_FILE_ACCEPT}
-        hidden
-        tabIndex={-1}
-        onChange={handleFileChange}
-      />
-      {question && (
-        <DiscardEditsDialog
-          imageName={question.name}
-          source={question.source}
-          onCancel={cancelReplace}
-          onContinue={continueReplace}
-        />
-      )}
-    </div>
+    </ModalGuardContext.Provider>
   )
 }
 

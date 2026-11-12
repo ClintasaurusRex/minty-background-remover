@@ -196,6 +196,27 @@
     var(--color-bg);
 }
 
+/*
+ * Forced colours: the swatch keeps the colour (and the checkerboard showing its transparency), with a
+ * system-colour border and focus ring, so it stays visible and focusable in any contrast theme.
+ * (Phase 4 audit, L2.)
+ */
+@media (forced-colors: active) {
+  .tool-options__swatch {
+    forced-color-adjust: none;
+    border-color: ButtonText;
+  }
+
+  .tool-options__swatch:focus-visible {
+    outline: var(--focus-ring-width) solid Highlight;
+    outline-offset: var(--focus-ring-offset);
+  }
+
+  .tool-options__swatch-empty {
+    background: linear-gradient(to top right, transparent 46%, ButtonText 48%, ButtonText 52%, transparent 54%), ButtonFace;
+  }
+}
+
 .tool-options__hex {
   font-family: var(--font-mono);
   user-select: all;

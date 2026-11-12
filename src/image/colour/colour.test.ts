@@ -58,6 +58,36 @@ describe('formatHex, formatRgba, formatAlphaPercent', () => {
     expect(formatAlphaPercent(1)).toBe('0%')
     expect(formatAlphaPercent(0)).toBe('0%')
   })
+
+  // Phase 4 audit, L4: a percentage of 255 (opaque), not of 256, at every rounding boundary.
+  it('gives every one of the 256 alpha values as the nearest whole percentage of 255', () => {
+    for (let alpha = 0; alpha <= 255; alpha++) {
+      // Integer arithmetic only: round(100 × alpha / 255) = floor((40 × alpha + 51) / 102). There is
+      // never an exact half to round (100 × alpha / 255 = 20 × alpha / 51 has no .5 for whole alpha).
+      const expected = Math.floor((40 * alpha + 51) / 102)
+      expect(formatAlphaPercent(alpha), `alpha ${alpha}`).toBe(`${expected}%`)
+    }
+  })
+
+  it('rounds at the boundaries where a percentage of 256 would differ', () => {
+    // Each of these is one percent higher than 100 × alpha / 256 would round to.
+    const cases: [number, string][] = [
+      [37, '15%'], [55, '22%'], [101, '40%'], [124, '49%'], [129, '51%'], [247, '97%'], [252, '99%'], [254, '100%'],
+    ]
+    for (const [alpha, text] of cases) expect(formatAlphaPercent(alpha), `alpha ${alpha}`).toBe(text)
+    // And either side of the first and last whole steps.
+    expect(formatAlphaPercent(2)).toBe('1%')
+    expect(formatAlphaPercent(252)).toBe('99%')
+    expect(formatAlphaPercent(253)).toBe('99%')
+  })
+
+  it('never decreases, covers 0% to 100%, and reaches 100% only near opaque', () => {
+    const values = Array.from({ length: 256 }, (_, alpha) => Number.parseInt(formatAlphaPercent(alpha)))
+    for (let alpha = 1; alpha < 256; alpha++) expect(values[alpha]).toBeGreaterThanOrEqual(values[alpha - 1])
+    expect(values[0]).toBe(0)
+    expect(values[255]).toBe(100)
+    expect(values.indexOf(100)).toBe(254)
+  })
 })
 
 describe('parseHex', () => {

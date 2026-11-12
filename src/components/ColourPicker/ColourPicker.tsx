@@ -11,6 +11,7 @@ import {
   withHsv,
 } from '../../editor/colourPicker'
 import { type Rgba, cssColour, formatAlphaPercent, formatHex, formatRgba, hsvToRgb } from '../../image/colour/colour'
+import { useModalHold } from '../../app/modalGuard'
 import './ColourPicker.css'
 
 interface ColourPickerProps {
@@ -31,7 +32,8 @@ interface ColourPickerProps {
  * A modal dialog (showModal), placed below the control that opened it: the rest of the page is inert
  * and its shortcuts do nothing, focus starts on the saturation / brightness area, Tab moves through
  * the controls, Escape cancels, and focus returns to the opening control when it closes. Keys never
- * reach the editor's shortcuts while it is open.
+ * reach the editor's shortcuts while it is open, and it holds the app's modal guard, so no image is
+ * imported behind it (pasting, Ctrl + O, dropping) and no editing shortcut acts, whatever is focused.
  *
  * Everything is keyboard operable: the area takes arrow keys (Shift for 10%), Page Up / Page Down,
  * Home and End; the sliders their usual keys; the hex field accepts #RGB, #RGBA, #RRGGBB or #RRGGBBAA
@@ -45,6 +47,9 @@ export function ColourPicker({ initial, anchorRef, onApply, onCancel }: ColourPi
   const hexId = useId()
   const [colour, setColour] = useState(() => pickerColour(start))
   const [hexDraft, setHexDraft] = useState<string | null>(null)
+  // While open, the editor behind it does nothing: no image import (a paste goes to the document
+  // whatever is focused), no editing shortcut (app/modalGuard.ts).
+  useModalHold()
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current
@@ -57,7 +62,21 @@ export function ColourPicker({ initial, anchorRef, onApply, onCancel }: ColourPi
       onCancel()
     }
     dialog.addEventListener('cancel', handleCancel)
+    // Placed again when the window changes size (the opening control may move, the window may get
+    // too short), at most once a frame and never otherwise, so it does not move while in use. Focus
+    // stays where it is.
+    let frame = 0
+    const handleResize = () => {
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        placeNear(dialog, anchorRef.current)
+      })
+    }
+    window.addEventListener('resize', handleResize)
     return () => {
+      window.removeEventListener('resize', handleResize)
+      cancelAnimationFrame(frame)
       dialog.removeEventListener('cancel', handleCancel)
       // Closing while still in the page lets the browser return focus to the opening control.
       if (dialog.open) dialog.close()
@@ -203,7 +222,11 @@ export function ColourPicker({ initial, anchorRef, onApply, onCancel }: ColourPi
   )
 }
 
-/** Places the open dialog just below `anchor`, kept inside the window; centred without one. */
+/**
+ * Places the open dialog just below `anchor`, or above it when there is no room below, kept inside
+ * the window; centred without one. In a window too short for either, it starts at the top margin:
+ * its height is capped to the window (ColourPicker.css), so Cancel and Apply stay on screen.
+ */
 function placeNear(dialog: HTMLDialogElement, anchor: HTMLElement | null) {
   if (!anchor) return
   const gap = 6
@@ -211,7 +234,9 @@ function placeNear(dialog: HTMLDialogElement, anchor: HTMLElement | null) {
   const a = anchor.getBoundingClientRect()
   const d = dialog.getBoundingClientRect()
   const below = a.bottom + gap
-  const top = below + d.height <= window.innerHeight - margin ? below : Math.max(margin, a.top - gap - d.height)
+  const bottomLimit = window.innerHeight - margin
+  const preferred = below + d.height <= bottomLimit ? below : a.top - gap - d.height
+  const top = Math.max(margin, Math.min(preferred, bottomLimit - d.height))
   const left = Math.min(Math.max(margin, a.left), Math.max(margin, window.innerWidth - margin - d.width))
   dialog.style.margin = '0'
   dialog.style.top = `${top}px`

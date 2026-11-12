@@ -25,7 +25,9 @@ also useful for manual checks.
 ## Scripts
 
 Run them from the repository root. Each prints PASS or FAIL lines and exits with code 1 if any
-check fails.
+check fails. A check the harness cannot perform in a configuration is printed as SKIP with the
+reason: it is not verified, it counts neither as a pass nor as a failure, and it does not change the
+exit code. The last line gives the counts (passed, failed, skipped).
 
 ### Rendering smoke test
 
@@ -83,6 +85,13 @@ marching ants. Without any user action after the crash, it checks that:
 - A pan afterwards still draws correctly.
 
 Firefox is not covered, because headless Firefox has no separate GPU process to stop.
+
+The three overlay checks (correct before the crash, complete after it, complete after a pan) use
+`checkOverlay`, which supports whole device scales only. At 200% with a device pixel ratio of 1.25
+(device scale 2.5) they are reported as SKIP: fractional-scale overlay restoration is not verified
+by this script. The other checks there (both layers restored, image exact, overlay identical to /
+covering the same pixels as its snapshot from before the crash, view unchanged, one redraw) run
+and must pass.
 
 ### Display-image bench
 
@@ -311,13 +320,15 @@ checked.
 
 ```sh
 npm run build
-node scripts/browser/crop.mjs [--browser chrome|firefox|all] [--dpr 1,2] [--no-perf] [--no-stress]
+node scripts/browser/crop.mjs [--browser chrome|firefox|all] [--dpr 1,1.25,1.5,2,3] [--no-perf] [--no-stress]
 ```
 
 Real drags draw, move and resize the crop rectangle at 400% (nearest pixel edges, stopping at the
 image's edges, a click removing it); the overlay's edges are compared with what the canvas draws at
-Fit, 100%, 150%, 200%, 300% and 800% (on `crop-columns.png`, whose red and green channels give the
-column and row); Escape, the fields, Enter, Apply Crop, Cancel and keyboard-only use (Chrome); the
+Fit, 100%, 150%, 200%, 300% and 800%, each also after two fractional pans, at device pixel ratios 1,
+1.25, 1.5, 2 and 3 by default (on `crop-columns.png`, whose red and green channels give the column
+and row), and on screen: screenshots with the overlay hidden and shown must show exactly the removed
+columns and rows darkened, no pixel partly; Escape, the fields, Enter, Apply Crop, Cancel and keyboard-only use (Chrome); the
 cropped document byte for byte, the canvas, Undo and Redo; export after a crop (decoded in Node) and
 that a rectangle not applied never reaches an export; tool changes, imports and Apply being
 unavailable while an image opens. Unless `--no-perf`, Apply, Undo and Redo times at 4K and (unless
@@ -327,12 +338,81 @@ unavailable while an image opens. Unless `--no-perf`, Apply, Undo and Redo times
 
 ```sh
 npm run build
-node scripts/browser/colour.mjs [--browser chrome|firefox|all] [--dpr 1,2]
+node scripts/browser/colour.mjs [--browser chrome|firefox|all] [--dpr 1,1.25,1.5,2,3] [--no-forced-colours]
 ```
 
-Real clicks at Fit, 100%, 150% and 400% read exactly the pixel the canvas shows under the pointer,
-on an opaque image and a partly transparent one, without changing the image; the colour picker's
-focus, keyboard, pointer, sliders, hex field, Cancel, Escape and Apply, and that editor shortcuts do
-nothing while it is open.
+Real clicks at Fit, 100%, 150%, 200%, 300% and 400%, some after fractional pans, read exactly the
+pixel the screen shows under the pointer, on an opaque image, a partly transparent one and
+`colour-stripes.png` (sharp alternating colours and transparency), without changing the image. The
+oracle is observed, not computed with the app's mapping: the pointer position the browser delivered
+(Firefox moves synthesized pointers to the nearest device pixel corner) and the canvas's colour at
+that device pixel. The Magic Wand (tolerance 0) and the status bar are checked the same way. Also:
+each reading announced (the same pixel twice included); the colour picker's focus, keyboard,
+pointer, sliders, hex field, Cancel, Escape and Apply; that editor shortcuts do nothing while it is
+open and no pasted or dropped image is imported behind it (real Ctrl + V in Chrome, whose headless
+clipboard is its own, never the desktop's); placement after resizing to 640 × 480 and 640 × 360;
+and, once per browser unless `--no-forced-colours`, forced colours mode (Chrome's emulation,
+Firefox's colour override).
 
-`fixtures.mjs` also writes `crop-columns.png` (120 × 80, opaque; red = 2 × column, green = 3 × row).
+At fractional device scales `compareImage` (lib/app.mjs) reads which image column and row each
+device column and row shows from the canvas itself and requires an exact nearest-neighbour
+enlargement; `checkOverlay` still supports whole scales only (it reports "skipped"; `gpu-crash.mjs`
+records those checks as SKIP).
+
+### Arbitrary zoom levels (Phase 4, Codex's regression of 2026-11-11)
+
+```sh
+npm run build
+node scripts/browser/arbitrary-zoom.mjs [--browser chrome|firefox|all] [--dpr 1,1.25,1.5,2,3]
+```
+
+Zoom levels reached through the workspace's Ctrl + wheel handler: Codex's reproduction (one
+pixel-mode Ctrl + wheel event from 100% to exactly 147.65625%, and events landing just above and
+below it; these need fractional deltas, which WebDriver's wheel input cannot send, so they are wheel
+events dispatched to the canvas and handled by the app's own wheel listener), real trusted Ctrl +
+wheel input in both browsers (`wheel()` in `lib/browsers.mjs`; 147.77%, 108.61%, 210.24%, 362.39%),
+237.37%, 100% (also Fit for this image), just above 100% (100.01%) and either side of a point where
+the display changes from one grid scale to the next (near 133%; the grid scales are worked out in the
+script); each panned by fractional amounts, at device pixel ratios 1, 1.25, 1.5, 2 and 3 (`--dpr
+1.01,1.1` also works). The oracle never uses the app's mapping: the canvas must be an exact
+nearest-neighbour enlargement (decoded from `crop-columns.png`); real Eyedropper and Magic Wand
+clicks (tolerance 0) on the first and last device pixels of chosen image pixels, and just before
+them, must read and select exactly the pixel the canvas shows at the delivered position, with the
+status bar naming it; the crop overlay's edges must be where the canvas starts and stops drawing the
+kept columns and rows, and on screen (screenshots) it must darken exactly the removed ones; on
+`colour-stripes.png`, clicks on every device pixel along the diagonal must read the document's
+exact bytes of a pixel that, over the checkerboard, is exactly what the screen shows. Against the
+build before the display scale grid (fixed 3/128 offset) it fails 42 checks at DPR 1 (147.65625% and
+just below it, both browsers).
+
+### Zoom anchoring, Actual Size, the screen and the zoom limit (Phase 4, 2026-11-11)
+
+```sh
+npm run build
+node scripts/browser/zoom-anchor.mjs [--browser chrome|firefox|all] [--dpr 1,1.01,1.1,1.19,1.25,1.5,2,3]
+```
+
+The oracle is what the browser is given and shows: the transform and smoothing flag of each
+`drawImage` call drawing the image (read from the canvas context; both browsers keep transforms in
+single precision), the delivered press and wheel positions (counted from the device pixel the
+browser puts the canvas's corner on), canvas readback, screenshots and the controls' DOM state.
+- Actual Size (a real click) displays exactly 100%; crisp (exact enlargement) where the ratio is a
+  display grid scale, worked out in the script; smoothed elsewhere (Chrome at 1.01 and 1.19), where
+  40 real Eyedropper clicks must read the exact stored bytes of the pixel nearest the device pixel
+  centre, which must dominate the colour shown.
+- With the Magic Wand, Eyedropper, Crop and Auto Trim options rows above the canvas (each moves it,
+  often to a fractional device pixel), the canvas bitmap must be the browser's
+  device-pixel-content-box and the screenshot must equal canvas readback exactly.
+- Real Ctrl + wheel notches at three pointers: 15 up and 15 back return exactly; 100% to 3200% keeps
+  the point within one device pixel. Zoom In clicks to 3200% likewise. At the requested 3200%: not
+  displayed above 3200%, Zoom In disabled, a click or wheel notch there changes nothing.
+
+Against the build before the anchoring fix it fails 14 checks at DPR 1.5 and 1.01; with the
+device-box and screen-corner fix reverted, 19 at 1.01 and 1.1.
+
+In `arbitrary-zoom.mjs`, a view drawn smoothed (exactly 100% at a ratio off the display grid) reports
+its nearest-neighbour checks as SKIP (they decode single pixels from the screen, which a blend does
+not show); `zoom-anchor.mjs` covers that view.
+
+`fixtures.mjs` also writes `crop-columns.png` (120 × 80, opaque; red = 2 × column, green = 3 × row)
+and `colour-stripes.png` (60 × 40; red / blue columns, alpha 255 / 128 rows, transparent diagonals).

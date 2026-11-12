@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { viewportToImage, viewportToPixel } from '../canvas/coordinates'
+import { pixelUnderPointer, viewportToImage, viewportToPixel } from '../canvas/coordinates'
 import { planFrame } from '../canvas/rendering'
 import { MAX_ZOOM, MIN_ZOOM } from '../canvas/viewport'
+import { DOM_DELTA_PIXEL, wheelDeltaPixels, wheelZoomFactor } from '../canvas/wheelZoom'
 import { createImportError } from '../image/import/errors'
 import { fakeImageData } from '../image/import/testFixtures'
 import { copyPixelData, createPixelBuffer } from '../image/pixelBuffer'
@@ -20,6 +21,7 @@ import {
   editorReducer,
   initialEditorState,
   isImporting,
+  zoomAvailability,
 } from './editorState'
 import { createEditedDocument, createImageDocument } from './imageDocument'
 import type { FloodMode, SelectionMask, SelectionMode, ToolId } from './types'
@@ -48,6 +50,45 @@ function reduce(state: EditorState, ...actions: EditorAction[]): EditorState {
 
 const measured = reduce(initialEditorState, { type: 'workspace-resized', workspace: WORKSPACE })
 
+/*
+ * Independent oracle for zoom anchoring: the transform the workspace renderer actually draws the
+ * image with (planFrame), never the stored or unbiased display viewport, and never the anchoring
+ * helpers under test (canvas/zoomAnchor.ts).
+ */
+function drawTransform(state: EditorState) {
+  const plan = planFrame({
+    imageSize: state.document!,
+    viewport: displayViewport(state)!,
+    viewportSize: state.workspace!.size,
+    devicePixelRatio: state.workspace!.devicePixelRatio,
+  })
+  return plan.image!.transform
+}
+
+/** The image point drawn at viewport point `point` (CSS px), through the renderer's transform. */
+function drawnImagePoint(state: EditorState, point: { x: number; y: number }) {
+  const ratio = state.workspace!.devicePixelRatio
+  const t = drawTransform(state)
+  return { x: (point.x * ratio - t.e) / t.a, y: (point.y * ratio - t.f) / t.d }
+}
+
+/** How far (device px) the renderer draws image point `image` from viewport point `point`, per axis. */
+function drawnDistance(state: EditorState, image: { x: number; y: number }, point: { x: number; y: number }) {
+  const ratio = state.workspace!.devicePixelRatio
+  const t = drawTransform(state)
+  return { x: Math.abs(t.a * image.x + t.e - point.x * ratio), y: Math.abs(t.d * image.y + t.f - point.y * ratio) }
+}
+
+/** The image pixel the renderer draws in the device pixel containing `point`: the one at its centre. */
+function drawnPixelAt(state: EditorState, point: { x: number; y: number }) {
+  const ratio = state.workspace!.devicePixelRatio
+  const t = drawTransform(state)
+  // Device pixels containing the pointer; positions are never within 1e-6 of a device pixel edge here.
+  const dx = Math.floor(point.x * ratio + 1e-6)
+  const dy = Math.floor(point.y * ratio + 1e-6)
+  return { x: Math.floor((dx + 0.5 - t.e) / t.a), y: Math.floor((dy + 0.5 - t.f) / t.d) }
+}
+
 /** `state` with its image edited the copy-on-write way: the same image, unchanged pixels, a new revision. */
 function withEditedPixels(state: EditorState): EditorState {
   const document = state.document!
@@ -66,6 +107,7 @@ describe('editorReducer: imports', () => {
       pendingImportId: null,
       importError: null,
       pan: null,
+      zoomAnchor: null,
       importNotice: null,
       activeTool: null,
       magicWand: { tolerance: 20, floodMode: 'contiguous', selectionMode: 'new' },
@@ -343,6 +385,18 @@ describe('displayViewport', () => {
     }
   })
 
+  it('takes a new device pixel size of the canvas as a resize, and passes it to the renderer', () => {
+    const at = { size: { width: 1400, height: 638.07 }, devicePixelRatio: 1.1, deviceSize: { width: 1540, height: 702 } }
+    const opened = reduce(initialEditorState, { type: 'workspace-resized', workspace: at }, { type: 'import-started', importId: 1 }, { type: 'import-finished', importId: 1, result: succeeded(400, 200) })
+    // Same CSS size and ratio, the canvas moved to another fractional device position: 701 rows.
+    const moved = reduce(opened, { type: 'workspace-resized', workspace: { ...at, deviceSize: { width: 1540, height: 701 } } })
+    expect(moved).not.toBe(opened)
+    expect(moved.workspace!.deviceSize).toEqual({ width: 1540, height: 701 })
+    expect(reduce(moved, { type: 'workspace-resized', workspace: { ...at, deviceSize: { width: 1540, height: 701 } } })).toBe(moved)
+    const plan = planFrame({ imageSize: moved.document!, viewport: displayViewport(moved)!, viewportSize: moved.workspace!.size, devicePixelRatio: 1.1, deviceSize: moved.workspace!.deviceSize })
+    expect(plan.backingStore).toEqual({ width: 1540, height: 701 })
+  })
+
   it('does not accumulate snapping across repeated resizes', () => {
     let state = reduce(
       initialEditorState,
@@ -374,12 +428,6 @@ describe('editorReducer: zoom', () => {
     )
   }
 
-  /** The image point shown under a viewport point, using the display (snapped) viewport. */
-  function imagePointUnder(state: EditorState, point: { x: number; y: number }) {
-    const view = displayViewport(state)!
-    return viewportToImage(view, point)
-  }
-
   it('does nothing without an image', () => {
     for (const action of [
       { type: 'zoom-scaled', anchor: { x: 1, y: 1 }, factor: 2 },
@@ -391,40 +439,108 @@ describe('editorReducer: zoom', () => {
     }
   })
 
-  it('keeps the image point under the pointer fixed', () => {
+  it('keeps the image point drawn under the pointer there, as drawn', () => {
     const state = opened(3840, 2160)
     const anchor = { x: 613.4, y: 287.9 }
-    const before = viewportToImage(state.viewport!, anchor)
+    const before = drawnImagePoint(state, anchor)
     let zoomed = state
-    for (const factor of [1.25, 1.25, 3, 0.4, 7.7]) {
+    for (const factor of [1.25, 1.25, 3, 0.4, 7.7, 1.0137]) {
       zoomed = reduce(zoomed, { type: 'zoom-scaled', anchor, factor })
-      const after = viewportToImage(zoomed.viewport!, anchor)
-      expect(after.x).toBeCloseTo(before.x, 9)
-      expect(after.y).toBeCloseTo(before.y, 9)
+      // Within one device pixel (the whole device pixel offset), at every zoom: never magnified.
+      const off = drawnDistance(zoomed, before, anchor)
+      expect(off.x).toBeLessThanOrEqual(1 + 1e-9)
+      expect(off.y).toBeLessThanOrEqual(1 + 1e-9)
+    }
+    // The stored zoom stays exactly as requested.
+    expect(zoomed.viewport!.zoom).toBeCloseTo(state.viewport!.zoom * 1.25 * 1.25 * 3 * 0.4 * 7.7 * 1.0137, 12)
+  })
+
+  it('keeps what the user saw under the pointer there, to within a device pixel, not magnified (Codex 2026-11-11)', () => {
+    for (const devicePixelRatio of [1, 1.01, 1.1, 1.25, 1.5, 2, 2.25, 3]) {
+      // From Fit and from 100% (where the drawing bias is not zero at most ratios).
+      for (const start of [[], [{ type: 'zoom-actual-size' } as const]]) {
+        let state = reduce(opened(1000, 700, { size: { width: 1003.2, height: 611.7 }, devicePixelRatio }), ...start)
+        const anchor = { x: 377.3, y: 201.6 }
+        // The image point drawn under the pointer before zooming.
+        const target = drawnImagePoint(state, anchor)
+        for (let i = 0; i < 12; i++) {
+          state = reduce(state, { type: 'zoom-scaled', anchor, factor: 1.3 })
+          const off = drawnDistance(state, target, anchor)
+          expect(off.x).toBeLessThanOrEqual(1 + 1e-9)
+          expect(off.y).toBeLessThanOrEqual(1 + 1e-9)
+        }
+      }
     }
   })
 
-  it('keeps what the user saw under the pointer there, to within snapping precision', () => {
-    for (const devicePixelRatio of [1, 1.25, 1.5, 2, 2.25]) {
-      let state = opened(1000, 700, { size: { width: 1003.2, height: 611.7 }, devicePixelRatio })
-      const startZoom = state.viewport!.zoom
-      const anchor = { x: 377.3, y: 201.6 }
-      // The image point drawn under the pointer before zooming.
-      const target = imagePointUnder(state, anchor)
-      for (let i = 0; i < 12; i++) {
-        state = reduce(state, { type: 'zoom-scaled', anchor, factor: 1.3 })
-        const view = displayViewport(state)!
-        const drawnAt = { x: view.offset.x + target.x * view.zoom, y: view.offset.y + target.y * view.zoom }
-        // Snapping can put the point up to half a device pixel from the pointer, measured
-        // at the starting zoom (where the user aimed), plus half a device pixel now.
-        const bound = 0.5 * (view.zoom / startZoom) + 0.5 + 1e-6
-        expect(Math.abs(drawnAt.x - anchor.x) * devicePixelRatio).toBeLessThanOrEqual(bound)
-        expect(Math.abs(drawnAt.y - anchor.y) * devicePixelRatio).toBeLessThanOrEqual(bound)
-        // In image pixels that is under one screen pixel at the starting zoom.
-        expect(Math.abs(viewportToImage(view, anchor).x - target.x) * startZoom * devicePixelRatio).toBeLessThanOrEqual(
-          0.5 + (0.5 * startZoom) / view.zoom + 1e-6,
-        )
+  it('keeps the anchored point through trusted-wheel-sized zooming from 100% to 3200% (Codex 2026-11-11)', () => {
+    // Codex: at 150% scaling, Ctrl + wheel from 100% to 3200% moved the anchored point 7.5 device
+    // pixels, because the anchor ignored the drawing bias. Wheel notches as the browsers send them.
+    const factor = wheelZoomFactor(wheelDeltaPixels(-100, DOM_DELTA_PIXEL, 800))
+    for (const devicePixelRatio of [1, 1.01, 1.1, 1.25, 1.5, 2, 3]) {
+      for (const anchor of [{ x: 401, y: 299 }, { x: 377.3, y: 201.6 }, { x: 500 + 1 / 3, y: 300 + 2 / 3 }]) {
+        let state = opened(800, 600, { size: { width: 1000, height: 600 }, devicePixelRatio })
+        state = reduce(state, { type: 'zoom-actual-size' })
+        expect(state.viewport!.zoom).toBe(1)
+        const target = drawnImagePoint(state, anchor)
+        let worst = 0
+        for (let i = 0; i < 200 && state.viewport!.zoom < MAX_ZOOM; i++) {
+          state = reduce(state, { type: 'zoom-scaled', anchor, factor })
+          const off = drawnDistance(state, target, anchor)
+          worst = Math.max(worst, off.x, off.y)
+        }
+        expect(state.viewport!.zoom).toBe(MAX_ZOOM)
+        expect(worst).toBeLessThanOrEqual(1 + 1e-9)
       }
+    }
+  })
+
+  it('does not drift through hundreds of small pinch steps, and returns exactly as displayed', () => {
+    for (const devicePixelRatio of [1, 1.25, 1.5, 2, 3]) {
+      const start = reduce(opened(3000, 2000, { size: { width: 1001, height: 601 }, devicePixelRatio }), { type: 'zoom-actual-size' })
+      const anchor = { x: 433.7, y: 271.3 }
+      const target = drawnImagePoint(start, anchor)
+      let state = start
+      // 260 steps zoom in 28 times, from 100% to about 2800%.
+      for (let i = 0; i < 260; i++) {
+        state = reduce(state, { type: 'zoom-scaled', anchor, factor: 1.013 })
+        const off = drawnDistance(state, target, anchor)
+        expect(Math.max(off.x, off.y)).toBeLessThanOrEqual(1 + 1e-9)
+      }
+      for (let i = 0; i < 260; i++) state = reduce(state, { type: 'zoom-scaled', anchor, factor: 1 / 1.013 })
+      expect(state.viewport!.zoom).toBeCloseTo(start.viewport!.zoom, 9)
+      const [back, begin] = [drawTransform(state), drawTransform(start)]
+      expect(back.a).toBeCloseTo(begin.a, 9)
+      expect(back.e).toBeCloseTo(begin.e, 6)
+      expect(back.f).toBeCloseTo(begin.f, 6)
+    }
+  })
+
+  it('returns exactly as displayed after zooming out and back in about one anchor', () => {
+    for (const devicePixelRatio of [1, 1.25, 1.5, 2]) {
+      let state = opened(800, 600, { size: { width: 1000, height: 600 }, devicePixelRatio })
+      const anchor = { x: 512.3, y: 288.8 }
+      state = reduce(state, { type: 'zoom-scaled', anchor, factor: 24 })
+      const zoomedIn = drawTransform(state)
+      for (let i = 0; i < 10; i++) state = reduce(state, { type: 'zoom-scaled', anchor, factor: 0.7 })
+      for (let i = 0; i < 10; i++) state = reduce(state, { type: 'zoom-scaled', anchor, factor: 1 / 0.7 })
+      const back = drawTransform(state)
+      expect(back.a).toBeCloseTo(zoomedIn.a, 9)
+      expect(back.e).toBeCloseTo(zoomedIn.e, 6)
+      expect(back.f).toBeCloseTo(zoomedIn.f, 6)
+    }
+  })
+
+  it('measures a new anchor afresh after panning between zooms', () => {
+    let state = opened(800, 600, { size: { width: 1000, height: 600 }, devicePixelRatio: 1.5 })
+    const anchor = { x: 401, y: 299 }
+    state = reduce(state, { type: 'zoom-scaled', anchor, factor: 3 })
+    state = reduce(state, { type: 'pan-drag-started' }, { type: 'pan-dragged', delta: { x: 37.3, y: -12.7 } }, { type: 'pan-drag-ended' })
+    const target = drawnImagePoint(state, anchor)
+    for (let i = 0; i < 8; i++) {
+      state = reduce(state, { type: 'zoom-scaled', anchor, factor: 1.5 })
+      const off = drawnDistance(state, target, anchor)
+      expect(Math.max(off.x, off.y)).toBeLessThanOrEqual(1 + 1e-9)
     }
   })
 
@@ -443,6 +559,45 @@ describe('editorReducer: zoom', () => {
     expect(end.zoom).toBeCloseTo(begin.zoom, 12)
     expect(end.offset.x).toBeCloseTo(begin.offset.x, 9)
     expect(end.offset.y).toBeCloseTo(begin.offset.y, 9)
+  })
+
+  it('returns to exactly 100% after wheel notches up and back down, crisp and on the grid', () => {
+    // 1.25^15 × 0.8^15 is not exactly 1 in floating point: without normalising, 100% would be
+    // stored as 99.99999999999992%, drawn smoothed and off the display scale grid.
+    const up = wheelZoomFactor(wheelDeltaPixels(-100, DOM_DELTA_PIXEL, 800))
+    const down = wheelZoomFactor(wheelDeltaPixels(100, DOM_DELTA_PIXEL, 800))
+    for (const devicePixelRatio of [1, 1.01, 1.25, 1.5]) {
+      let state = reduce(opened(800, 600, { size: { width: 1000, height: 600 }, devicePixelRatio }), { type: 'zoom-actual-size' })
+      const start = drawTransform(state)
+      const anchor = { x: 433.3, y: 257.7 }
+      for (let i = 0; i < 15; i++) state = reduce(state, { type: 'zoom-scaled', anchor, factor: up })
+      for (let i = 0; i < 15; i++) state = reduce(state, { type: 'zoom-scaled', anchor, factor: down })
+      expect(state.viewport!.zoom).toBe(1)
+      expect(drawTransform(state)).toEqual(start)
+    }
+    // A real step below 100% stays below it.
+    const state = reduce(opened(800, 600), { type: 'zoom-actual-size' }, { type: 'zoom-scaled', anchor: { x: 1, y: 1 }, factor: 1 - 2e-9 })
+    expect(state.viewport!.zoom).toBe(1 - 2e-9)
+  })
+
+  it('offers Zoom In and Zoom Out by the requested zoom, not the displayed one (Codex 2026-11-11)', () => {
+    expect(zoomAvailability(initialEditorState)).toEqual({ zoomIn: false, zoomOut: false })
+    for (const devicePixelRatio of [1, 1.01, 1.1, 1.25, 1.5, 2, 3]) {
+      let state = opened(400, 200, { size: { width: 1000, height: 600 }, devicePixelRatio })
+      expect(zoomAvailability(state)).toEqual({ zoomIn: true, zoomOut: true })
+      for (let i = 0; i < 40 && zoomAvailability(state).zoomIn; i++) state = reduce(state, { type: 'zoom-stepped', direction: 1 })
+      // At the requested maximum: Zoom In is off even where the displayed zoom is below 3200%
+      // (at 101% scaling 3200% is displayed as 3168%), and pressing it anyway changes nothing.
+      expect(state.viewport!.zoom).toBe(MAX_ZOOM)
+      expect(zoomAvailability(state)).toEqual({ zoomIn: false, zoomOut: true })
+      expect(reduce(state, { type: 'zoom-stepped', direction: 1 })).toBe(state)
+      expect(reduce(state, { type: 'zoom-scaled', anchor: { x: 3, y: 4 }, factor: 1.5 })).toBe(state)
+      if (devicePixelRatio === 1.01) expect(displayViewport(state)!.zoom).toBeLessThan(MAX_ZOOM)
+      for (let i = 0; i < 40 && zoomAvailability(state).zoomOut; i++) state = reduce(state, { type: 'zoom-stepped', direction: -1 })
+      expect(state.viewport!.zoom).toBe(MIN_ZOOM)
+      expect(zoomAvailability(state)).toEqual({ zoomIn: true, zoomOut: false })
+      expect(reduce(state, { type: 'zoom-stepped', direction: -1 })).toBe(state)
+    }
   })
 
   it('clamps to 1% and 3200% without moving the image at the limits', () => {
@@ -539,14 +694,19 @@ describe('editorReducer: zoom', () => {
       const view = displayViewport(state)!
       const plan = planFrame({ imageSize: { width: 64, height: 48 }, viewport: view, viewportSize: state.workspace!.size, devicePixelRatio })
       const { a, e, f } = plan.image!.transform
-      // Check device pixel centres across the canvas: the pixel drawn there (by the
-      // canvas transform) must be the pixel hit-testing reports for that position.
-      for (let dy = 0.5; dy < plan.backingStore.height; dy += 37) {
-        for (let dx = 0.5; dx < plan.backingStore.width; dx += 41) {
-          const drawn = { x: Math.floor((dx - e) / a), y: Math.floor((dy - f) / a) }
-          const hit = viewportToPixel(view, { x: dx / devicePixelRatio, y: dy / devicePixelRatio }, { width: 64, height: 48 })
-          if (drawn.x < 0 || drawn.y < 0 || drawn.x >= 64 || drawn.y >= 48) expect(hit).toBeNull()
-          else expect(hit).toEqual(drawn)
+      // Check device pixels across the canvas: the pixel the canvas draws at the device pixel's
+      // centre (with the transform the renderer is given) must be the pixel hit-testing reports for
+      // a pointer anywhere in that device pixel: on its corner (where Firefox puts the pointer) and
+      // inside it.
+      for (let dy = 0; dy < plan.backingStore.height; dy += 37) {
+        for (let dx = 0; dx < plan.backingStore.width; dx += 41) {
+          const drawn = { x: Math.floor((dx + 0.5 - e) / a), y: Math.floor((dy + 0.5 - f) / a) }
+          for (const inside of [0, 0.3, 0.97]) {
+            const pointer = { x: (dx + inside) / devicePixelRatio, y: (dy + inside) / devicePixelRatio }
+            const hit = pixelUnderPointer(view, pointer, { width: 64, height: 48 }, devicePixelRatio)
+            if (drawn.x < 0 || drawn.y < 0 || drawn.x >= 64 || drawn.y >= 48) expect(hit).toBeNull()
+            else expect(hit).toEqual(drawn)
+          }
         }
       }
     }
@@ -567,10 +727,12 @@ describe('editorReducer: pixel under the pointer', () => {
       // Pointer 0.3 px into pixel (40, 200), close to its edge.
       const anchor = { x: view.offset.x + 40.6, y: view.offset.y + 200.3 }
       const size = { width: 256, height: 256 }
-      expect(viewportToPixel(view, anchor, size)).toEqual({ x: 40, y: 200 })
+      // As drawn (the renderer's transform) and as the pointer tools read it.
+      expect(drawnPixelAt(state, anchor)).toEqual({ x: 40, y: 200 })
       for (let i = 0; i < 16; i++) {
         state = reduce(state, { type: 'zoom-scaled', anchor, factor: 1.25 })
-        expect(viewportToPixel(displayViewport(state)!, anchor, size)).toEqual({ x: 40, y: 200 })
+        expect(drawnPixelAt(state, anchor)).toEqual({ x: 40, y: 200 })
+        expect(pixelUnderPointer(displayViewport(state)!, anchor, size, devicePixelRatio)).toEqual({ x: 40, y: 200 })
       }
     }
   })

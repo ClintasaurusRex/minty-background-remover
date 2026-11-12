@@ -1,7 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import type { PointerPositionStore } from '../../app/pointerPosition'
 import { pixelUnderPointer } from '../../canvas/coordinates'
-import { MAX_ZOOM, MIN_ZOOM } from '../../canvas/viewport'
 import {
   describeSelection,
   formatDimensions,
@@ -31,6 +30,12 @@ interface StatusBarProps {
   /** Whether the image has edits that have not been exported (hasUnexportedEdits): shown after its name. */
   unexportedEdits?: boolean
   pointer: PointerPositionStore
+  /**
+   * Whether Zoom In and Zoom Out can change the zoom (zoomAvailability in editor/editorState.ts),
+   * from the requested zoom: the displayed zoom shown here can sit just below a limit.
+   */
+  canZoomIn: boolean
+  canZoomOut: boolean
   onZoomIn: () => void
   onZoomOut: () => void
   onFit: () => void
@@ -46,6 +51,8 @@ export function StatusBar({
   adjustsLastDelete = false,
   unexportedEdits = false,
   pointer,
+  canZoomIn,
+  canZoomOut,
   onZoomIn,
   onZoomOut,
   onFit,
@@ -96,7 +103,7 @@ export function StatusBar({
         <button
           type="button"
           className="button button--icon"
-          disabled={zoom === null || zoom <= MIN_ZOOM}
+          disabled={zoom === null || !canZoomOut}
           title="Zoom Out"
           onClick={onZoomOut}
         >
@@ -112,7 +119,7 @@ export function StatusBar({
         <button
           type="button"
           className="button button--icon"
-          disabled={zoom === null || zoom >= MAX_ZOOM}
+          disabled={zoom === null || !canZoomIn}
           title="Zoom In"
           onClick={onZoomIn}
         >

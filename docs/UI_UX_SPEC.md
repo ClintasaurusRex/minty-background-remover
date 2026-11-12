@@ -329,6 +329,9 @@ As implemented (Phase 4; opened from the Eyedropper's colour swatch; awaiting ow
 - A compact modal popover (248 px wide) placed below the control that opened it and kept inside the window: "Choose a colour", a saturation / brightness area with a ring thumb, Hue and Alpha sliders (the alpha track over a checkerboard), a Hex field, "RGBA r, g, b, a · Alpha n%", Current and New swatches, Cancel and Apply.
 - Keyboard: focus starts on the area (`role="slider"`, value text "Saturation 40%, brightness 80%"; arrows by 1%, Shift + arrows by 10%, Page Up / Down brightness by 10%, Home / End saturation 0% / 100%); Tab reaches the sliders, the hex field and the buttons. The hex field takes #RGB, #RGBA, #RRGGBB or #RRGGBBAA on Enter or leaving it; other text is restored; Escape there cancels only the unfinished entry. Escape elsewhere and Cancel close it changing nothing; focus returns to the swatch. Keys never reach the editor's shortcuts while it is open.
 - Applying without changes keeps the colour exactly.
+- While it is open, nothing happens behind it: no image is imported (pasting, Ctrl + O or dropping an image does nothing, whichever control has focus), and no editing shortcut acts. Text still pastes into the hex field. (Phase 4 audit, M3.)
+- When the window changes size it is placed again below its swatch (or above it, or at the top of a short window). It is never taller than the window: in a short window the saturation / brightness area gets smaller first, so every control, Cancel and Apply included, stays on screen. Focus stays where it was, and it never moves while in use. (Phase 4 audit, L1.)
+- In forced colours (Windows contrast themes, Firefox's colour override) the area, the hue and alpha tracks and the Current and New swatches keep their colours, with a system-colour edge and a focus ring in the system highlight colour; the rest of the picker uses the system colours. The Eyedropper row's swatch does the same. (Phase 4 audit, L2.)
 
 ### Eyedropper (as implemented, Phase 4)
 
@@ -336,7 +339,7 @@ As implemented (Phase 4; opened from the Eyedropper's colour swatch; awaiting ow
 Colour [▦]  #1A2B3C80  RGBA 26, 43, 60, 128  Alpha 50%  from pixel 12, 40
 ```
 
-A crosshair over the image; a click reads the pixel shown under it. The swatch (a button, "Edit colour #1A2B3C80, alpha 50% in the colour picker") opens the colour picker. Before any colour: an empty swatch with a diagonal line and "Click the image to read a pixel's colour". Each reading is announced once ("Colour read from pixel 12, 40: #1A2B3C80, alpha 50%.").
+A crosshair over the image; a click reads the pixel shown under it. The swatch (a button, "Edit colour #1A2B3C80, alpha 50% in the colour picker") opens the colour picker. Before any colour: an empty swatch with a diagonal line and "Click the image to read a pixel's colour". Each reading is announced once ("Colour read from pixel 12, 40: #1A2B3C80, alpha 50%."), a second reading of the same pixel included; nothing else (zooming, panning, moving the pointer) repeats it (Phase 4 audit, L3).
 
 ---
 
@@ -424,6 +427,8 @@ Fit
 Current zoom should be visible.
 
 Ctrl + mouse wheel should zoom relative to the pointer position where practical.
+
+As implemented (Phase 4, 2026-11-11): at 100% and above the zoom displayed, and shown in the status bar, is the nearest zoom on the display scale grid (`FEATURE_SPEC.md` §3), within 0.8% of the wheel or pinch zoom up to a device scale of 4, rising to 1.15% at 32 and 1.54% above (the readout rounds to whole percent). Small pinch movements are kept and add up, so the image changes size in small steps, up to 3.1% apart above a device scale of 32 (above 1600% on a 200% display, above about 2175% at 100%). At the requested 3200% the readout can show slightly less (3168% at Chrome's 101% scaling, 3147% at Firefox's, 3117% at Firefox's 110% browser zoom), never more, and Zoom In is disabled there either way (Codex follow-up, 2026-11-11). The image point under the pointer stays within a device pixel of it through any number of zoom steps, measured against the image as drawn, and the pixel under the pointer stays the same while zooming in. Zooming back to 100% with the wheel gives exactly 100%. Actual Size gives exactly 100% (readout 100%) at every scaling (owner decision, Option D): crisp at grid-compatible scalings in Chrome and Firefox; smoothed, slightly soft, where the device pixel ratio is off the display grid (for example Chrome at 101% or 119% custom scaling, or Firefox at a 60/67 ratio), because no crisp drawing there can be guaranteed to match the pixels the tools read. Zooming even slightly away from exactly 100% returns to the grid (100.58% at 101% scaling is crisp).
 
 ---
 

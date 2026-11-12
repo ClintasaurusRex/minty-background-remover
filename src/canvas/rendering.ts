@@ -1,6 +1,6 @@
 import type { Point, Rectangle, Size, ViewportState } from '../editor/types'
-import { imageRectInViewport, viewportToImage } from './coordinates'
-import { type CanvasTransform, backingStoreSize, deviceTransform } from './devicePixels'
+import { devicePixelBoundary, imageCornerDevicePixel, imageRectInViewport, viewportToImage } from './coordinates'
+import { type CanvasTransform, backingStoreSize, deviceTransform, isGridScale } from './devicePixels'
 
 /*
  * Pure frame planning for the workspace canvas. The canvas covers only the visible
@@ -21,10 +21,15 @@ export interface FrameInput {
   /** The canvas element's size, in CSS pixels. */
   readonly viewportSize: Size
   readonly devicePixelRatio: number
+  /** The canvas's content box in device pixels as the browser lays it out, when known (backingStoreSize). */
+  readonly deviceSize?: Size | null
 }
 
 export interface CheckerDraw {
-  /** Visible part of the image, in backing-store pixels. */
+  /**
+   * Visible part of the image in whole backing-store pixels: exactly the device pixels the image is
+   * drawn on (shownDeviceRect), so no edge pixel is partly covered.
+   */
   readonly rect: Rectangle
   /** Where a square starts, in whole backing-store pixels, so the pattern stays anchored to the image. */
   readonly origin: Point
@@ -48,8 +53,8 @@ export interface FramePlan {
   readonly image: ImageDraw | null
 }
 
-export function planFrame({ imageSize, viewport, viewportSize, devicePixelRatio }: FrameInput): FramePlan {
-  const backingStore = backingStoreSize(viewportSize, devicePixelRatio)
+export function planFrame({ imageSize, viewport, viewportSize, devicePixelRatio, deviceSize }: FrameInput): FramePlan {
+  const backingStore = backingStoreSize(viewportSize, devicePixelRatio, deviceSize)
   const visible = intersect(imageRectInViewport(viewport, imageSize), {
     x: 0,
     y: 0,
@@ -59,27 +64,41 @@ export function planFrame({ imageSize, viewport, viewportSize, devicePixelRatio 
   const source = visible && visibleSourceRect(viewport, imageSize, visible)
   if (!visible || !source) return { backingStore, checker: null, image: null }
 
+  const origin = {
+    x: imageCornerDevicePixel(viewport.offset.x, devicePixelRatio),
+    y: imageCornerDevicePixel(viewport.offset.y, devicePixelRatio),
+  }
+  const checker = shownDeviceRect(origin, imageSize, viewport.zoom * devicePixelRatio, backingStore)
+  if (!checker) return { backingStore, checker: null, image: null }
+
   return {
     backingStore,
     checker: {
-      rect: {
-        x: visible.x * devicePixelRatio,
-        y: visible.y * devicePixelRatio,
-        width: visible.width * devicePixelRatio,
-        height: visible.height * devicePixelRatio,
-      },
-      origin: {
-        x: Math.round(viewport.offset.x * devicePixelRatio),
-        y: Math.round(viewport.offset.y * devicePixelRatio),
-      },
+      rect: checker,
+      origin,
       squareSize: checkerSquareSize(devicePixelRatio),
     },
     image: {
       transform: deviceTransform(viewport, devicePixelRatio),
       source,
-      smoothing: usesSmoothing(viewport.zoom),
+      smoothing: usesSmoothing(viewport.zoom, devicePixelRatio),
     },
   }
+}
+
+/**
+ * The device pixels the image is drawn on, clipped to the backing store: from its corner (`origin`,
+ * whole device pixels) to the boundary after its last column and row (devicePixelBoundary). The
+ * canvas fills a device pixel with the image when its centre is inside the drawn image (which starts
+ * imageDrawBias(scale) past the corner), which is exactly this rectangle. Null when none is visible.
+ */
+export function shownDeviceRect(origin: Point, imageSize: Size, scale: number, backingStore: Size): Rectangle | null {
+  const left = Math.max(0, origin.x)
+  const top = Math.max(0, origin.y)
+  const right = Math.min(backingStore.width, origin.x + devicePixelBoundary(imageSize.width, scale))
+  const bottom = Math.min(backingStore.height, origin.y + devicePixelBoundary(imageSize.height, scale))
+  if (!(right > left && bottom > top)) return null
+  return { x: left, y: top, width: right - left, height: bottom - top }
 }
 
 /**
@@ -118,8 +137,15 @@ function sameRectangle(a: Rectangle, b: Rectangle): boolean {
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
 }
 
-export function usesSmoothing(zoom: number): boolean {
-  return zoom < 1
+/**
+ * Whether the image is drawn smoothed at display zoom `zoom`: below 100%, and at exactly 100% where
+ * the device pixel ratio is not a grid scale (Actual Size, Option D: exactly 100% but no guaranteed
+ * crisp drawing; devicePixels.ts, displayZoom). Smoothing changes only what is shown, a blend of
+ * neighbouring image pixels; tools still read the stored pixel nearest the pointer's device pixel
+ * centre (pixelUnderPointer), the largest part of that blend, and every edit uses the stored pixels.
+ */
+export function usesSmoothing(zoom: number, devicePixelRatio: number): boolean {
+  return zoom < 1 || (zoom === 1 && !isGridScale(devicePixelRatio))
 }
 
 export function checkerSquareSize(devicePixelRatio: number): number {

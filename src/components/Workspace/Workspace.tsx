@@ -124,7 +124,7 @@ export function Workspace({
       const canvas = canvasRef.current
       if (!canvas || event.target !== canvas) return
       if (cropShown) return startCropPress(event)
-      onImagePress(clientToViewport({ x: event.clientX, y: event.clientY }, canvas.getBoundingClientRect()), event)
+      onImagePress(clientToViewport({ x: event.clientX, y: event.clientY }, canvas.getBoundingClientRect(), window.devicePixelRatio), event)
     },
     [onImagePress, cropShown, startCropPress],
   )
